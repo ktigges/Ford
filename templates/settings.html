@@ -14,29 +14,46 @@
   </div>
 
   <h2>Polling Intervals (seconds)</h2>
+  <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+    Moving: min 15s. All others: min 60s, max 3600s. Values outside these limits will be clamped.
+  </p>
   <div class="form-group">
     <label for="poll_interval_off">Ignition Off</label>
     <input type="number" name="poll_interval_off" id="poll_interval_off"
-           value="{{ settings.poll_interval_off }}" min="5" max="3600">
+           value="{{ settings.poll_interval_off }}" min="60" max="3600">
   </div>
   <div class="form-group">
     <label for="poll_interval_on">Ignition On</label>
     <input type="number" name="poll_interval_on" id="poll_interval_on"
-           value="{{ settings.poll_interval_on }}" min="5" max="3600">
+           value="{{ settings.poll_interval_on }}" min="60" max="3600">
   </div>
   <div class="form-group">
     <label for="poll_interval_moving">Moving</label>
     <input type="number" name="poll_interval_moving" id="poll_interval_moving"
-           value="{{ settings.poll_interval_moving }}" min="5" max="3600">
+           value="{{ settings.poll_interval_moving }}" min="15" max="3600">
   </div>
   <div class="form-group">
     <label for="poll_interval_charging">Charging</label>
     <input type="number" name="poll_interval_charging" id="poll_interval_charging"
-           value="{{ settings.poll_interval_charging }}" min="5" max="3600">
+           value="{{ settings.poll_interval_charging }}" min="60" max="3600">
   </div>
 
   <div class="btn-group">
     <button type="submit" class="btn">Save Settings</button>
+  </div>
+</form>
+
+<form method="post" action="{{ url_for('upload_vehicle_image') }}" enctype="multipart/form-data" class="card form-card">
+  <h2>Vehicle Image</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Upload a custom image to display on the dashboard. Accepts PNG, JPG, GIF, or WebP.
+  </p>
+  <div class="form-group">
+    <label for="vehicle_image">Choose Image</label>
+    <input type="file" name="vehicle_image" id="vehicle_image" accept="image/png,image/jpeg,image/gif,image/webp">
+  </div>
+  <div class="btn-group">
+    <button type="submit" class="btn">Upload Image</button>
   </div>
 </form>
 

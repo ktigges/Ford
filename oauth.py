@@ -228,7 +228,7 @@ def validate_credentials(form_data: dict) -> tuple[dict | None, str | None]:
 
 # ── Save credentials ──────────────────────────────────────────────
 
-def save_credentials(provider: str, vin: str, form_data: dict, token_data: dict) -> None:
+def save_credentials(provider: str, vin: str | None, form_data: dict, token_data: dict) -> None:
     """Insert or update OAuth credentials with validated token data."""
     from datetime import timedelta
 

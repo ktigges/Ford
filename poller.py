@@ -12,6 +12,7 @@ Date:        2026-04-26
 
 import json
 import logging
+import random
 import threading
 import time
 from datetime import datetime, timezone
@@ -65,7 +66,10 @@ def stop() -> bool:
 
 def _poll_loop() -> None:
     """Main poller loop. Runs in a daemon thread, polling at adaptive intervals."""
-    vin = config.vin()
+    vin = db.active_vin()
+    if not vin:
+        log.error("No VIN in garage table — cannot start polling")
+        return
     provider = "ford"
     default_interval = config.collector_config().get("default_poll_interval_sec", 60)
     max_failures = config.collector_config().get("max_consecutive_failures", 5)
@@ -76,6 +80,18 @@ def _poll_loop() -> None:
         interval = _get_poll_interval(vin, default_interval)
         try:
             _do_poll(provider, vin)
+        except TelemetryRateLimitError as exc:
+            log.warning("Rate limited – sleeping %ds before next poll", exc.retry_after)
+            _record_failure(vin, str(exc))
+            _stop_event.wait(timeout=exc.retry_after)
+            continue
+        except TelemetryAuthError as exc:
+            log.error("Auth error in poll cycle (token may be permanently invalid): %s", exc)
+            _record_failure(vin, str(exc))
+            status = db.fetch_one("SELECT consecutive_failures FROM collector_status WHERE vin = %s", (vin,))
+            if status and status["consecutive_failures"] >= max_failures:
+                log.error("Max consecutive failures (%d) reached – stopping poller", max_failures)
+                break
         except Exception as exc:
             log.exception("Poll cycle failed: %s", exc)
             _record_failure(vin, str(exc))
@@ -90,7 +106,11 @@ def _poll_loop() -> None:
 
 
 def _do_poll(provider: str, vin: str) -> None:
-    """Execute a single poll cycle: fetch telemetry, insert row, upsert state."""
+    """Execute a single poll cycle: fetch telemetry, insert row, upsert state.
+
+    If the token expires mid-poll (401/403), automatically refreshes and retries
+    up to _AUTH_RETRY_LIMIT times before failing.
+    """
     log.info("── POLL CYCLE START (VIN=%s) ──", vin)
 
     # Step 1: Get access token
@@ -106,9 +126,27 @@ def _do_poll(provider: str, vin: str) -> None:
 
     application_id = creds["client_id"]
 
-    # Step 2: Fetch telemetry (no VIN in URL)
+    # Step 2: Fetch telemetry with auth-retry logic
     log.info("[STEP 2/3] Fetching telemetry from Ford API...")
-    raw = fetch_telemetry(token, application_id)
+    raw = None
+    auth_retries = 0
+    while True:
+        try:
+            raw = fetch_telemetry(token, application_id)
+            break
+        except TelemetryAuthError:
+            auth_retries += 1
+            if auth_retries > _AUTH_RETRY_LIMIT:
+                raise
+            log.warning("[STEP 2/3] Token rejected (auth retry %d/%d) – forcing refresh...",
+                        auth_retries, _AUTH_RETRY_LIMIT)
+            # Force a token refresh (the token may have expired between step 1 and the API call)
+            refreshed = oauth.refresh_access_token(creds)
+            if not refreshed:
+                raise RuntimeError("Token refresh failed during auth retry")
+            token = refreshed["access_token"]
+            log.info("[STEP 2/3] Token refreshed – retrying request")
+
     log.info("[STEP 2/3] Telemetry fetched successfully")
     now = datetime.now(timezone.utc)
 
@@ -156,32 +194,57 @@ def poll_once(provider: str, vin: str) -> None:
     _do_poll(provider, vin)
 
 
-def initial_setup_poll(provider: str, vin: str) -> None:
+def initial_setup_poll(provider: str, vin: str | None = None) -> str:
     """Run the initial setup sequence: garage first, then telemetry.
 
     Called after OAuth credentials are validated and saved.
-    Each step is logged independently so you can tell exactly where it fails.
+    The VIN parameter is optional — if not provided, the garage API response
+    supplies it. Returns the discovered VIN.
     """
     log.info("═══ INITIAL SETUP POLL START ═══")
 
-    # Step 1: Get access token
+    # Step 1: Get access token (use VIN if known, otherwise find any enabled creds)
     log.info("[SETUP STEP 1/4] Obtaining access token...")
-    creds = oauth.get_credentials(provider, vin)
+    if vin:
+        creds = oauth.get_credentials(provider, vin)
+    else:
+        creds = db.fetch_one(
+            "SELECT * FROM oauth_credentials WHERE provider = %s AND enabled = TRUE ORDER BY id DESC LIMIT 1",
+            (provider,),
+        )
     if creds is None:
         raise RuntimeError("SETUP STEP 1 FAILED: No OAuth credentials found in database")
 
-    token = oauth.get_valid_access_token(provider, vin)
+    if vin:
+        token = oauth.get_valid_access_token(provider, vin)
+    else:
+        # Refresh using the credential row directly
+        result = oauth.refresh_access_token(creds)
+        token = result["access_token"] if result else None
     if token is None:
         raise RuntimeError("SETUP STEP 1 FAILED: Unable to obtain access token (refresh failed – check logs above)")
     log.info("[SETUP STEP 1/4] Access token obtained successfully")
 
     application_id = creds["client_id"]
 
-    # Step 2: Fetch garage info (get VIN + vehicle details from Ford)
+    # Step 2: Fetch garage info — discover VIN from Ford's response
     log.info("[SETUP STEP 2/4] Fetching garage info from Ford API...")
     garage_data = fetch_garage(token, application_id)
     log.info("[SETUP STEP 2/4] Garage data received – storing to database")
-    _store_garage_data(vin, garage_data)
+    discovered_vin = _store_garage_data(garage_data)
+
+    if not discovered_vin:
+        raise RuntimeError("SETUP STEP 2 FAILED: No VIN found in garage response")
+
+    # If we now have a VIN and the credential row had NULL, update it
+    if not creds.get("vin"):
+        db.execute(
+            "UPDATE oauth_credentials SET vin = %s, updated_at = now() WHERE id = %s",
+            (discovered_vin, creds["id"]),
+        )
+        log.info("[SETUP] Updated OAuth credentials with discovered VIN=%s", discovered_vin)
+
+    vin = discovered_vin
 
     # Step 3: Fetch telemetry
     log.info("[SETUP STEP 3/4] Fetching telemetry from Ford API...")
@@ -225,14 +288,15 @@ def initial_setup_poll(provider: str, vin: str) -> None:
         (vin, now, now),
     )
     log.info("[SETUP STEP 4/4] All data stored successfully")
-    log.info("═══ INITIAL SETUP POLL COMPLETE ═══")
+    log.info("═══ INITIAL SETUP POLL COMPLETE (VIN=%s) ═══", vin)
+    return vin
 
 
-def _store_garage_data(vin: str, garage_data: dict) -> None:
+def _store_garage_data(garage_data: dict) -> str | None:
     """Parse the garage API response and upsert into the garage table.
 
     The garage response may contain a list of vehicles or a single vehicle.
-    We find ours by VIN and store whatever Ford returns.
+    Returns the VIN of the first vehicle found (used to discover VIN on initial setup).
     """
     # The response could be a list of vehicles or a wrapper
     vehicles = []
@@ -254,7 +318,10 @@ def _store_garage_data(vin: str, garage_data: dict) -> None:
         if not isinstance(v, dict):
             continue
 
-        v_vin = v.get("vin") or v.get("VIN") or vin
+        v_vin = v.get("vin") or v.get("VIN")
+        if not v_vin:
+            log.warning("[GARAGE] Skipping vehicle with no VIN: %s", v)
+            continue
         log.info("[GARAGE] Vehicle: vin=%s nickname=%s make=%s model=%s year=%s",
                  v_vin, v.get("nickName"), v.get("make"), v.get("modelName"), v.get("modelYear"))
 
@@ -302,6 +369,15 @@ def _store_garage_data(vin: str, garage_data: dict) -> None:
             ),
         )
 
+    # Return the first VIN we stored (used for initial setup discovery)
+    first_vin = None
+    if vehicles:
+        for v in vehicles:
+            if isinstance(v, dict) and (v.get("vin") or v.get("VIN")):
+                first_vin = v.get("vin") or v.get("VIN")
+                break
+    return first_vin
+
 
 # ── Ford API interaction ───────────────────────────────────────────
 
@@ -314,11 +390,26 @@ _USER_AGENT = "FordPass/1.0 CFNetwork/1494.0.7 Darwin/23.4.0"
 
 # Retry configuration for 5xx responses
 _MAX_RETRIES = 3
-_BACKOFF_BASE = 2  # seconds
+_BACKOFF_BASE = 2        # seconds – base for exponential backoff
+_BACKOFF_MAX = 120       # seconds – cap for any single backoff sleep
+_BACKOFF_JITTER = 0.25   # ±25% random jitter on each backoff delay
+_REQUEST_TIMEOUT = 30    # seconds – HTTP request timeout
+
+# Azure B2C / Ford rate-limit defaults
+_429_DEFAULT_RETRY_AFTER = 30   # seconds – fallback when Retry-After header is absent
+_429_MAX_RETRIES = 2            # extra retries specifically for 429 (on top of normal retries)
+_AUTH_RETRY_LIMIT = 1           # how many times to re-auth on 401/403 before giving up
 
 
 class TelemetryAuthError(RuntimeError):
     """Token was rejected (401/403). Caller should re-authenticate."""
+
+
+class TelemetryRateLimitError(RuntimeError):
+    """Rate limited (429). Caller should respect Retry-After and back off."""
+    def __init__(self, message: str, retry_after: int = _429_DEFAULT_RETRY_AFTER):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class TelemetryEntitlementError(RuntimeError):
@@ -389,6 +480,16 @@ def _classify_and_raise(resp: requests.Response, label: str) -> None:
             "Check token audience (aud), scopes, and Application-Id header."
         )
 
+    if status == 429:
+        retry_after = _parse_retry_after(resp)
+        log.warning("[%s] RATE LIMITED 429 – Retry-After: %ds", label, retry_after)
+        api_log.warning("[%s] RATE LIMITED 429 – Retry-After: %ds – %s", label, retry_after, body_text)
+        raise TelemetryRateLimitError(
+            f"HTTP 429: rate limited by Azure B2C / Ford API gateway. "
+            f"Retry after {retry_after}s.",
+            retry_after=retry_after,
+        )
+
     if status in (402, 404, 405):
         log.error("[%s] ENTITLEMENT/ROUTING ERROR %d", label, status)
         api_log.error("[%s] ENTITLEMENT/ROUTING ERROR %d – %s", label, status, body_text)
@@ -411,11 +512,28 @@ def _classify_and_raise(resp: requests.Response, label: str) -> None:
     raise RuntimeError(f"HTTP {status}: {body_text}")
 
 
+def _parse_retry_after(resp: requests.Response) -> int:
+    """Extract the Retry-After value from a 429 response.
+
+    Azure B2C sends Retry-After as an integer (seconds).
+    Falls back to a safe default if the header is missing or unparseable.
+    """
+    raw = resp.headers.get("Retry-After", "")
+    try:
+        return max(1, int(raw))
+    except (ValueError, TypeError):
+        return _429_DEFAULT_RETRY_AFTER
+
+
 def _ford_get(url: str, token: str, application_id: str, label: str) -> dict:
     """Make a GET request to a Ford API endpoint with retry + diagnostics.
 
-    Console: brief URL + status code
-    debug_api.log: full headers, params, response body
+    Retry strategy (Azure B2C compatible):
+    - Network errors / timeouts: exponential backoff with jitter, up to _MAX_RETRIES
+    - 5xx server errors: exponential backoff with jitter, up to _MAX_RETRIES
+    - 429 rate-limit: respect Retry-After header, up to _429_MAX_RETRIES extra attempts
+    - 401/403 auth errors: bubble up as TelemetryAuthError (caller handles re-auth)
+    - Other 4xx: fail immediately
     """
     headers = _build_headers(token, application_id)
 
@@ -423,10 +541,11 @@ def _ford_get(url: str, token: str, application_id: str, label: str) -> dict:
     _log_request("GET", url, headers, token, label)
 
     last_exc: Exception | None = None
+    rate_limit_retries = 0
 
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
         except requests.ConnectionError as exc:
             log.warning("[%s] Network error (attempt %d/%d)", label, attempt + 1, _MAX_RETRIES)
             api_log.warning("[%s] Network error (attempt %d/%d): %s", label, attempt + 1, _MAX_RETRIES, exc)
@@ -449,6 +568,18 @@ def _ford_get(url: str, token: str, application_id: str, label: str) -> dict:
             api_log.info("[%s] SUCCESS – full response written above", label)
             return data
 
+        # 429 – rate limited: respect Retry-After header
+        if resp.status_code == 429:
+            retry_after = _parse_retry_after(resp)
+            rate_limit_retries += 1
+            if rate_limit_retries <= _429_MAX_RETRIES:
+                log.warning("[%s] Rate limited (429) – waiting %ds (rate-retry %d/%d)",
+                            label, retry_after, rate_limit_retries, _429_MAX_RETRIES)
+                time.sleep(retry_after)
+                continue
+            # Exhausted rate-limit retries
+            _classify_and_raise(resp, label)
+
         # 5xx → retry with backoff
         if 500 <= resp.status_code < 600:
             will = "retry" if attempt < _MAX_RETRIES - 1 else "give up"
@@ -460,15 +591,22 @@ def _ford_get(url: str, token: str, application_id: str, label: str) -> dict:
                 continue
             _classify_and_raise(resp, label)
 
-        # Non-5xx error – no retry
+        # Non-retryable error – fail immediately (401, 403, 404, etc.)
         _classify_and_raise(resp, label)
 
     raise last_exc or RuntimeError(f"[{label}] Request failed after retries")
 
 
 def _backoff_wait(attempt: int) -> None:
-    delay = _BACKOFF_BASE * (2 ** attempt)
-    log.debug("Backoff: sleeping %ds before retry", delay)
+    """Exponential backoff with jitter, capped at _BACKOFF_MAX.
+
+    Azure B2C recommended pattern: base * 2^attempt ± jitter.
+    """
+    base_delay = _BACKOFF_BASE * (2 ** attempt)
+    jitter = base_delay * _BACKOFF_JITTER * (2 * random.random() - 1)  # ±25%
+    delay = min(base_delay + jitter, _BACKOFF_MAX)
+    delay = max(0.5, delay)  # never sleep less than 0.5s
+    log.debug("Backoff: sleeping %.1fs before retry (attempt %d)", delay, attempt + 1)
     time.sleep(delay)
 
 
@@ -489,25 +627,35 @@ def fetch_telemetry(token: str, application_id: str) -> dict:
 # ── Polling interval logic ─────────────────────────────────────────
 
 def _get_poll_interval(vin: str, default: int) -> int:
-    """Determine the appropriate polling interval from polling_config + vehicle state."""
+    """Determine the appropriate polling interval from polling_config + vehicle state.
+
+    All returned values are clamped to safety limits:
+    - Moving: minimum 15 seconds
+    - All other modes: minimum 60 seconds
+    - Maximum for all modes: 3600 seconds (60 minutes)
+    """
+    _MIN_MOVING = 15
+    _MIN_GENERAL = 60
+    _MAX_INTERVAL = 3600
+
     pc = db.fetch_one(
         "SELECT * FROM polling_config WHERE vin = %s AND enabled = TRUE ORDER BY id DESC LIMIT 1",
         (vin,),
     )
     if pc is None:
-        return default
+        return max(_MIN_GENERAL, min(_MAX_INTERVAL, default))
 
     vs = db.fetch_one("SELECT ignition_status, speed_mph FROM vehicle_state WHERE vin = %s", (vin,))
     cs = db.fetch_one("SELECT plug_status FROM charging_state WHERE vin = %s", (vin,))
 
     if vs and vs.get("speed_mph") and vs["speed_mph"] > 0:
-        return pc["moving_interval_sec"]
+        return max(_MIN_MOVING, min(_MAX_INTERVAL, pc["moving_interval_sec"]))
     if cs and cs.get("plug_status") and cs["plug_status"].lower() not in ("unplugged", "unknown"):
-        return pc["charging_interval_sec"]
+        return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["charging_interval_sec"]))
     if vs and vs.get("ignition_status") and vs["ignition_status"].lower() in ("run", "on"):
-        return pc["ignition_on_interval_sec"]
+        return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["ignition_on_interval_sec"]))
 
-    return pc["ignition_off_interval_sec"]
+    return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["ignition_off_interval_sec"]))
 
 
 # ── Failure recording ──────────────────────────────────────────────

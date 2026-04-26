@@ -1,74 +1,169 @@
 {% extends "base.html" %}
 {% block title %}Dashboard – Lightning{% endblock %}
 {% block content %}
-<h1>Dashboard</h1>
 
-<div class="card-grid">
-  <div class="card">
-    <h2>Vehicle</h2>
-    <table>
-      <tr><th>VIN</th><td>{{ vin }}</td></tr>
-      {% if garage %}
-      <tr><th>Make</th><td>{{ garage.make or '–' }}</td></tr>
-      <tr><th>Model</th><td>{{ garage.model_name or '–' }}</td></tr>
-      <tr><th>Year</th><td>{{ garage.model_year or '–' }}</td></tr>
-      <tr><th>Color</th><td>{{ garage.color or '–' }}</td></tr>
-      {% endif %}
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>Poller Status</h2>
-    <table>
-      <tr>
-        <th>Running</th>
-        <td>
-          {% if poller_running %}
-            <span class="badge ok">Running</span>
-          {% else %}
-            <span class="badge off">Stopped</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% if status %}
-      <tr><th>Last Poll</th><td>{{ status.last_poll or '–' }}</td></tr>
-      <tr><th>Last Success</th><td>{{ status.last_success or '–' }}</td></tr>
-      <tr><th>Consecutive Failures</th><td>{{ status.consecutive_failures }}</td></tr>
-      {% if status.last_error %}
-      <tr><th>Last Error</th><td class="error-text">{{ status.last_error }}</td></tr>
-      {% endif %}
-      {% else %}
-      <tr><td colspan="2">No collector status yet.</td></tr>
-      {% endif %}
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>Battery</h2>
-    {% if battery %}
-    <table>
-      <tr><th>SOC</th><td>{{ battery.soc_percent or '–' }}%</td></tr>
-      <tr><th>Range</th><td>{{ convert(battery.range_miles, 'range_miles') or '–' }} {{ ulabel('distance') }}</td></tr>
-      <tr><th>Voltage</th><td>{{ battery.voltage or '–' }} V</td></tr>
-      <tr><th>Temp</th><td>{{ convert(battery.temperature_c, 'temperature_c') or '–' }} {{ ulabel('temperature') }}</td></tr>
-    </table>
+{# ── Poller status indicator (top-right corner) ────────────── #}
+<div class="dash-header">
+  <h1>Dashboard</h1>
+  <div class="poller-indicator">
+    {% if poller_running %}
+      <span class="indicator-dot dot-green"></span> Poller Running
     {% else %}
-    <p>No battery data.</p>
+      <span class="indicator-dot dot-grey"></span> Poller Stopped
+    {% endif %}
+    {% if status %}
+      <span class="indicator-meta">Last: {{ status.last_success.strftime('%H:%M:%S') if status.last_success else '–' }}</span>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Hero section: vehicle image + charge ring + key stats ─── #}
+<div class="dash-hero">
+  <div class="hero-image">
+    <img src="{{ url_for('static', filename=vehicle_img) }}" alt="Vehicle" onerror="this.style.display='none'">
+    {% if garage %}
+    <div class="hero-vehicle-name">
+      {{ garage.model_year or '' }} {{ garage.make or '' }} {{ garage.model_name or '' }}
+      {% if garage.nickname %}<span class="hero-nickname">{{ garage.nickname }}</span>{% endif %}
+    </div>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h2>Vehicle State</h2>
+  <div class="hero-charge">
+    {# SVG ring gauge for state-of-charge #}
+    {% set soc = battery.soc_percent|default(0, true)|float if battery else 0 %}
+    {% set soc_display = soc|round(0)|int %}
+    <div class="charge-ring-wrap">
+      <svg class="charge-ring" viewBox="0 0 140 140">
+        <circle class="ring-bg" cx="70" cy="70" r="60" />
+        <circle class="ring-fg
+          {%- if soc >= 60 %} ring-green
+          {%- elif soc >= 25 %} ring-yellow
+          {%- else %} ring-red{% endif %}"
+          cx="70" cy="70" r="60"
+          stroke-dasharray="{{ (soc / 100 * 376.99)|round(1) }} 376.99"
+          transform="rotate(-90 70 70)" />
+        <text x="70" y="64" class="ring-pct">{{ soc_display }}%</text>
+        <text x="70" y="82" class="ring-label">Charge</text>
+      </svg>
+    </div>
+
+    <div class="charge-details">
+      {% if battery %}
+      <div class="stat-row">
+        <span class="stat-label">Range</span>
+        <span class="stat-value">{{ convert(battery.range_miles, 'range_miles') or '–' }} <small>{{ ulabel('distance') }}</small></span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Energy</span>
+        <span class="stat-value">{{ battery.energy_remaining_kwh|round(1) if battery.energy_remaining_kwh else '–' }} <small>kWh</small></span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Max Capacity</span>
+        <span class="stat-value">{{ battery.capacity_kwh|round(1) if battery.capacity_kwh else '–' }} <small>kWh</small></span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Voltage</span>
+        <span class="stat-value">{{ battery.voltage|round(0)|int if battery.voltage else '–' }} <small>V</small></span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Temp</span>
+        <span class="stat-value">{{ convert(battery.temperature_c, 'temperature_c') or '–' }} <small>{{ ulabel('temperature') }}</small></span>
+      </div>
+      {% else %}
+      <p class="no-data">No battery data yet.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── Info cards row ────────────────────────────────────────── #}
+<div class="dash-cards">
+
+  {# ── Plug / Charging ── #}
+  <div class="card dash-card">
+    <h2>⚡ Charging</h2>
+    {% if charging %}
+    <table>
+      <tr>
+        <th>Plug</th>
+        <td>
+          {% if charging.plug_status and 'connect' in charging.plug_status|lower %}
+            <span class="badge ok">{{ charging.plug_status }}</span>
+          {% else %}
+            <span class="badge off">{{ charging.plug_status or 'Unknown' }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr><th>Power Type</th><td>{{ charging.charger_power_type or '–' }}</td></tr>
+      <tr><th>Status</th><td>{{ charging.communication_status or '–' }}</td></tr>
+      {% if charging.time_to_full_min %}
+      <tr><th>Time to Full</th><td>{{ charging.time_to_full_min|round(0)|int }} min</td></tr>
+      {% endif %}
+      {% if charging.charger_voltage %}
+      <tr><th>Charger</th><td>{{ charging.charger_voltage|round(0)|int }}V / {{ charging.charger_current|round(1) if charging.charger_current else '–' }}A</td></tr>
+      {% endif %}
+    </table>
+    {% else %}
+    <p class="no-data">No charging data.</p>
+    {% endif %}
+  </div>
+
+  {# ── Vehicle State ── #}
+  <div class="card dash-card">
+    <h2>🚗 Vehicle</h2>
     {% if vehicle %}
     <table>
-      <tr><th>Ignition</th><td>{{ vehicle.ignition_status or '–' }}</td></tr>
+      <tr><th>Ignition</th>
+        <td>
+          {% if vehicle.ignition_status and 'run' in vehicle.ignition_status|lower %}
+            <span class="badge ok">{{ vehicle.ignition_status }}</span>
+          {% elif vehicle.ignition_status and 'off' in vehicle.ignition_status|lower %}
+            <span class="badge off">{{ vehicle.ignition_status }}</span>
+          {% else %}
+            {{ vehicle.ignition_status or '–' }}
+          {% endif %}
+        </td>
+      </tr>
       <tr><th>Speed</th><td>{{ convert(vehicle.speed_mph, 'speed_mph') or '0' }} {{ ulabel('speed') }}</td></tr>
       <tr><th>Odometer</th><td>{{ convert(vehicle.odometer_miles, 'odometer_miles') or '–' }} {{ ulabel('distance') }}</td></tr>
       <tr><th>Gear</th><td>{{ vehicle.gear_position or '–' }}</td></tr>
     </table>
     {% else %}
-    <p>No vehicle state data.</p>
+    <p class="no-data">No vehicle state data.</p>
     {% endif %}
   </div>
+
+  {# ── Tire Pressure ── #}
+  <div class="card dash-card">
+    <h2>🔧 Tires</h2>
+    {% if tires %}
+    <div class="tire-grid">
+      {% for t in tires %}
+      <div class="tire-cell">
+        <span class="tire-pos">{{ t.wheel_position|replace('_', ' ')|title }}</span>
+        <span class="tire-psi">{{ convert(t.pressure_kpa, 'pressure_kpa')|round(1) if t.pressure_kpa else '–' }}</span>
+        <span class="tire-unit">{{ ulabel('pressure') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-data">No tire data.</p>
+    {% endif %}
+  </div>
+
+  {# ── Vehicle Info ── #}
+  <div class="card dash-card">
+    <h2>📋 Info</h2>
+    <table>
+      <tr><th>VIN</th><td class="vin-cell">{{ vin or '–' }}</td></tr>
+      {% if garage %}
+      <tr><th>Color</th><td>{{ garage.color or '–' }}</td></tr>
+      <tr><th>Engine</th><td>{{ garage.engine_type or '–' }}</td></tr>
+      <tr><th>Type</th><td>{{ garage.vehicle_type or '–' }}</td></tr>
+      {% endif %}
+    </table>
+  </div>
+
 </div>
 {% endblock %}
