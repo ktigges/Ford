@@ -4,15 +4,17 @@
 <h1>Vehicle State</h1>
 <p>Current state for VIN: <strong>{{ vin }}</strong> &nbsp;·&nbsp; Units: <strong>{{ unit_system | title }}</strong></p>
 
+{% macro humanize(name) %}{{ name.replace('_', ' ').title() }}{% endmacro %}
+
 {% macro state_table(title, row, skip_cols=["vin"]) %}
-<div class="card">
+<div class="card state-card">
   <h2>{{ title }}</h2>
   {% if row %}
-  <table>
+  <table class="state-table">
     {% for key, val in row.items() %}
       {% if key not in skip_cols %}
       <tr>
-        <th>{{ key }}</th>
+        <th>{{ humanize(key) }}</th>
         <td>
           {% if val is none %}–
           {% else %}{{ convert(val, key) }}{% if ulabel_for_field(key) %} {{ ulabel_for_field(key) }}{% endif %}
@@ -23,21 +25,22 @@
     {% endfor %}
   </table>
   {% else %}
-  <p>No data.</p>
+  <p class="no-data">No data.</p>
   {% endif %}
 </div>
 {% endmacro %}
 
 {% macro multi_row_table(title, rows, skip_cols=["vin"]) %}
-<div class="card">
+<div class="card state-card">
   <h2>{{ title }}</h2>
   {% if rows %}
-  <table>
+  <div class="table-scroll">
+  <table class="state-table">
     <thead>
       <tr>
         {% for key in rows[0].keys() %}
           {% if key not in skip_cols %}
-          <th>{{ key }}</th>
+          <th>{{ humanize(key) }}</th>
           {% endif %}
         {% endfor %}
       </tr>
@@ -58,13 +61,14 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
-  <p>No data.</p>
+  <p class="no-data">No data.</p>
   {% endif %}
 </div>
 {% endmacro %}
 
-<div class="card-grid">
+<div class="state-grid">
   {{ state_table("Vehicle", states.vehicle_state) }}
   {{ state_table("Battery", states.battery_state) }}
   {{ state_table("Charging", states.charging_state) }}

@@ -5,7 +5,7 @@ poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.1.0
+Version:     0.2.0
 Date:        2026-04-26
 """
 
@@ -14,7 +14,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from flask import Flask, redirect, render_template, request, url_for, flash
+from flask import Flask, redirect, render_template, request, url_for, flash, send_file
 from werkzeug.utils import secure_filename
 
 import config
@@ -22,17 +22,22 @@ import db
 import oauth
 import poller
 import units
+import backup
+import crypto
 
 # ── Logging setup ──────────────────────────────────────────────────
 
 def _setup_logging() -> None:
     """Configure logging with clean console output and detailed per-module debug files.
 
-    Console: brief one-line summaries (INFO level)
-    logs/lightning_app.log: combined log (INFO)
+    Console: brief one-line summaries (configurable level)
+    logs/lightning_app.log: combined log (configurable level)
     logs/debug_oauth.log: OAuth token exchange details (DEBUG)
     logs/debug_api.log: Ford API calls – URIs, headers, params, responses (DEBUG)
     logs/debug_poller.log: Poller lifecycle + state upserts (DEBUG)
+
+    The console and app-file handler levels can be changed at runtime via
+    ``set_log_level()`` (exposed through the Settings page).
     """
     cfg = config.logging_config()
     level = getattr(logging, cfg.get("level", "INFO").upper(), logging.INFO)
@@ -50,11 +55,13 @@ def _setup_logging() -> None:
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(brief_fmt)
     console.setLevel(level)
+    console.set_name("lightning_console")
 
     # ── Combined app log ───────────────────────────────────────
     app_file = logging.FileHandler(os.path.join(log_dir, "lightning_app.log"))
     app_file.setFormatter(detail_fmt)
     app_file.setLevel(level)
+    app_file.set_name("lightning_app_file")
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
@@ -78,6 +85,39 @@ def _setup_logging() -> None:
     logging.getLogger("requests").setLevel(logging.WARNING)
 
 
+_VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+
+def set_log_level(level_name: str) -> str:
+    """Change the console and app-file log level at runtime.
+
+    Per-module debug files always remain at DEBUG.
+    Returns the level name actually applied.
+    """
+    level_name = level_name.upper()
+    if level_name not in _VALID_LOG_LEVELS:
+        level_name = "INFO"
+    level = getattr(logging, level_name)
+
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if handler.get_name() in ("lightning_console", "lightning_app_file"):
+            handler.setLevel(level)
+
+    root_log = logging.getLogger(__name__)
+    root_log.info("Log level changed to %s", level_name)
+    return level_name
+
+
+def get_log_level() -> str:
+    """Return the current effective level of the console handler."""
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if handler.get_name() == "lightning_console":
+            return logging.getLevelName(handler.level)
+    return config.logging_config().get("level", "INFO").upper()
+
+
 # ── App factory ────────────────────────────────────────────────────
 
 def create_app() -> Flask:
@@ -87,7 +127,38 @@ def create_app() -> Flask:
     log = logging.getLogger(__name__)
     log.info("Starting Lightning app (env=%s)", config.environment())
 
-    db.init_pool()
+    # Attempt database connection – enter setup mode if unavailable
+    try:
+        db.init_pool()
+        # Restore saved log level from app_config if available
+        try:
+            row = db.fetch_one("SELECT value FROM app_config WHERE key = 'log_level'")
+            if row:
+                set_log_level(row["value"])
+        except Exception:
+            pass  # table may not exist yet
+
+        # Migrate: encrypt any plaintext client_secret values
+        try:
+            creds = db.fetch_all("SELECT id, client_secret FROM oauth_credentials WHERE client_secret IS NOT NULL")
+            for cred in creds:
+                secret = cred["client_secret"]
+                if not secret:
+                    continue
+                # Fernet tokens start with 'gAAAAA' — if it doesn't, it's plaintext
+                if not secret.startswith("gAAAAA"):
+                    encrypted = crypto.encrypt(secret)
+                    db.execute(
+                        "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
+                        (encrypted, cred["id"]),
+                    )
+                    log.info("Migrated client_secret to encrypted form (cred id=%s)", cred["id"])
+        except Exception:
+            pass  # table may not exist yet
+
+    except Exception as exc:
+        log.warning("Database unavailable at startup: %s", exc)
+        log.info("Entering setup mode – configure the database via the web UI")
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
@@ -139,7 +210,7 @@ def create_app() -> Flask:
 
     @app.context_processor
     def _inject_units():
-        system = _get_setting("units")
+        system = _get_setting("units") if db.is_available() else "imperial"
 
         def _ulabel_for_field(field_name):
             """Return the unit label for a DB field name, or empty string."""
@@ -159,10 +230,14 @@ def create_app() -> Flask:
 
     def _active_vin() -> str | None:
         """Return the current active VIN from the garage table (may be None)."""
+        if not db.is_available():
+            return None
         return db.active_vin()
 
     def _needs_setup() -> bool:
         """Check whether the system still needs OAuth / garage configuration."""
+        if not db.is_available():
+            return True
         vin = _active_vin()
         if not vin:
             return True
@@ -171,12 +246,160 @@ def create_app() -> Flask:
         )
         return creds is None
 
+    # ── Request hook: force HTTPS when SSL is active ─────────────
+
+    @app.before_request
+    def _force_https():
+        """Redirect HTTP requests to HTTPS when SSL is enabled."""
+        if app.config.get("SSL_ACTIVE") and not request.is_secure:
+            url = request.url.replace("http://", "https://", 1)
+            return redirect(url, code=301)
+
     # ── Request hook: redirect to setup if not configured ──────────
+
+    _SETUP_SAFE_ENDPOINTS = frozenset({
+        "db_setup", "db_setup_test", "db_setup_create",
+        "db_setup_restore", "db_setup_upload",
+        "oauth_config", "reset", "manage", "manage_delete_vin",
+        "manage_repoll", "db_browser", "db_table", "db_delete_row",
+        "settings", "backup_page", "backup_create", "backup_restore",
+        "backup_download", "backup_delete", "backup_upload", "static",
+    })
 
     @app.before_request
     def _check_setup():
-        if _needs_setup() and request.endpoint not in ("oauth_config", "reset", "manage", "manage_delete_vin", "manage_repoll", "db_browser", "db_table", "db_delete_row", "settings", "static"):
+        # If DB is not connected, only allow the database setup pages
+        if not db.is_available():
+            if request.endpoint not in ("db_setup", "db_setup_test",
+                                         "db_setup_create", "db_setup_restore",
+                                         "db_setup_upload", "static"):
+                return redirect(url_for("db_setup"))
+            return
+
+        if _needs_setup() and request.endpoint not in _SETUP_SAFE_ENDPOINTS:
             return redirect(url_for("oauth_config"))
+
+    # ── Database setup routes (no-DB mode) ─────────────────────────
+
+    def _setup_backup_list() -> list[dict]:
+        """List backup files with formatted sizes (works without DB)."""
+        backups_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
+        if not os.path.isdir(backups_dir):
+            return []
+        files = []
+        for name in sorted(os.listdir(backups_dir), reverse=True):
+            if name.endswith((".sql", ".json")):
+                full = os.path.join(backups_dir, name)
+                size = os.path.getsize(full)
+                files.append({"name": name, "size": size, "size_fmt": backup._format_size(size)})
+        return files
+
+    @app.route("/setup", methods=["GET", "POST"])
+    def db_setup():
+        """Database setup page — shown when PostgreSQL is unreachable."""
+        db_cfg = config.database()
+        if request.method == "POST":
+            new_cfg = {
+                "host": request.form.get("host", "localhost").strip(),
+                "port": int(request.form.get("port", 5432)),
+                "name": request.form.get("name", "lightning").strip(),
+                "user": request.form.get("user", "lightning").strip(),
+                "password": request.form.get("password", "").strip(),
+                "connect_timeout": int(request.form.get("connect_timeout", 10)),
+            }
+            config.save_database(new_cfg)
+            db_cfg = new_cfg
+
+            # Attempt to connect with the new settings
+            try:
+                db.init_pool()
+                flash("Database connected successfully!", "success")
+                return redirect(url_for("db_setup"))
+            except Exception as exc:
+                flash(f"Connection failed: {exc}", "error")
+
+        return render_template("db_setup.html", db=db_cfg, connected=db.is_available(),
+                               backup_files=_setup_backup_list())
+
+    @app.route("/setup/test", methods=["POST"])
+    def db_setup_test():
+        """Test a database connection without saving."""
+        ok, msg = db.test_connection(
+            host=request.form.get("host", "localhost").strip(),
+            port=int(request.form.get("port", 5432)),
+            name=request.form.get("name", "lightning").strip(),
+            user=request.form.get("user", "lightning").strip(),
+            password=request.form.get("password", "").strip(),
+            timeout=5,
+        )
+        flash(msg, "success" if ok else "error")
+        return redirect(url_for("db_setup"))
+
+    @app.route("/setup/create-schema", methods=["POST"])
+    def db_setup_create():
+        """Apply schema.sql to create all tables."""
+        if not db.is_available():
+            flash("Connect to the database first.", "error")
+            return redirect(url_for("db_setup"))
+
+        ok, msg = db.apply_schema()
+        flash(msg, "success" if ok else "error")
+        return redirect(url_for("db_setup"))
+
+    @app.route("/setup/restore", methods=["POST"])
+    def db_setup_restore():
+        """Restore a backup during setup."""
+        if not db.is_available():
+            flash("Connect to the database first.", "error")
+            return redirect(url_for("db_setup"))
+
+        filename = request.form.get("filename", "")
+        if not filename:
+            flash("No backup file selected.", "error")
+            return redirect(url_for("db_setup"))
+
+        safe_name = os.path.basename(filename)
+        filepath = os.path.join(backup.BACKUP_DIR, safe_name)
+        if not os.path.isfile(filepath):
+            flash("Backup file not found.", "error")
+            return redirect(url_for("db_setup"))
+
+        try:
+            # Apply schema first to ensure tables exist
+            db.apply_schema()
+            if safe_name.endswith(".sql"):
+                backup.restore_sql(filepath)
+                flash(f"SQL restore complete: {safe_name}", "success")
+            elif safe_name.endswith(".json"):
+                summary = backup.restore_json(filepath)
+                total = sum(summary.values())
+                flash(f"JSON restore complete: {total} rows from {safe_name}", "success")
+            else:
+                flash("Unknown backup format.", "error")
+        except Exception as exc:
+            log.error("Setup restore failed: %s", exc)
+            flash(f"Restore failed: {exc}", "error")
+        return redirect(url_for("db_setup"))
+
+    @app.route("/setup/upload", methods=["POST"])
+    def db_setup_upload():
+        """Upload a backup file during setup (DB may not be connected yet)."""
+        file = request.files.get("backup_file")
+        if not file or file.filename == "":
+            flash("No file selected.", "error")
+            return redirect(url_for("db_setup"))
+
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in ("sql", "json"):
+            flash("Only .sql and .json backup files are accepted.", "error")
+            return redirect(url_for("db_setup"))
+
+        safe_name = secure_filename(file.filename)
+        save_path = os.path.join(backup.BACKUP_DIR, safe_name)
+        os.makedirs(backup.BACKUP_DIR, exist_ok=True)
+        file.save(save_path)
+        flash(f"Uploaded: {safe_name}", "success")
+        return redirect(url_for("db_setup"))
 
     # ── Routes ─────────────────────────────────────────────────────
 
@@ -309,10 +532,14 @@ def create_app() -> Flask:
         existing = db.fetch_one(
             "SELECT * FROM oauth_credentials WHERE provider = 'ford' ORDER BY id DESC LIMIT 1"
         )
+        # Decrypt client_secret for display in the form
+        secret_raw = (existing or {}).get("client_secret", "")
+        if secret_raw:
+            secret_raw = crypto.decrypt(secret_raw)
         form = {
             "provider": (existing or {}).get("provider", "ford"),
             "client_id": (existing or {}).get("client_id", ""),
-            "client_secret": (existing or {}).get("client_secret", ""),
+            "client_secret": secret_raw,
             "scope": (existing or {}).get("scope", ""),
             "redirect_uri": (existing or {}).get("redirect_uri", ""),
             "refresh_token": (existing or {}).get("refresh_token", ""),
@@ -390,9 +617,15 @@ def create_app() -> Flask:
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
-        """Application settings: display units (metric/imperial), polling intervals."""
+        """Application settings: display units, polling intervals, log level."""
         if request.method == "POST":
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
+
+            # Runtime log level switching
+            new_level = request.form.get("log_level", "INFO").upper()
+            applied = set_log_level(new_level)
+            _set_setting("log_level", applied, "Console / app-file log level")
+            log.info("Settings: log level set to %s", applied)
 
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
@@ -440,12 +673,28 @@ def create_app() -> Flask:
 
         current = {
             "units": _get_setting("units"),
+            "log_level": get_log_level(),
             "poll_interval_off": _get_setting("poll_interval_off"),
             "poll_interval_on": _get_setting("poll_interval_on"),
             "poll_interval_moving": _get_setting("poll_interval_moving"),
             "poll_interval_charging": _get_setting("poll_interval_charging"),
         }
-        return render_template("settings.html", settings=current)
+        ssl_cfg = config.ssl_config()
+        ssl_status = {
+            "active": app.config.get("SSL_ACTIVE", False),
+            "recovery": app.config.get("SSL_RECOVERY", False),
+        }
+        # Validate current user certs if they exist
+        if ssl_cfg.get("cert") and ssl_cfg.get("key"):
+            if os.path.isfile(ssl_cfg["cert"]) and os.path.isfile(ssl_cfg["key"]):
+                valid, msg = crypto.validate_ssl_files(ssl_cfg["cert"], ssl_cfg["key"])
+                ssl_status["cert_valid"] = valid
+                ssl_status["cert_message"] = msg
+            else:
+                ssl_status["cert_valid"] = False
+                ssl_status["cert_message"] = "Certificate or key file not found on disk"
+        return render_template("settings.html", settings=current, ssl=ssl_cfg,
+                               ssl_status=ssl_status)
 
     @app.route("/settings/upload-image", methods=["POST"])
     def upload_vehicle_image():
@@ -466,6 +715,52 @@ def create_app() -> Flask:
         file.save(save_path)
         _set_setting("vehicle_image", filename, "Custom vehicle image filename")
         flash("Vehicle image updated.", "success")
+        return redirect(url_for("settings"))
+
+    @app.route("/settings/ssl", methods=["POST"])
+    def ssl_settings():
+        """Upload SSL cert/key files and toggle SSL on/off.
+
+        Files are saved to a `certs/` directory next to the project.
+        Paths and enabled flag are persisted to config.json.
+        A restart is required for SSL changes to take effect.
+        """
+        certs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
+        os.makedirs(certs_dir, exist_ok=True)
+
+        ssl_cfg = config.ssl_config()
+
+        # Handle cert file upload
+        cert_file = request.files.get("ssl_cert")
+        if cert_file and cert_file.filename:
+            cert_ext = cert_file.filename.rsplit(".", 1)[-1].lower() if "." in cert_file.filename else ""
+            if cert_ext not in ("pem", "crt", "cer"):
+                flash("Certificate must be .pem, .crt, or .cer", "error")
+                return redirect(url_for("settings"))
+            cert_path = os.path.join(certs_dir, "server.crt")
+            cert_file.save(cert_path)
+            ssl_cfg["cert"] = cert_path
+            log.info("SSL certificate uploaded: %s", cert_path)
+
+        # Handle key file upload
+        key_file = request.files.get("ssl_key")
+        if key_file and key_file.filename:
+            key_ext = key_file.filename.rsplit(".", 1)[-1].lower() if "." in key_file.filename else ""
+            if key_ext not in ("pem", "key"):
+                flash("Key must be .pem or .key", "error")
+                return redirect(url_for("settings"))
+            key_path = os.path.join(certs_dir, "server.key")
+            key_file.save(key_path)
+            # Restrict permissions on the private key
+            os.chmod(key_path, 0o600)
+            ssl_cfg["key"] = key_path
+            log.info("SSL private key uploaded: %s", key_path)
+
+        # Toggle enabled
+        ssl_cfg["enabled"] = request.form.get("ssl_enabled") == "on"
+
+        config.save_ssl(ssl_cfg)
+        flash("SSL settings saved. Restart the application for changes to take effect.", "success")
         return redirect(url_for("settings"))
 
     # ── Manage Vehicles ──────────────────────────────────────────────
@@ -621,7 +916,11 @@ def create_app() -> Flask:
                 for secret_col in ("client_secret", "access_token", "refresh_token"):
                     if secret_col in row and row[secret_col]:
                         val = str(row[secret_col])
-                        row[secret_col] = val[:8] + "..." + val[-4:] if len(val) > 16 else "***"
+                        row[secret_col] = val[:6] + "…" if len(val) > 10 else "***"
+                # Truncate other long fields for readability
+                for long_col in ("token_endpoint", "redirect_uri", "scope", "client_id"):
+                    if long_col in row and row[long_col] and len(str(row[long_col])) > 50:
+                        row[long_col] = str(row[long_col])[:50] + "…"
 
         # Determine primary key column for delete buttons
         _PK_MAP = {
@@ -634,6 +933,9 @@ def create_app() -> Flask:
         # Most state tables use 'vin' as PK
         pk_col = _PK_MAP.get(table_name, "vin")
 
+        # Tables that render better as vertical cards instead of wide horizontal tables
+        _CARD_LAYOUT_TABLES = {"oauth_credentials"}
+
         return render_template(
             "db_table.html",
             table_name=table_name,
@@ -643,6 +945,7 @@ def create_app() -> Flask:
             limit=limit,
             row_count=len(rows),
             pk_col=pk_col,
+            card_layout=(table_name in _CARD_LAYOUT_TABLES),
         )
 
     @app.route("/db/<table_name>/delete", methods=["POST"])
@@ -707,6 +1010,101 @@ def create_app() -> Flask:
             row=formatted,
         )
 
+    # ── Backup & Restore ───────────────────────────────────────────
+
+    @app.route("/backup")
+    def backup_page():
+        """List available backups and provide create/restore/download/delete controls."""
+        backups = backup.list_backups()
+        for b in backups:
+            b["size_fmt"] = backup._format_size(b["size"])
+        return render_template("backup.html", backups=backups)
+
+    @app.route("/backup/create", methods=["POST"])
+    def backup_create():
+        """Create a new backup (SQL or JSON)."""
+        fmt = request.form.get("format", "json")
+        label = secure_filename(request.form.get("label", "").strip()[:40])
+        try:
+            if fmt == "sql":
+                path = backup.backup_sql(label=label)
+            else:
+                path = backup.backup_json(label=label)
+            flash(f"Backup created: {os.path.basename(path)}", "success")
+        except Exception as exc:
+            log.error("Backup failed: %s", exc)
+            flash(f"Backup failed: {exc}", "error")
+        return redirect(url_for("backup_page"))
+
+    @app.route("/backup/restore", methods=["POST"])
+    def backup_restore():
+        """Restore from an existing backup file."""
+        filename = request.form.get("filename", "")
+        if not filename:
+            flash("No backup file specified.", "error")
+            return redirect(url_for("backup_page"))
+
+        safe_name = os.path.basename(filename)
+        filepath = os.path.join(backup.BACKUP_DIR, safe_name)
+        if not os.path.isfile(filepath):
+            flash("Backup file not found.", "error")
+            return redirect(url_for("backup_page"))
+
+        try:
+            if safe_name.endswith(".sql"):
+                backup.restore_sql(filepath)
+                flash(f"SQL restore complete: {safe_name}", "success")
+            elif safe_name.endswith(".json"):
+                summary = backup.restore_json(filepath)
+                total = sum(summary.values())
+                flash(f"JSON restore complete: {total} rows from {safe_name}", "success")
+            else:
+                flash("Unknown backup format.", "error")
+        except Exception as exc:
+            log.error("Restore failed: %s", exc)
+            flash(f"Restore failed: {exc}", "error")
+        return redirect(url_for("backup_page"))
+
+    @app.route("/backup/download/<filename>")
+    def backup_download(filename):
+        """Download a backup file."""
+        safe_name = os.path.basename(filename)
+        filepath = os.path.join(backup.BACKUP_DIR, safe_name)
+        if not os.path.isfile(filepath):
+            flash("Backup file not found.", "error")
+            return redirect(url_for("backup_page"))
+        return send_file(filepath, as_attachment=True, download_name=safe_name)
+
+    @app.route("/backup/delete", methods=["POST"])
+    def backup_delete():
+        """Delete a backup file."""
+        filename = request.form.get("filename", "")
+        if backup.delete_backup(filename):
+            flash(f"Deleted: {os.path.basename(filename)}", "success")
+        else:
+            flash("File not found.", "error")
+        return redirect(url_for("backup_page"))
+
+    @app.route("/backup/upload", methods=["POST"])
+    def backup_upload():
+        """Upload a backup file to the backups directory."""
+        file = request.files.get("backup_file")
+        if not file or file.filename == "":
+            flash("No file selected.", "error")
+            return redirect(url_for("backup_page"))
+
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in ("sql", "json"):
+            flash("Only .sql and .json backup files are accepted.", "error")
+            return redirect(url_for("backup_page"))
+
+        safe_name = secure_filename(file.filename)
+        save_path = os.path.join(backup.BACKUP_DIR, safe_name)
+        os.makedirs(backup.BACKUP_DIR, exist_ok=True)
+        file.save(save_path)
+        flash(f"Uploaded: {safe_name}", "success")
+        return redirect(url_for("backup_page"))
+
     @app.teardown_appcontext
     def _shutdown(exc):
         """Application teardown hook. Pool cleanup handled by atexit."""
@@ -719,4 +1117,47 @@ def create_app() -> Flask:
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=5000, debug=(config.environment() == "development"))
+    _log = logging.getLogger(__name__)
+
+    # SSL/TLS support – try user certs, fall back to self-signed recovery
+    ssl_cfg = config.ssl_config()
+    ssl_context = None
+    ssl_recovery = False
+
+    if ssl_cfg.get("enabled"):
+        cert_path = ssl_cfg.get("cert", "")
+        key_path = ssl_cfg.get("key", "")
+
+        # Try the user-provided certificates first
+        if cert_path and key_path and os.path.isfile(cert_path) and os.path.isfile(key_path):
+            valid, msg = crypto.validate_ssl_files(cert_path, key_path)
+            if valid:
+                ssl_context = (cert_path, key_path)
+                _log.info("SSL enabled with user certificates: cert=%s key=%s", cert_path, key_path)
+            else:
+                _log.warning("User SSL certificates invalid: %s – falling back to recovery certs", msg)
+
+        # Fall back to self-signed recovery certificates
+        if ssl_context is None:
+            _log.warning("Generating self-signed recovery certificate for HTTPS access")
+            try:
+                recovery_cert, recovery_key = crypto.generate_self_signed_cert()
+                ssl_context = (recovery_cert, recovery_key)
+                ssl_recovery = True
+                _log.warning(
+                    "*** RECOVERY MODE: Using self-signed certificate. "
+                    "Upload valid certs in Settings → SSL to clear this warning. ***"
+                )
+            except Exception as exc:
+                _log.error("Failed to generate recovery certificate: %s – starting without SSL", exc)
+
+    # Store SSL state on the app so templates/hooks can see it
+    app.config["SSL_ACTIVE"] = ssl_context is not None
+    app.config["SSL_RECOVERY"] = ssl_recovery
+
+    app.run(
+        host="0.0.0.0",
+        port=config.flask_port(),
+        debug=(config.environment() == "development"),
+        ssl_context=ssl_context,
+    )

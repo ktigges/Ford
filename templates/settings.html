@@ -13,6 +13,21 @@
     </select>
   </div>
 
+  <h2>Logging</h2>
+  <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+    <strong>DEBUG</strong> writes verbose API/OAuth/poller details to the console and app log.
+    <strong>INFO</strong> shows normal operational messages only.
+    Per-module debug files (logs/debug_*.log) always capture DEBUG regardless of this setting.
+  </p>
+  <div class="form-group">
+    <label for="log_level">Console / App Log Level</label>
+    <select name="log_level" id="log_level" class="form-select">
+      {% for lvl in ["DEBUG", "INFO", "WARNING", "ERROR"] %}
+      <option value="{{ lvl }}" {% if settings.log_level == lvl %}selected{% endif %}>{{ lvl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
   <h2>Polling Intervals (seconds)</h2>
   <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
     Moving: min 15s. All others: min 60s, max 3600s. Values outside these limits will be clamped.
@@ -40,6 +55,69 @@
 
   <div class="btn-group">
     <button type="submit" class="btn">Save Settings</button>
+  </div>
+</form>
+
+<form method="post" action="{{ url_for('ssl_settings') }}" enctype="multipart/form-data" class="card form-card">
+  <h2>SSL / TLS (HTTPS)</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Upload your certificate and private key files to enable HTTPS.
+    A restart is required after changing SSL settings. If your certificates are invalid,
+    the app will automatically generate a self-signed recovery certificate so you can
+    still access the UI to fix the problem.
+  </p>
+
+  <div class="form-group">
+    <label>
+      <input type="checkbox" name="ssl_enabled" {% if ssl.get('enabled') %}checked{% endif %}>
+      Enable SSL
+    </label>
+  </div>
+
+  <div class="form-group">
+    <label for="ssl_cert">Certificate (.pem, .crt, .cer)</label>
+    <input type="file" name="ssl_cert" id="ssl_cert" accept=".pem,.crt,.cer">
+    {% if ssl.get('cert') %}
+    <span style="font-size:0.8rem; color:var(--muted);">Current: {{ ssl.cert }}</span>
+    {% endif %}
+  </div>
+
+  <div class="form-group">
+    <label for="ssl_key">Private Key (.pem, .key)</label>
+    <input type="file" name="ssl_key" id="ssl_key" accept=".pem,.key">
+    {% if ssl.get('key') %}
+    <span style="font-size:0.8rem; color:var(--muted);">Current: {{ ssl.key }}</span>
+    {% endif %}
+  </div>
+
+  {% if ssl_status.recovery %}
+  <div class="flash error" style="margin-bottom:0.75rem;">
+    ⚠ RECOVERY MODE — Using auto-generated self-signed certificate.
+    Your browser will show a security warning. Upload valid certificates to clear this.
+  </div>
+  {% elif ssl_status.active and ssl_status.cert_valid %}
+  <div class="flash success" style="margin-bottom:0.75rem;">✓ SSL is active with valid certificates</div>
+  {% elif ssl_status.active and not ssl_status.cert_valid %}
+  <div class="flash error" style="margin-bottom:0.75rem;">✗ {{ ssl_status.cert_message }}</div>
+  {% elif ssl.get('enabled') and ssl.get('cert') and ssl.get('key') %}
+  <div class="flash" style="margin-bottom:0.75rem; background:var(--surface); border-left:3px solid var(--muted);">
+    SSL is configured — restart required to activate.
+    {% if ssl_status.cert_valid is defined and not ssl_status.cert_valid %}
+    <br><strong>Warning:</strong> {{ ssl_status.cert_message }}
+    {% endif %}
+  </div>
+  {% elif ssl.get('enabled') %}
+  <div class="flash error" style="margin-bottom:0.75rem;">✗ SSL is enabled but cert/key files are missing — recovery cert will be generated on restart</div>
+  {% else %}
+  <div class="flash" style="margin-bottom:0.75rem; background:var(--surface); border-left:3px solid var(--muted);">SSL is disabled — HTTP only</div>
+  {% endif %}
+
+  <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
+    When SSL is enabled, all HTTP requests are automatically redirected to HTTPS.
+  </p>
+
+  <div class="btn-group">
+    <button type="submit" class="btn">Save SSL Settings</button>
   </div>
 </form>
 

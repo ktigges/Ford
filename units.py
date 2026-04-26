@@ -10,7 +10,7 @@ Usage in templates via Jinja globals:
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.1.0
+Version:     0.2.0
 Date:        2026-04-26
 """
 

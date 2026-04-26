@@ -1,7 +1,7 @@
 /* Lightning – minimal dashboard styles
    Author:      Kevin Tigges
    Description: Ford Lightning EV Tool Prototype
-   Version:     0.1.0
+   Version:     0.2.0
    Date:        2026-04-26
 */
 
@@ -118,7 +118,7 @@ th, td {
   border-bottom: 1px solid var(--border);
 }
 
-th { color: var(--muted); font-weight: 600; white-space: nowrap; width: 40%; }
+th { color: var(--muted); font-weight: 600; width: 40%; }
 
 thead th {
   background: var(--bg);
@@ -225,6 +225,17 @@ thead th {
 .null { color: var(--muted); font-style: italic; }
 
 .json-preview { font-family: monospace; font-size: 0.8rem; }
+
+/* ── DB Card Layout (vertical, for wide tables) ──── */
+
+.db-card-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 1.5rem; margin: 0; }
+.db-card-field { display: flex; gap: 0.5rem; padding: 0.2rem 0; border-bottom: 1px solid var(--border); }
+.db-card-field dt { font-weight: 600; color: var(--muted); min-width: 10rem; flex-shrink: 0; font-size: 0.85rem; }
+.db-card-field dd { margin: 0; word-break: break-all; font-size: 0.85rem; font-family: monospace; }
+
+@media (max-width: 768px) {
+  .db-card-fields { grid-template-columns: 1fr; }
+}
 
 .json-block {
   background: var(--bg);
@@ -499,31 +510,65 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
    Vehicle State / Telemetry – overflow fixes
    ══════════════════════════════════════════════════════════════ */
 
-/* Allow table cell text to wrap inside cards */
-.card td {
+/* Vehicle State uses a 2-column grid for readability */
+.state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 520px) {
+  .state-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* State card tables: auto layout so columns size to content */
+.state-card .state-table {
+  table-layout: auto;
+  width: 100%;
+}
+
+.state-card .state-table th {
+  white-space: nowrap;
+  width: auto;
+  min-width: 0;
+  padding-right: 1rem;
+  font-size: 0.85rem;
+}
+
+.state-card .state-table td {
   word-break: break-word;
   overflow-wrap: anywhere;
   white-space: normal;
 }
 
-/* Constrain card tables from blowing out the grid */
+/* Multi-row tables (tires, doors, windows) — horizontal scroll when tight */
+.state-card .table-scroll {
+  overflow-x: auto;
+  margin: 0 -0.25rem;
+}
+
+.state-card .table-scroll .state-table {
+  table-layout: auto;
+  min-width: 100%;
+}
+
+.state-card .table-scroll th,
+.state-card .table-scroll td {
+  white-space: nowrap;
+  font-size: 0.83rem;
+  padding: 0.35rem 0.5rem;
+}
+
+/* General card table defaults (dashboard, other pages) */
 .card table {
-  table-layout: fixed;
+  table-layout: auto;
   width: 100%;
 }
 
-.card th {
-  width: 40%;
-}
-
-/* Multi-row tables (tires, doors, windows) — scroll if needed */
-.card .table-scroll {
-  overflow-x: auto;
-}
-
-/* Allow multi-row table cells to stay on one line but scroll */
-.card thead th,
-.card tbody td {
-  white-space: normal;
+.card td {
   word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }

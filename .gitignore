@@ -1,0 +1,15 @@
+# Encryption key – NEVER commit this
+secret.key
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+
+# Backups
+backups/
+
+# SSL certificates and private keys
+certs/

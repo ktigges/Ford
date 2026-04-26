@@ -6,7 +6,7 @@ Extract metrics from Ford's API response and upserts into PostgreSQL state table
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.1.0
+Version:     0.2.0
 Date:        2026-04-26
 """
 
