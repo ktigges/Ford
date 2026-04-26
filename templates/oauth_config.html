@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}OAuth Configuration – Lightning{% endblock %}
+{% block content %}
+<h1>OAuth Configuration</h1>
+<p>Configure OAuth credentials for VIN: <strong>{{ vin }}</strong></p>
+
+<div class="card form-card">
+  <form method="post">
+    <div class="form-group">
+      <label for="provider">Provider</label>
+      <input type="text" name="provider" id="provider" value="{{ form.provider }}" placeholder="ford">
+    </div>
+    <div class="form-group">
+      <label for="client_id">Client ID</label>
+      <input type="text" name="client_id" id="client_id" value="{{ form.client_id }}" required>
+    </div>
+    <div class="form-group">
+      <label for="client_secret">Client Secret</label>
+      <input type="password" name="client_secret" id="client_secret" value="{{ form.client_secret }}" required>
+    </div>
+    <div class="form-group">
+      <label for="scope">Scope</label>
+      <input type="text" name="scope" id="scope" value="{{ form.scope }}">
+    </div>
+    <div class="form-group">
+      <label for="redirect_uri">Redirect URI</label>
+      <input type="text" name="redirect_uri" id="redirect_uri" value="{{ form.redirect_uri }}">
+    </div>
+    <div class="form-group">
+      <label for="refresh_token">Refresh Token</label>
+      <input type="password" name="refresh_token" id="refresh_token" value="{{ form.refresh_token }}" required>
+    </div>
+    <div class="form-group">
+      <label for="token_endpoint">Token Endpoint</label>
+      <input type="text" name="token_endpoint" id="token_endpoint" value="{{ form.token_endpoint }}" required>
+    </div>
+    <button type="submit" class="btn">Validate &amp; Save</button>
+  </form>
+</div>
+{% endblock %}

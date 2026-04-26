@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ table_name }} #{{ row_id }} – Database{% endblock %}
+{% block content %}
+<h1>{{ table_name }} — Row {{ row_id }}</h1>
+<p><a href="{{ url_for('db_table', table_name=table_name) }}">← Back to {{ table_name }}</a></p>
+
+<div class="card">
+  <table>
+    {% for key, val in row.items() %}
+    <tr>
+      <th>{{ key }}</th>
+      <td>
+        {% if val is none %}
+          <span class="null">NULL</span>
+        {% elif '\n' in (val | string) %}
+          <pre class="json-block">{{ val }}</pre>
+        {% else %}
+          {{ val }}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

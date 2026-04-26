@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Reset – Lightning{% endblock %}
+{% block content %}
+<h1>Reset Application</h1>
+
+<div class="card form-card">
+  <p>This will <strong>permanently delete</strong> all data for VIN <strong>{{ vin }}</strong>:</p>
+  <ul style="margin: 1rem 0 1rem 1.5rem; line-height: 1.8">
+    <li>OAuth credentials</li>
+    <li>Garage / vehicle info</li>
+    <li>All telemetry history</li>
+    <li>All state tables</li>
+    <li>Collector status &amp; polling config</li>
+  </ul>
+  <p>You will need to re-enter your OAuth credentials after resetting.</p>
+
+  <form method="post" style="margin-top: 1.5rem">
+    <div class="form-group">
+      <label for="confirm">Type <strong>RESET</strong> to confirm</label>
+      <input type="text" name="confirm" id="confirm" autocomplete="off" placeholder="RESET" style="max-width: 200px">
+    </div>
+    <button type="submit" class="btn btn-danger">Reset Everything</button>
+  </form>
+</div>
+{% endblock %}

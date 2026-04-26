@@ -1,0 +1,251 @@
+/* Lightning – minimal dashboard styles
+   Author:      Kevin Tigges
+   Description: Ford Lightning EV Tool Prototype
+   Version:     0.1.0
+   Date:        2026-04-26
+*/
+
+:root {
+  --bg: #f4f6f8;
+  --card-bg: #ffffff;
+  --text: #1a1a2e;
+  --muted: #6c757d;
+  --accent: #0d6efd;
+  --accent-hover: #0a58ca;
+  --danger: #dc3545;
+  --success: #198754;
+  --warning: #ffc107;
+  --border: #dee2e6;
+  --radius: 6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Prototype banner ───────────────────────────────────────── */
+
+.prototype-banner {
+  background: var(--warning);
+  color: #1a1a2e;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.15em;
+  padding: 0.35rem 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+/* ── Navigation ─────────────────────────────────────── */
+
+nav {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  background: var(--text);
+  color: #fff;
+  padding: 0.75rem 1.5rem;
+}
+
+.nav-brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+nav ul {
+  list-style: none;
+  display: flex;
+  gap: 1.25rem;
+}
+
+nav a {
+  color: rgba(255,255,255,.8);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+nav a:hover { color: #fff; }
+
+/* ── Main ───────────────────────────────────────────── */
+
+main {
+  max-width: 1100px;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+}
+
+h1 { margin-bottom: 1rem; }
+
+/* ── Cards ──────────────────────────────────────────── */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.card h2 {
+  font-size: 1rem;
+  margin-bottom: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Tables ─────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th { color: var(--muted); font-weight: 600; white-space: nowrap; width: 40%; }
+
+thead th {
+  background: var(--bg);
+  color: var(--text);
+  width: auto;
+}
+
+/* ── Badges ─────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.badge.ok  { background: #d1e7dd; color: var(--success); }
+.badge.off { background: #e2e3e5; color: var(--muted); }
+
+/* ── Flash messages ─────────────────────────────────── */
+
+.flash {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.flash.success { background: #d1e7dd; color: var(--success); }
+.flash.error   { background: #f8d7da; color: var(--danger); }
+.flash.warning { background: #fff3cd; color: #664d03; }
+
+.error-text { color: var(--danger); }
+
+/* ── Forms ──────────────────────────────────────────── */
+
+.form-card { max-width: 560px; }
+
+.form-group {
+  margin-bottom: 0.85rem;
+}
+
+.form-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(13,110,253,.15);
+}
+
+.form-select {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  background: var(--card-bg);
+}
+
+/* ── Buttons ────────────────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  padding: 0.5rem 1.25rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-danger { background: var(--danger); }
+.btn-danger:hover { background: #b02a37; }
+
+.btn-group { margin-top: 1rem; display: flex; gap: 0.5rem; }
+
+.btn-sm { padding: 0.25rem 0.7rem; font-size: 0.8rem; text-decoration: none; }
+
+/* ── DB Browser ─────────────────────────────────────── */
+
+.db-table-wrap { padding: 0; }
+
+.table-scroll { overflow-x: auto; }
+
+.db-table td, .db-table th { white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+
+.null { color: var(--muted); font-style: italic; }
+
+.json-preview { font-family: monospace; font-size: 0.8rem; }
+
+.json-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ── Manage / inline forms ──────────────────────────────────── */
+
+.card-active { border-left: 4px solid var(--success); }
+
+.inline-form { display: inline; }
+
+.row-actions { white-space: nowrap; }
+.row-actions .btn { margin-left: 0.25rem; }
+
+details { margin-top: 0.5rem; }
+details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }

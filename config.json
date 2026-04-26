@@ -1,0 +1,30 @@
+
+{
+  "environment": "development",
+
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "lightning",
+    "user": "lightning",
+    "password": "lightningpass",
+    "connect_timeout": 10
+  },
+
+  "vehicle": {
+    "vin": "1FT6W5L78RWG14285"
+  },
+
+  "logging": {
+    "level": "INFO",
+    "log_sql": false
+  },
+
+  "collector": {
+    "default_poll_interval_sec": 60,
+    "max_consecutive_failures": 5
+  }
+}
+
+
+

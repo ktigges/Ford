@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Database Browser – Lightning{% endblock %}
+{% block content %}
+<h1>Database Browser</h1>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>Table</th><th>Rows</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for t in tables %}
+      <tr>
+        <td><a href="{{ url_for('db_table', table_name=t.name) }}">{{ t.name }}</a></td>
+        <td>{{ t.count }}</td>
+        <td><a href="{{ url_for('db_table', table_name=t.name) }}" class="btn btn-sm">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

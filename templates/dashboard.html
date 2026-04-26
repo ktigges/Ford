@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – Lightning{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Vehicle</h2>
+    <table>
+      <tr><th>VIN</th><td>{{ vin }}</td></tr>
+      {% if garage %}
+      <tr><th>Make</th><td>{{ garage.make or '–' }}</td></tr>
+      <tr><th>Model</th><td>{{ garage.model_name or '–' }}</td></tr>
+      <tr><th>Year</th><td>{{ garage.model_year or '–' }}</td></tr>
+      <tr><th>Color</th><td>{{ garage.color or '–' }}</td></tr>
+      {% endif %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Poller Status</h2>
+    <table>
+      <tr>
+        <th>Running</th>
+        <td>
+          {% if poller_running %}
+            <span class="badge ok">Running</span>
+          {% else %}
+            <span class="badge off">Stopped</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% if status %}
+      <tr><th>Last Poll</th><td>{{ status.last_poll or '–' }}</td></tr>
+      <tr><th>Last Success</th><td>{{ status.last_success or '–' }}</td></tr>
+      <tr><th>Consecutive Failures</th><td>{{ status.consecutive_failures }}</td></tr>
+      {% if status.last_error %}
+      <tr><th>Last Error</th><td class="error-text">{{ status.last_error }}</td></tr>
+      {% endif %}
+      {% else %}
+      <tr><td colspan="2">No collector status yet.</td></tr>
+      {% endif %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Battery</h2>
+    {% if battery %}
+    <table>
+      <tr><th>SOC</th><td>{{ battery.soc_percent or '–' }}%</td></tr>
+      <tr><th>Range</th><td>{{ convert(battery.range_miles, 'range_miles') or '–' }} {{ ulabel('distance') }}</td></tr>
+      <tr><th>Voltage</th><td>{{ battery.voltage or '–' }} V</td></tr>
+      <tr><th>Temp</th><td>{{ convert(battery.temperature_c, 'temperature_c') or '–' }} {{ ulabel('temperature') }}</td></tr>
+    </table>
+    {% else %}
+    <p>No battery data.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Vehicle State</h2>
+    {% if vehicle %}
+    <table>
+      <tr><th>Ignition</th><td>{{ vehicle.ignition_status or '–' }}</td></tr>
+      <tr><th>Speed</th><td>{{ convert(vehicle.speed_mph, 'speed_mph') or '0' }} {{ ulabel('speed') }}</td></tr>
+      <tr><th>Odometer</th><td>{{ convert(vehicle.odometer_miles, 'odometer_miles') or '–' }} {{ ulabel('distance') }}</td></tr>
+      <tr><th>Gear</th><td>{{ vehicle.gear_position or '–' }}</td></tr>
+    </table>
+    {% else %}
+    <p>No vehicle state data.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

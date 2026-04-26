@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Poller Control – Lightning{% endblock %}
+{% block content %}
+<h1>Poller Control</h1>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Status</h2>
+    <table>
+      <tr>
+        <th>Running</th>
+        <td>
+          {% if running %}
+            <span class="badge ok">Running</span>
+          {% else %}
+            <span class="badge off">Stopped</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% if status %}
+      <tr><th>Last Poll</th><td>{{ status.last_poll or '–' }}</td></tr>
+      <tr><th>Last Success</th><td>{{ status.last_success or '–' }}</td></tr>
+      <tr><th>Consecutive Failures</th><td>{{ status.consecutive_failures }}</td></tr>
+      {% if status.last_error %}
+      <tr><th>Last Error</th><td class="error-text">{{ status.last_error }}</td></tr>
+      {% endif %}
+      {% endif %}
+    </table>
+
+    <div class="btn-group">
+      <form method="post" style="display:inline">
+        <input type="hidden" name="action" value="start">
+        <button type="submit" class="btn" {% if running %}disabled{% endif %}>Start</button>
+      </form>
+      <form method="post" style="display:inline">
+        <input type="hidden" name="action" value="stop">
+        <button type="submit" class="btn btn-danger" {% if not running %}disabled{% endif %}>Stop</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Polling Config</h2>
+    {% if polling_cfg %}
+    <table>
+      <tr><th>Ignition Off Interval</th><td>{{ polling_cfg.ignition_off_interval_sec }}s</td></tr>
+      <tr><th>Ignition On Interval</th><td>{{ polling_cfg.ignition_on_interval_sec }}s</td></tr>
+      <tr><th>Moving Interval</th><td>{{ polling_cfg.moving_interval_sec }}s</td></tr>
+      <tr><th>Charging Interval</th><td>{{ polling_cfg.charging_interval_sec }}s</td></tr>
+      <tr><th>Min Interval</th><td>{{ polling_cfg.min_poll_interval_sec }}s</td></tr>
+      <tr><th>Max Interval</th><td>{{ polling_cfg.max_poll_interval_sec }}s</td></tr>
+    </table>
+    {% else %}
+    <p>No polling configuration found. Using default interval from config.json.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

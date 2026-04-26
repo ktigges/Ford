@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Manage Vehicles – Lightning{% endblock %}
+{% block content %}
+<h1>Manage Vehicles</h1>
+<p>Active VIN (from config): <strong>{{ active_vin }}</strong></p>
+
+{% if vin_stats %}
+{% for vs in vin_stats %}
+<div class="card {% if vs.is_active %}card-active{% endif %}">
+  <h2>
+    {{ vs.vin }}
+    {% if vs.is_active %}<span class="badge ok">Active</span>{% endif %}
+  </h2>
+
+  <table>
+    <tr><th>Nickname</th><td>{{ vs.nickname or '–' }}</td></tr>
+    <tr><th>Make</th><td>{{ vs.make or '–' }}</td></tr>
+    <tr><th>Model</th><td>{{ vs.model_name or '–' }}</td></tr>
+    <tr><th>Year</th><td>{{ vs.model_year or '–' }}</td></tr>
+    <tr><th>Total related rows</th><td>{{ vs.total_rows }}</td></tr>
+  </table>
+
+  {% if vs.counts %}
+  <details>
+    <summary>Row counts per table</summary>
+    <table>
+      {% for tname, cnt in vs.counts.items() %}
+      <tr>
+        <th><a href="{{ url_for('db_table', table_name=tname) }}">{{ tname }}</a></th>
+        <td>{{ cnt }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% endif %}
+
+  <div class="btn-group">
+    {% if vs.is_active %}
+    <form method="post" action="{{ url_for('manage_repoll') }}">
+      <button type="submit" class="btn">Re-poll Data</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('manage_delete_vin') }}"
+          onsubmit="return confirm('Delete VIN {{ vs.vin }} and ALL associated data? This cannot be undone.')">
+      <input type="hidden" name="vin" value="{{ vs.vin }}">
+      <button type="submit" class="btn btn-danger">Delete VIN</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="card">
+  <p>No vehicles in the garage table.</p>
+</div>
+{% endif %}
+
+{% if orphan_creds %}
+<div class="card">
+  <h2>Orphan OAuth Credentials</h2>
+  <p>These credentials reference a VIN not in the garage (or have no VIN).</p>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Provider</th><th>VIN</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for oc in orphan_creds %}
+      <tr>
+        <td>{{ oc.id }}</td>
+        <td>{{ oc.provider }}</td>
+        <td>{{ oc.vin or 'NULL' }}</td>
+        <td>
+          <form method="post" action="{{ url_for('db_delete_row', table_name='oauth_credentials') }}"
+                onsubmit="return confirm('Delete orphan credential #{{ oc.id }}?')">
+            <input type="hidden" name="pk_col" value="id">
+            <input type="hidden" name="pk_val" value="{{ oc.id }}">
+            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
