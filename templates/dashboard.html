@@ -51,6 +51,14 @@
     <div class="charge-details">
       {% if battery %}
       <div class="stat-row">
+        <span class="stat-label">SOC</span>
+        <span class="stat-value">{{ battery.soc_percent|round(1) if battery.soc_percent is not none else '–' }} <small>%</small></span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Actual SOC</span>
+        <span class="stat-value">{{ battery.actual_soc_percent|round(1) if battery.actual_soc_percent is not none else '–' }} <small>%</small></span>
+      </div>
+      <div class="stat-row">
         <span class="stat-label">Range</span>
         <span class="stat-value">{{ convert(battery.range_miles, 'range_miles') or '–' }} <small>{{ ulabel('distance') }}</small></span>
       </div>

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Backup & Restore – Lightning{% endblock %}
+{% block content %}
+<h1>Backup & Restore</h1>
+
+<div class="card form-card">
+  <h2>Create Backup</h2>
+  <form method="post" action="{{ url_for('backup_create') }}">
+    <div class="form-group">
+      <label for="format">Format</label>
+      <select name="format" id="format" class="form-select">
+        <option value="json" selected>JSON (portable, no pg_dump required)</option>
+        <option value="sql">SQL (full pg_dump — requires pg_dump on server)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="label">Label (optional)</label>
+      <input type="text" name="label" id="label" placeholder="e.g. before-update" maxlength="40">
+    </div>
+    <div class="btn-group">
+      <button type="submit" class="btn">Create Backup</button>
+    </div>
+  </form>
+</div>
+
+<div class="card form-card">
+  <h2>Upload Backup</h2>
+  <form method="post" action="{{ url_for('backup_upload') }}" enctype="multipart/form-data">
+    <div class="form-group">
+      <label for="backup_file">Backup File (.sql or .json)</label>
+      <input type="file" name="backup_file" id="backup_file" accept=".sql,.json">
+    </div>
+    <div class="btn-group">
+      <button type="submit" class="btn">Upload</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Available Backups</h2>
+  {% if backups %}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:auto">Filename</th>
+        <th style="width:auto">Type</th>
+        <th style="width:auto">Size</th>
+        <th style="width:auto">Created (UTC)</th>
+        <th style="width:auto">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in backups %}
+      <tr>
+        <td style="word-break:break-all">{{ b.filename }}</td>
+        <td>{{ b.type|upper }}</td>
+        <td>{{ b.size_fmt }}</td>
+        <td>{{ b.created.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td class="row-actions">
+          <a href="{{ url_for('backup_download', filename=b.filename) }}" class="btn btn-sm">Download</a>
+          <form method="post" action="{{ url_for('backup_restore') }}" class="inline-form"
+                onsubmit="return confirm('Restore from {{ b.filename }}? Existing data will NOT be overwritten (JSON) or may be replaced (SQL).')">
+            <input type="hidden" name="filename" value="{{ b.filename }}">
+            <button type="submit" class="btn btn-sm">Restore</button>
+          </form>
+          <form method="post" action="{{ url_for('backup_delete') }}" class="inline-form"
+                onsubmit="return confirm('Delete {{ b.filename }}?')">
+            <input type="hidden" name="filename" value="{{ b.filename }}">
+            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="no-data">No backups found. Create one above.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Backup Notes</h2>
+  <table>
+    <tr><th style="width:auto">JSON backup</th><td>Exports all 18 tables to a portable JSON file. Restore uses <code>INSERT ... ON CONFLICT DO NOTHING</code> — existing rows are preserved. No external tools required.</td></tr>
+    <tr><th style="width:auto">SQL backup</th><td>Uses <code>pg_dump</code> for a full database dump. Restore uses <code>psql</code>. Requires PostgreSQL client tools on the server. Provides the most complete backup including sequences and constraints.</td></tr>
+    <tr><th style="width:auto">Restore safety</th><td>JSON restores will never overwrite existing data. SQL restores may replace data depending on conflict handling. Always create a backup before restoring.</td></tr>
+  </table>
+</div>
+{% endblock %}

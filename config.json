@@ -1,6 +1,6 @@
-
 {
   "environment": "development",
+  "port": 5000,
 
   "database": {
     "host": "localhost",
@@ -10,17 +10,17 @@
     "password": "lightningpass",
     "connect_timeout": 10
   },
-
   "logging": {
     "level": "INFO",
     "log_sql": false
   },
-
   "collector": {
     "default_poll_interval_sec": 60,
     "max_consecutive_failures": 5
+  },
+  "ssl": {
+    "enabled": true,
+    "cert": "/Users/kevin/dev/Ford/certs/server.crt",
+    "key": "/Users/kevin/dev/Ford/certs/server.key"
   }
 }
-
-
-

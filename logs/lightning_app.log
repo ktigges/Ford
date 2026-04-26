@@ -1006,3 +1006,347 @@ HINT:  You will need to rewrite or cast the expression.
 2026-04-26 12:28:09,765  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
 2026-04-26 12:28:09,858  WARNING   werkzeug               * Debugger is active!
 2026-04-26 12:28:09,886  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:30:49,406  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:30:49,564  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:30:49,687  INFO      werkzeug              [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.100.63:5000
+2026-04-26 12:30:49,688  INFO      werkzeug              [33mPress CTRL+C to quit[0m
+2026-04-26 12:30:49,692  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:30:50,212  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:30:50,276  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:30:50,351  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:30:50,392  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:30:59,991  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:30:59] "GET / HTTP/1.1" 200 -
+2026-04-26 12:31:00,068  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:00] "GET /static/style.css HTTP/1.1" 200 -
+2026-04-26 12:31:00,068  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:00] "GET /static/vehicle.png HTTP/1.1" 200 -
+2026-04-26 12:31:31,798  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:31] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:31:31,829  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:31] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:31:48,572  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:48] "GET /telemetry HTTP/1.1" 200 -
+2026-04-26 12:31:48,604  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:48] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:31:50,734  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:50] "GET /oauth HTTP/1.1" 200 -
+2026-04-26 12:31:50,764  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:50] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:31:52,379  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:52] "GET /poller HTTP/1.1" 200 -
+2026-04-26 12:31:52,413  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:52] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:31:56,391  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:56] "GET /settings HTTP/1.1" 200 -
+2026-04-26 12:31:56,417  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:31:56] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:32:29,361  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:29] "[32mPOST /settings/upload-image HTTP/1.1[0m" 302 -
+2026-04-26 12:32:29,389  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:29] "GET /settings HTTP/1.1" 200 -
+2026-04-26 12:32:29,422  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:29] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:32:40,861  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:40] "GET /manage HTTP/1.1" 200 -
+2026-04-26 12:32:40,897  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:40] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:32:42,679  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:42] "GET /db HTTP/1.1" 200 -
+2026-04-26 12:32:42,707  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:42] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:32:46,430  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:46] "GET / HTTP/1.1" 200 -
+2026-04-26 12:32:46,546  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:46] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:32:46,556  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:32:46] "GET /static/vehicle.png HTTP/1.1" 200 -
+2026-04-26 12:33:50,218  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:33:50] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:33:50,245  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:33:50] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:39:02,885  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:39:02] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:39:02,934  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:39:02] "GET /static/style.css HTTP/1.1" 200 -
+2026-04-26 12:39:33,252  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:39:33] "GET / HTTP/1.1" 200 -
+2026-04-26 12:39:33,305  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:39:33] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:39:33,371  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:39:33] "[36mGET /static/vehicle.png HTTP/1.1[0m" 304 -
+2026-04-26 12:42:04,945  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:04] "GET /db HTTP/1.1" 200 -
+2026-04-26 12:42:04,973  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:04] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:42:11,008  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:11] "GET /db/oauth_credentials HTTP/1.1" 200 -
+2026-04-26 12:42:11,050  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:11] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:42:33,893  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:33] "GET /db/app_config HTTP/1.1" 200 -
+2026-04-26 12:42:33,920  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:33] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:42:43,901  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:43] "GET /db HTTP/1.1" 200 -
+2026-04-26 12:42:43,932  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:43] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:42:55,230  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:55] "GET /db/app_config HTTP/1.1" 200 -
+2026-04-26 12:42:55,263  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:42:55] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:43:25,223  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/backup.py', reloading
+2026-04-26 12:43:25,288  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:43:28,758  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:43:29,070  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:43:29,534  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:43:29,632  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:43:52,135  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:43:52,184  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:43:52,817  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:43:52,952  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:43:53,017  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:43:53,048  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:43:59,525  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:43:59,582  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:44:00,121  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:44:00,207  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:44:00,329  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:44:00,359  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:45:45,767  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:45:45,824  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:45:46,349  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:45:46,471  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:45:46,586  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:45:46,619  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:45:48,860  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:45:48,915  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:45:49,375  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:45:49,434  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:45:49,491  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:45:49,524  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:46:58,116  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:46:58] "GET /db HTTP/1.1" 200 -
+2026-04-26 12:46:58,153  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:46:58] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:47:00,545  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:47:00] "GET /backup HTTP/1.1" 200 -
+2026-04-26 12:47:00,575  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:47:00] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:47:13,258  INFO      backup                  app_config: 1 rows
+2026-04-26 12:47:13,261  INFO      backup                  garage: 1 rows
+2026-04-26 12:47:13,263  INFO      backup                  oauth_credentials: 1 rows
+2026-04-26 12:47:13,265  INFO      backup                  polling_config: 0 rows
+2026-04-26 12:47:13,266  INFO      backup                  collector_status: 1 rows
+2026-04-26 12:47:13,270  INFO      backup                  telemetry: 4 rows
+2026-04-26 12:47:13,271  INFO      backup                  vehicle_state: 1 rows
+2026-04-26 12:47:13,273  INFO      backup                  battery_state: 1 rows
+2026-04-26 12:47:13,275  INFO      backup                  charging_state: 1 rows
+2026-04-26 12:47:13,277  INFO      backup                  location_state: 1 rows
+2026-04-26 12:47:13,278  INFO      backup                  tire_state: 4 rows
+2026-04-26 12:47:13,280  INFO      backup                  door_state: 7 rows
+2026-04-26 12:47:13,281  INFO      backup                  window_state: 2 rows
+2026-04-26 12:47:13,283  INFO      backup                  brake_state: 1 rows
+2026-04-26 12:47:13,285  INFO      backup                  security_state: 1 rows
+2026-04-26 12:47:13,286  INFO      backup                  environment_state: 1 rows
+2026-04-26 12:47:13,288  INFO      backup                  vehicle_configuration: 1 rows
+2026-04-26 12:47:13,290  INFO      backup                  departure_schedule: 14 rows
+2026-04-26 12:47:13,304  INFO      backup                JSON backup created: lightning_backup_20260426_184713.json (146199 bytes)
+2026-04-26 12:47:13,306  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:47:13] "[32mPOST /backup/create HTTP/1.1[0m" 302 -
+2026-04-26 12:47:13,338  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:47:13] "GET /backup HTTP/1.1" 200 -
+2026-04-26 12:47:13,359  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:47:13] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:54:00,083  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:54:00,140  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:54:00,703  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:54:00,904  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:54:01,031  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:54:01,073  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:54:07,552  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:54:07,605  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:54:08,111  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:54:08,170  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:54:08,224  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:54:08,256  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:54:12,678  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:54:12,732  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:54:13,603  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:54:13,729  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:54:13,855  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:54:13,875  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:54:53,348  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/crypto.py', reloading
+2026-04-26 12:54:53,399  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:54:54,027  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:54:54,106  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:54:54,178  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:54:54,223  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:54:58,612  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/crypto.py', reloading
+2026-04-26 12:54:58,672  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:54:59,160  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:54:59,216  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:54:59,269  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:54:59,289  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:55:01,505  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/oauth.py', reloading
+2026-04-26 12:55:01,560  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:02:46,437  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:02:46,676  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:02:46,778  INFO      werkzeug              [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.100.63:5000
+2026-04-26 13:02:46,778  INFO      werkzeug              [33mPress CTRL+C to quit[0m
+2026-04-26 13:02:46,779  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:02:47,298  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:02:47,362  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:02:47,423  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:02:47,459  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:02:58,060  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:02:58] "GET / HTTP/1.1" 200 -
+2026-04-26 13:02:58,140  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:02:58] "[36mGET /static/vehicle.png HTTP/1.1[0m" 304 -
+2026-04-26 13:02:58,140  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:02:58] "GET /static/style.css HTTP/1.1" 200 -
+2026-04-26 13:03:05,764  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:05] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:03:05,793  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:05] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:18,476  INFO      crypto                New encryption key generated and saved to /Users/kevin/dev/Ford/secret.key
+2026-04-26 13:03:18,491  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:18] "GET /oauth HTTP/1.1" 200 -
+2026-04-26 13:03:18,522  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:18] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:22,279  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:22] "GET /manage HTTP/1.1" 200 -
+2026-04-26 13:03:22,307  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:22] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:26,422  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:26] "GET /db HTTP/1.1" 200 -
+2026-04-26 13:03:26,451  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:26] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:29,411  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:29] "GET /backup HTTP/1.1" 200 -
+2026-04-26 13:03:29,446  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:29] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:38,940  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:38] "GET / HTTP/1.1" 200 -
+2026-04-26 13:03:39,012  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:39] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:39,014  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:39] "[36mGET /static/vehicle.png HTTP/1.1[0m" 304 -
+2026-04-26 13:03:44,914  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:44] "GET /manage HTTP/1.1" 200 -
+2026-04-26 13:03:44,941  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:44] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:03:46,460  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:46] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:03:46,485  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:03:46] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:05:32,655  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:05:32,727  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:05:33,383  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:05:33,604  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:05:33,696  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:05:33,731  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:05:35,984  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:05:36,040  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:05:36,737  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:05:36,843  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:05:36,921  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:05:36,947  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:07:06,030  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:06] "GET / HTTP/1.1" 200 -
+2026-04-26 13:07:06,171  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:06] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:07:06,171  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:06] "[36mGET /static/vehicle.png HTTP/1.1[0m" 304 -
+2026-04-26 13:07:09,386  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:09] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:07:09,411  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:09] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:07:39,329  INFO      __main__              SSL certificate uploaded: /Users/kevin/dev/Ford/certs/server.crt
+2026-04-26 13:07:39,330  INFO      __main__              SSL private key uploaded: /Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:07:39,332  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:39] "[32mPOST /settings/ssl HTTP/1.1[0m" 302 -
+2026-04-26 13:07:39,356  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:39] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:07:39,377  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:39] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:07:50,807  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:50] "[32mPOST /settings/ssl HTTP/1.1[0m" 302 -
+2026-04-26 13:07:50,836  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:50] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:07:50,863  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:50] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:07:59,490  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:59] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:07:59,514  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:07:59] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:08:08,810  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] code 400, message Bad request version ('JJ\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06EÚÚ\x00\x00\x00+\x00\x07\x06ÊÊ\x03\x04\x03\x03\x00\x12\x00\x00\x00-\x00\x02\x01\x01\x00')
+2026-04-26 13:08:08,811  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] "[31m[1m\x16\x03\x01\x06²\x01\x00\x06®\x03\x03TCò×¸óB\x11k·÷¬W3(\\´\x97ëU\x1cñ\x11\x98\x99b,\x80\x8dN\x83A \x87Õ+×I\x02\x1aðn\x14\x10¸ÈE\x8fi\x99õæ\x16¼$Fð\x81\x8c÷!Ã>XÔ\x00 JJ\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06EÚÚ\x00\x00\x00+\x00\x07\x06ÊÊ\x03\x04\x03\x03\x00\x12\x00\x00\x00-\x00\x02\x01\x01\x00[0m" 400 -
+2026-04-26 13:08:08,811  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] code 400, message Bad request syntax ('\x16\x03\x01\x06Ò\x01\x00\x06Î\x03\x03Q@V¡k¤\x8c#mõÍ')
+2026-04-26 13:08:08,812  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] "[31m[1m\x16\x03\x01\x06Ò\x01\x00\x06Î\x03\x03Q@V¡k¤\x8c#mõÍ[0m" 400 -
+2026-04-26 13:08:08,825  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] code 400, message Bad request version ('êê\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06E')
+2026-04-26 13:08:08,825  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] "[31m[1m\x16\x03\x01\x06²\x01\x00\x06®\x03\x03"\x10À\x84©vº-©ï\x09MBiDü=\x965\x12sB\x0d³bp\x90óï¹äû ÉÙ:bº\x87Ø')\x86ª\x82ï ¹*Rêf\x02vàÖÒy\x18³=2\x8a\x89!\x00 êê\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06E[0m" 400 -
+2026-04-26 13:08:08,827  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] code 400, message Bad request version ('jj\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06E\x9a\x9a\x00\x00\x00\x1b\x00\x03\x02\x00\x02\x00')
+2026-04-26 13:08:08,827  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:08] "[31m[1m\x16\x03\x01\x06²\x01\x00\x06®\x03\x03\x9cØ\x08>^Í¼¸\x927\x88\x16\x0cïp9\x0eü×)=gºß!\x8bñ>\x14\x0fOq .ì\x95\x99'g\x89{\x999õ,ã\x1189ü]NÓ3VÜj»ÿ¾)G\x7f­ø\x00 jj\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06E\x9a\x9a\x00\x00\x00\x1b\x00\x03\x02\x00\x02\x00[0m" 400 -
+2026-04-26 13:08:12,688  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] code 400, message Bad request version ('Bz\x07Nzì\x12IÕð\x17¿\x07é)}\x9d\x82')
+2026-04-26 13:08:12,688  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] code 400, message Bad request version ('localhost\x00\x05\x00\x05\x01\x00\x00\x00\x00\x00')
+2026-04-26 13:08:12,689  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] "[31m[1m\x16\x03\x01\x06²\x01\x00\x06®\x03\x03\x19;\x1cü®\x05ÙC\x9aÝ0±©xàm\x16Iv]/Oó\x07(^X«¤Q´© ¢N9ª\x8f>°ç¼/E\x1cÚ\x8e Åâ\x01ä\x93\x91h½ç\x8a\x9e~0ëu¢>\x00 ºº\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06Eªª\x00\x00ÿ\x01\x00\x01\x00\x00\x10\x00\x0e\x00\x0c\x02h2\x08http/1.1þ\x0d\x00º\x00\x00\x01\x00\x01\x07\x00 Ùû$­TÁX\x13\x86\x80\x83Ìà\x1e;\x11¶¡\x9c\x8fèÎÐq¡\x9fT\x0c¢D`!\x00\x90\x9eÕØÖ=Æç=ñØ}ÁÝÄ»ØÄU¥Ò¡\x9c\x17Ú¼EÈ~z¸Hø\x90´\x95úko,#\x86G\x85½à7\x10\x1b;ÐMÎp\x890*ÿãOD¼\x19\x00\x03@ \x01C{ªGâ\x1cí\x0dBz\x07Nzì\x12IÕð\x17¿\x07é)}\x9d\x82[0m" 400 -
+2026-04-26 13:08:12,689  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] "[31m[1m\x16\x03\x01\x06Ò\x01\x00\x06Î\x03\x03]~\x94ôÈ7= ¢w\\m×çbý×Üaö\x9cõÔ§\x98°\x022\x88\x10\x97/ ÞUp¼\x8e\x9eÁÔ`\x03k ÖìO<|ÇõÐwY*pi.\x83Skh\x93\x18\x00 \x8a\x8a\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06e\x8a\x8a\x00\x00ÿ\x01\x00\x01\x00\x00\x00\x00\x0e\x00\x0c\x00\x00\x09localhost\x00\x05\x00\x05\x01\x00\x00\x00\x00\x00[0m" 400 -
+2026-04-26 13:08:12,715  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] code 400, message Bad request version ('\x00\x12\x00\x10\x04\x03\x08\x04\x04\x01\x05\x03\x08\x05\x05\x01\x08\x06\x06\x01\x00')
+2026-04-26 13:08:12,715  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] "[31m[1m\x16\x03\x01\x06Ò\x01\x00\x06Î\x03\x03\x0eÃ|A\x05 ¡\x97Kªý@"Ü4¥L\x19~Aàª\x87ÁE³wè\x80S\x03ä  ÈúK¢»8ªJÕÑ(ZÐ^¶-½t¶\x15óR\x9b+°~KÂ\x1a\x97\x90\x00 ªª\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06ezz\x00\x00\x00\x12\x00\x00\x00\x0d\x00\x12\x00\x10\x04\x03\x08\x04\x04\x01\x05\x03\x08\x05\x05\x01\x08\x06\x06\x01\x00[0m" 400 -
+2026-04-26 13:08:12,716  ERROR     werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] code 400, message Bad request version ('\x87\x9fWuÅºuJ|Ò²DWmu3\xadänð]ñ\x9dÑ\x7fÁþO\x91\x03"')
+2026-04-26 13:08:12,716  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:12] "[31m[1m\x16\x03\x01\x06²\x01\x00\x06®\x03\x03¬Aê\x18«\x1eGyW\x85î\x8cÇTðø\x94Lô÷j\x08Ê\x81º\x84j<Zg\x11\x08 ¨ë°\x8fG\x9b²*Ù\x88ÚÇey¼«øür\x8055Þö·\x9b¦Ü/±³Ä\x00 ÊÊ\x13\x01\x13\x02\x13\x03À+À/À,À0Ì©Ì¨À\x13À\x14\x00\x9c\x00\x9d\x00/\x005\x01\x00\x06E**\x00\x00\x00\x0d\x00\x12\x00\x10\x04\x03\x08\x04\x04\x01\x05\x03\x08\x05\x05\x01\x08\x06\x06\x01DÍ\x00\x05\x00\x03\x02h2\x00\x17\x00\x00\x00+\x00\x07\x06jj\x03\x04\x03\x03\x00\x0b\x00\x02\x01\x00ÿ\x01\x00\x01\x00\x00\x1b\x00\x03\x02\x00\x02\x00\x10\x00\x0e\x00\x0c\x02h2\x08http/1.1þ\x0d\x00º\x00\x00\x01\x00\x01\x98\x00 \x87\x9fWuÅºuJ|Ò²DWmu3­änð]ñ\x9dÑ\x7fÁþO\x91\x03"[0m" 400 -
+2026-04-26 13:08:20,532  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:20] "GET / HTTP/1.1" 200 -
+2026-04-26 13:08:20,611  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:20] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:08:20,612  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:20] "[36mGET /static/vehicle.png HTTP/1.1[0m" 304 -
+2026-04-26 13:08:28,707  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:28] "GET /manage HTTP/1.1" 200 -
+2026-04-26 13:08:28,729  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:28] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:08:30,305  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:30] "GET /settings HTTP/1.1" 200 -
+2026-04-26 13:08:30,334  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 13:08:30] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:09:12,405  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:09:12,624  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:09:12,636  INFO      __main__              SSL enabled: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:09:12,861  INFO      werkzeug              [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on https://127.0.0.1:5000
+ * Running on https://192.168.100.63:5000
+2026-04-26 13:09:12,861  INFO      werkzeug              [33mPress CTRL+C to quit[0m
+2026-04-26 13:09:12,866  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:09:13,594  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:09:13,657  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:09:13,667  INFO      __main__              SSL enabled: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:09:13,718  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:09:13,751  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:10:17,630  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:10:17] "GET / HTTP/1.1" 200 -
+2026-04-26 13:10:17,680  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:10:17] "GET /static/style.css HTTP/1.1" 200 -
+2026-04-26 13:10:17,690  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:10:17] "GET /static/vehicle.png HTTP/1.1" 200 -
+2026-04-26 13:10:17,817  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:10:17] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-04-26 13:12:03,297  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/crypto.py', reloading
+2026-04-26 13:12:03,402  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:12:04,359  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:12:04,552  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:12:04,576  INFO      __main__              SSL enabled: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:12:04,657  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:12:04,684  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:12:21,807  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/crypto.py', reloading
+2026-04-26 13:12:21,877  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:12:22,404  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:12:22,463  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:12:22,472  INFO      __main__              SSL enabled: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:12:22,522  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:12:22,543  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:12:26,877  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/crypto.py', reloading
+2026-04-26 13:12:26,937  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:12:27,487  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:12:27,558  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:12:27,568  INFO      __main__              SSL enabled: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:12:27,631  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:12:27,659  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:12:42,847  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:12:42,906  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:12:43,657  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:12:43,760  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:12:44,234  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:12:44,286  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:12:44,308  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:12:48,661  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:12:48,719  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:12:49,436  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:12:49,503  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:12:50,005  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:12:50,064  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:12:50,101  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:13:06,216  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:13:06,272  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:13:06,839  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:13:06,924  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:13:07,388  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:13:07,462  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:13:07,482  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:15:03,925  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:15:03,993  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:15:04,793  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:15:04,993  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:15:05,465  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:15:05,540  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:15:05,564  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:15:20,375  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:20] "GET / HTTP/1.1" 200 -
+2026-04-26 13:15:20,408  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:20] "[36mGET /static/vehicle.png HTTP/1.1[0m" 304 -
+2026-04-26 13:15:20,418  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:20] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:15:28,748  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:28] "GET /oauth HTTP/1.1" 200 -
+2026-04-26 13:15:28,784  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:28] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:15:39,597  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:39] "GET /manage HTTP/1.1" 200 -
+2026-04-26 13:15:39,631  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:39] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:15:41,839  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:41] "GET /db HTTP/1.1" 200 -
+2026-04-26 13:15:41,874  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:41] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:15:46,482  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:46] "GET /db/oauth_credentials HTTP/1.1" 200 -
+2026-04-26 13:15:46,524  INFO      werkzeug              192.168.100.63 - - [26/Apr/2026 13:15:46] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 13:18:11,829  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:18:11,899  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:18:12,530  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:18:12,822  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:18:12,857  INFO      __main__              Migrated client_secret to encrypted form (cred id=9)
+2026-04-26 13:18:13,339  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:18:13,416  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:18:13,438  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:18:25,238  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:18:25,300  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:18:26,133  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:18:26,233  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:18:26,716  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:18:26,784  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:18:26,807  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:18:40,736  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:18:40,821  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:18:41,323  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:18:41,380  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:18:41,857  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:18:41,938  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:18:41,976  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:19:08,753  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:19:08,818  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:19:09,601  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:19:09,718  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:19:10,194  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:19:10,301  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:19:10,327  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:21:32,721  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:21:32,783  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:21:33,378  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:21:33,521  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:21:34,005  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:21:34,066  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:21:34,096  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 13:21:54,350  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 13:21:54,421  INFO      werkzeug               * Restarting with stat
+2026-04-26 13:21:55,097  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 13:21:55,157  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 13:21:55,619  INFO      __main__              SSL enabled with user certificates: cert=/Users/kevin/dev/Ford/certs/server.crt key=/Users/kevin/dev/Ford/certs/server.key
+2026-04-26 13:21:55,726  WARNING   werkzeug               * Debugger is active!
+2026-04-26 13:21:55,754  INFO      werkzeug               * Debugger PIN: 118-006-052

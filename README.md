@@ -1,7 +1,7 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.1.0  
+**Version:** 0.2.0  
 **Date:** 2026-04-26
 
 ---
@@ -25,20 +25,23 @@ The ultimate goal of this project is to train an AI model for **user-specific dr
                     ┌────┴─────┐
                     │  app.py  │  ← routes, Jinja templates
                     └────┬─────┘
-         ┌───────────────┼───────────────┐
-         │               │               │
-    ┌────┴────┐   ┌──────┴─────┐   ┌─────┴─────┐
-    │ oauth.py│   │ poller.py  │   │  units.py  │
-    │  tokens │   │  API poll  │   │  unit conv │
-    └────┬────┘   └──────┬─────┘   └────────────┘
-         │               │
-         └───────┬───────┘
-            ┌────┴────┐
-            │  db.py   │  ← psycopg2 connection pool
-            └────┬────┘
-            ┌────┴────┐
-            │ PostgreSQL│  ← 18 tables (schema.sql)
-            └─────────┘
+         ┌───────┬───────┼───────┬───────────┐
+         │       │       │       │           │
+    ┌────┴────┐ ┌┴──────┐│ ┌────┴─────┐ ┌───┴──────┐
+    │ oauth.py│ │backup ││ │ units.py │ │crypto.py │
+    │  tokens │ │  .py  ││ │ unit conv│ │encryption│
+    └────┬────┘ └───┬───┘│ └──────────┘ └──────────┘
+         │          │    │
+         └──────────┼────┘
+               ┌────┴────┐
+               │ poller.py│  ← background daemon thread
+               └────┬─────┘
+               ┌────┴────┐
+               │  db.py  │  ← psycopg2 connection pool
+               └────┬────┘
+               ┌────┴─────┐
+               │ PostgreSQL│  ← 18 tables (schema.sql)
+               └──────────┘
 ```
 
 All configuration is read from `config.json` via `config.py`.
@@ -59,6 +62,10 @@ Reads `config.json` once at startup and caches the result. Exposes typed accesso
 | `environment()` | Return the environment name (`development` or `production`). |
 | `logging_config()` | Return logging settings (level, log_sql flag). |
 | `collector_config()` | Return collector/poller settings (default interval, max failures). |
+| `flask_port()` | Return the Flask listening port from config (default 5000). |
+| `ssl_config()` | Return SSL/TLS settings (enabled, cert path, key path). |
+| `save_database(db_settings)` | Update the database section in `config.json` and reload the cached config. Used by the DB setup page. |
+| `save_ssl(ssl_settings)` | Update the ssl section in `config.json` and reload. Used by the SSL settings UI. |
 
 ---
 
@@ -77,6 +84,9 @@ Thin wrapper around `psycopg2.pool.ThreadedConnectionPool`. Provides context man
 | `execute(sql, params)` | Execute a write statement (INSERT/UPDATE/DELETE) and auto-commit. |
 | `execute_returning(sql, params)` | Execute a write with a `RETURNING` clause and return the first result row. |
 | `active_vin()` | Return the most recently updated VIN from the `garage` table, or `None` if the garage is empty. |
+| `is_available()` | Return `True` if the connection pool is initialised and the database is reachable. Used by setup mode. |
+| `test_connection(host, port, ...)` | Test a database connection without affecting the pool. Returns `(success, message)`. |
+| `apply_schema()` | Apply `schema.sql` to the connected database to create all tables. Returns `(success, message)`. |
 
 ---
 
@@ -88,12 +98,12 @@ Self-contained OAuth module for Ford's Azure AD B2C endpoint. Handles token refr
 |---|---|
 | `_decode_jwt_claims(token)` | Decode JWT payload without signature verification — for diagnostic logging only, never auth decisions. |
 | `log_token_diagnostics(token, context)` | Log non-sensitive JWT claims (aud, scope, exp, iss) to help debug 401/403 errors. |
-| `get_credentials(provider, vin)` | Look up the enabled `oauth_credentials` row for a provider/VIN pair from the database. |
+| `get_credentials(provider, vin)` | Look up the enabled `oauth_credentials` row for a provider/VIN pair. The `client_secret` is transparently decrypted before being returned. |
 | `get_valid_access_token(provider, vin)` | Return a valid access token, refreshing automatically if expired. Returns `None` if credentials are missing or refresh fails. |
 | `_build_token_fields(creds)` | Build multipart form fields for a token refresh request. Uses `redirect_url` (Ford's non-standard field name). |
 | `refresh_access_token(creds)` | Perform a refresh-token grant against Ford's token endpoint. Persists the new tokens and handles rotation-safe refresh-token updates. |
 | `validate_credentials(form_data)` | Test OAuth credentials by attempting a token refresh. Used by the setup UI to verify before saving. Returns `(token_data, None)` or `(None, error_message)`. |
-| `save_credentials(provider, vin, form_data, token_data)` | Insert or upsert OAuth credentials with validated token data into the database. |
+| `save_credentials(provider, vin, form_data, token_data)` | Insert or upsert OAuth credentials with validated token data. The `client_secret` is encrypted before storage. |
 | `_persist_tokens(cred_id, ...)` | Internal helper to update access_token, expiry, and refresh_token on an existing credential row. |
 
 ---
@@ -194,7 +204,9 @@ The main application factory. Creates the Flask app, initializes logging and dat
 | `/telemetry` | GET | **Telemetry** — poll count, latest timestamp, recent poll history. |
 | `/oauth` | GET, POST | **OAuth Config** — enter/update Ford API credentials. Validates by attempting a token refresh, then triggers initial data poll. |
 | `/poller` | GET, POST | **Poller Control** — start/stop the background poller, view collector status. |
-| `/settings` | GET, POST | **Settings** — toggle metric/imperial display, configure polling intervals. |
+| `/settings` | GET, POST | **Settings** — toggle metric/imperial display, configure polling intervals, change runtime log level. |
+| `/settings/ssl` | POST | Upload SSL cert/key files and enable/disable HTTPS. Requires restart. |
+| `/settings/upload-image` | POST | Upload a custom vehicle image for the dashboard. |
 | `/manage` | GET | **Manage Vehicles** — list all VINs with per-table row counts, delete VINs, re-poll. |
 | `/manage/delete-vin` | POST | Delete a VIN and all cascaded data. |
 | `/manage/repoll` | POST | Re-run the initial setup poll for the active VIN. |
@@ -203,6 +215,38 @@ The main application factory. Creates the Flask app, initializes logging and dat
 | `/db/<table>` | GET | View table contents with secret masking and delete buttons. |
 | `/db/<table>/delete` | POST | Delete a specific row from a table. |
 | `/db/<table>/<id>` | GET | Row detail with expanded JSON for JSONB columns. |
+| `/backup` | GET | **Backup & Restore** — list backups, create, restore, download, delete, upload. |
+| `/backup/create` | POST | Create a new backup (SQL or JSON format). |
+| `/backup/restore` | POST | Restore from an existing backup file. |
+| `/backup/download/<file>` | GET | Download a backup file. |
+| `/backup/delete` | POST | Delete a backup file. |
+| `/backup/upload` | POST | Upload a backup file (.sql or .json). |
+| `/setup` | GET, POST | **Database Setup** — shown when PostgreSQL is unreachable. Configure connection, save to config.json, and connect. |
+| `/setup/test` | POST | Test a database connection without saving settings. |
+| `/setup/create-schema` | POST | Apply `schema.sql` to create all required tables. |
+| `/setup/restore` | POST | Apply schema and restore from a backup file during setup. |
+| `/setup/upload` | POST | Upload a backup file during setup (works without database). |
+
+#### Startup Behaviour
+
+If PostgreSQL is unreachable at startup, the app enters **setup mode** instead of crashing. All routes redirect to `/setup` until a database connection is established. Once connected, the user can create the schema and/or restore from a backup, then proceed to OAuth configuration.
+
+#### Runtime Log Level Switching
+
+The Settings page includes a **Console / App Log Level** dropdown (DEBUG, INFO, WARNING, ERROR). Changing the level takes effect immediately — the console handler and combined app-file handler are updated at runtime. Per-module debug files (`logs/debug_*.log`) always capture DEBUG regardless of this setting. The selected level is persisted in the `app_config` database table and restored on startup.
+
+---
+
+### `crypto.py` — Credential Encryption
+
+Symmetric encryption for sensitive fields using Fernet (AES-128-CBC with HMAC-SHA256) from the `cryptography` library. The encryption key is auto-generated on first use and stored in `secret.key` (file permissions: 0600, excluded from Git via `.gitignore`).
+
+| Function | Description |
+|---|---|
+| `encrypt(plaintext)` | Encrypt a string and return a URL-safe base64 token. |
+| `decrypt(ciphertext)` | Decrypt a Fernet token back to plaintext. Gracefully falls back to returning the original value if decryption fails (supports pre-encryption data migration). |
+
+> **Important:** The `secret.key` file must be kept secure and backed up separately. If lost, encrypted `client_secret` values in the database cannot be recovered.
 
 ---
 
@@ -217,12 +261,42 @@ The main application factory. Creates the Flask app, initializes logging and dat
 ```json
 {
   "environment": "development",
-  "database": { "host", "port", "name", "user", "password" },
-  "vehicle": { "vin": "1FT6W5L78RWG14285" },
+  "port": 5000,
+  "database": { "host": "localhost", "port": 5432, "name": "lightning",
+                "user": "lightning", "password": "lightningpass" },
   "logging": { "level": "INFO" },
-  "collector": { "default_poll_interval_sec": 60, "max_consecutive_failures": 5 }
+  "collector": { "default_poll_interval_sec": 60, "max_consecutive_failures": 5 },
+  "ssl": { "enabled": false, "cert": "", "key": "" }
 }
 ```
+
+| Section | Description |
+|---|---|
+| `environment` | `development` or `production`. Controls Flask debug mode. |
+| `port` | Flask listening port (default `5000`). |
+| `database` | PostgreSQL connection settings. Editable via the DB setup page. |
+| `logging` | Default log level and SQL logging flag. Runtime level is controlled from Settings. |
+| `collector` | Poller defaults (interval, max consecutive failures). |
+| `ssl` | SSL/TLS configuration. Set `enabled: true` and provide paths to `cert` and `key` PEM files to serve over HTTPS. Can be configured via the Settings page UI. |
+
+The VIN is **not** stored in config — it is discovered automatically from Ford’s garage API during initial setup.
+
+---
+
+### `backup.py` — Backup & Restore
+
+Provides two backup strategies for the complete database and all configuration.
+
+| Function | Description |
+|---|---|
+| `backup_sql(label)` | Full database dump using `pg_dump`. Requires PostgreSQL client tools on the server. |
+| `restore_sql(filepath)` | Restore from a SQL dump using `psql`. |
+| `backup_json(label)` | Export all 18 tables to a portable JSON file. No external tools required. |
+| `restore_json(filepath)` | Restore from a JSON backup. Uses `INSERT ... ON CONFLICT DO NOTHING` — existing rows are never overwritten. |
+| `list_backups()` | List all `.sql` and `.json` files in the `backups/` directory. |
+| `delete_backup(filename)` | Delete a backup file (path-traversal safe). |
+
+Backups are stored in the `backups/` directory at the project root.
 
 ---
 
@@ -242,14 +316,22 @@ The main application factory. Creates the Flask app, initializes logging and dat
 | `db_browser.html` | Database table listing with row counts. |
 | `db_table.html` | Table content viewer with delete buttons and secret masking. |
 | `db_row_detail.html` | Single row detail with JSON expansion. |
+| `backup.html` | Backup & restore UI — create, upload, download, restore, delete. |
+| `db_setup.html` | Database setup — connection form, test, schema creation, backup restore. |
 
 ---
 
-## Quick Start
+## Database Setup (Docker)
+
+The application uses PostgreSQL 16. The recommended approach is Docker with a **named volume** so data persists across container restarts and upgrades.
+
+### First-time setup
 
 ```bash
-# 1. Start PostgreSQL (Docker)
+# 1. Create a persistent volume (only once — survives container removal)
 docker volume create lightning_pgdata
+
+# 2. Start PostgreSQL
 docker run -d \
   --name lightning-db \
   -e POSTGRES_USER=lightning \
@@ -259,17 +341,175 @@ docker run -d \
   -v lightning_pgdata:/var/lib/postgresql/data \
   postgres:16
 
-# 2. Apply schema
+# 3. Wait a few seconds for startup, then apply the schema
 docker exec -i lightning-db psql -U lightning -d lightning < schema.sql
+```
 
-# 3. Install Python dependencies
+### Restarting (preserves all data)
+
+```bash
+# If the container is stopped:
+docker start lightning-db
+
+# If the container was removed but the volume still exists:
+docker run -d \
+  --name lightning-db \
+  -e POSTGRES_USER=lightning \
+  -e POSTGRES_PASSWORD=lightningpass \
+  -e POSTGRES_DB=lightning \
+  -p 5432:5432 \
+  -v lightning_pgdata:/var/lib/postgresql/data \
+  postgres:16
+# Data is intact — do NOT re-run schema.sql (it would fail on existing tables)
+```
+
+### Upgrading PostgreSQL
+
+```bash
+# 1. Create a backup first (from the web UI or CLI)
+docker exec lightning-db pg_dump -U lightning -d lightning > backup_before_upgrade.sql
+
+# 2. Stop and remove the old container (volume is preserved)
+docker stop lightning-db && docker rm lightning-db
+
+# 3. Start with the new image version
+docker run -d --name lightning-db \
+  -e POSTGRES_USER=lightning \
+  -e POSTGRES_PASSWORD=lightningpass \
+  -e POSTGRES_DB=lightning \
+  -p 5432:5432 \
+  -v lightning_pgdata:/var/lib/postgresql/data \
+  postgres:17   # <-- new version
+```
+
+> **Key point:** The named volume `lightning_pgdata` holds all data. As long as you don’t delete the volume (`docker volume rm lightning_pgdata`), your database survives container stops, removals, and image upgrades.
+
+### Checking the volume
+
+```bash
+docker volume inspect lightning_pgdata
+```
+
+---
+
+## Quick Start
+
+```bash
+# 1. Set up PostgreSQL (see "Database Setup" section above)
+
+# 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 4. Run the app
+# 3. Run the app
 python app.py
 ```
 
-Open `http://localhost:5000`. You'll be redirected to the OAuth config page on first run.
+Open `http://localhost:5000` (or whichever port you set in `config.json`). If the database is unreachable you'll see the Database Setup page; otherwise you'll be redirected to the OAuth config page on first run.
+
+### Running in the Background
+
+By default `python app.py` runs in the foreground and stops when you close the terminal. Use one of these approaches to keep it running:
+
+#### Option 1: nohup (simplest)
+
+```bash
+nohup python app.py > logs/stdout.log 2>&1 &
+echo $!  # prints the PID — save this to stop later
+```
+
+To stop:
+
+```bash
+kill <PID>
+```
+
+#### Option 2: systemd service (Linux, recommended for servers)
+
+Create `/etc/systemd/system/lightning.service`:
+
+```ini
+[Unit]
+Description=Lightning EV Telemetry
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=kevin
+WorkingDirectory=/Users/kevin/dev/Ford
+ExecStart=/usr/bin/python3 /Users/kevin/dev/Ford/app.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable lightning   # start on boot
+sudo systemctl start lightning    # start now
+sudo systemctl status lightning   # check status
+journalctl -u lightning -f        # follow logs
+```
+
+#### Option 3: launchd plist (macOS)
+
+Create `~/Library/LaunchAgents/com.lightning.ev.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lightning.ev</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/kevin/dev/Ford/app.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/kevin/dev/Ford</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/kevin/dev/Ford/logs/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/kevin/dev/Ford/logs/stderr.log</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.lightning.ev.plist     # start
+launchctl unload ~/Library/LaunchAgents/com.lightning.ev.plist   # stop
+```
+
+#### Option 4: screen or tmux
+
+```bash
+screen -dmS lightning python app.py   # detached screen session
+screen -r lightning                    # reattach to view output
+# Ctrl-A D to detach again
+```
+
+### SSL/TLS (HTTPS)
+
+To enable HTTPS, use the **SSL / TLS** section on the Settings page to upload your certificate and private key files, then check "Enable SSL". Files are saved to the `certs/` directory. Alternatively, edit `config.json` directly:
+
+```json
+"ssl": {
+  "enabled": true,
+  "cert": "/path/to/cert.pem",
+  "key": "/path/to/key.pem"
+}
+```
+
+The app will start with `ssl_context=(cert, key)`. If the cert/key files are missing, it falls back to plain HTTP with a warning.
 
 ---
 
@@ -294,6 +534,11 @@ Open `http://localhost:5000`. You'll be redirected to the OAuth config page on f
 - [x] Web dashboard with unit conversion (metric/imperial)
 - [x] Background poller with adaptive intervals
 - [x] Database viewer and vehicle management
+- [x] Backup and restore (SQL dump + portable JSON)
+- [x] Database setup mode (no-DB startup, web-based configuration)
+- [x] SSL/TLS support (cert + key PEM files via config.json)
+- [x] Client secret encryption (Fernet AES-128-CBC)
+- [x] Runtime log level switching (DEBUG/INFO/WARNING/ERROR)
 - [ ] GEO information integration (Phase 2)
 - [ ] Charger location data (Phase 2)
 - [ ] AI model training pipeline (Phase 3)

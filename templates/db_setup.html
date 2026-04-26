@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Database Setup – Lightning{% endblock %}
+{% block content %}
+<h1>Database Setup</h1>
+
+{% if connected %}
+<div class="flash success">✓ Connected to PostgreSQL ({{ db.host }}:{{ db.port }}/{{ db.name }})</div>
+{% else %}
+<div class="flash error">✗ Not connected to PostgreSQL</div>
+{% endif %}
+
+<form method="post" class="card form-card">
+  <h2>Connection Settings</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Configure the PostgreSQL connection. Settings are saved to config.json.
+  </p>
+  <div class="form-group">
+    <label for="host">Host</label>
+    <input type="text" name="host" id="host" value="{{ db.host }}" required>
+  </div>
+  <div class="form-group">
+    <label for="port">Port</label>
+    <input type="number" name="port" id="port" value="{{ db.port }}" min="1" max="65535" required>
+  </div>
+  <div class="form-group">
+    <label for="name">Database Name</label>
+    <input type="text" name="name" id="name" value="{{ db.name }}" required>
+  </div>
+  <div class="form-group">
+    <label for="user">User</label>
+    <input type="text" name="user" id="user" value="{{ db.user }}" required>
+  </div>
+  <div class="form-group">
+    <label for="password">Password</label>
+    <input type="password" name="password" id="password" value="{{ db.password }}">
+  </div>
+  <div class="form-group">
+    <label for="connect_timeout">Connect Timeout (sec)</label>
+    <input type="number" name="connect_timeout" id="connect_timeout"
+           value="{{ db.get('connect_timeout', 10) }}" min="1" max="60">
+  </div>
+  <div class="btn-group">
+    <button type="submit" class="btn">Save &amp; Connect</button>
+    <button type="submit" formaction="{{ url_for('db_setup_test') }}" class="btn btn-secondary">Test Connection</button>
+  </div>
+</form>
+
+{% if connected %}
+<form method="post" action="{{ url_for('db_setup_create') }}" class="card form-card">
+  <h2>Create Tables</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Apply schema.sql to create all required tables. Safe to run multiple times
+    (uses CREATE TABLE without IF NOT EXISTS, existing tables will cause an error
+    — use Restore instead if the database already has tables).
+  </p>
+  <div class="btn-group">
+    <button type="submit" class="btn">Apply Schema</button>
+  </div>
+</form>
+{% endif %}
+
+<div class="card form-card">
+  <h2>Restore from Backup</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Upload a backup file and/or restore from an existing backup. Schema will be applied
+    automatically before restoring.
+  </p>
+
+  <form method="post" action="{{ url_for('db_setup_upload') }}" enctype="multipart/form-data"
+        style="margin-bottom:1rem;">
+    <div class="form-group">
+      <label for="backup_file">Upload Backup File (.sql or .json)</label>
+      <input type="file" name="backup_file" id="backup_file" accept=".sql,.json">
+    </div>
+    <button type="submit" class="btn btn-secondary">Upload</button>
+  </form>
+
+  {% if connected %}
+  {% set backups = backup_files %}
+  {% if backups %}
+  <table>
+    <thead><tr><th>Filename</th><th>Size</th><th></th></tr></thead>
+    <tbody>
+      {% for b in backups %}
+      <tr>
+        <td>{{ b.name }}</td>
+        <td>{{ b.size_fmt }}</td>
+        <td>
+          <form method="post" action="{{ url_for('db_setup_restore') }}" style="display:inline;">
+            <input type="hidden" name="filename" value="{{ b.name }}">
+            <button type="submit" class="btn btn-sm">Restore</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:var(--muted);">No backup files found in the backups/ directory.</p>
+  {% endif %}
+  {% else %}
+  <p style="color:var(--muted);">Connect to the database first, then restore.</p>
+  {% endif %}
+</div>
+
+{% if connected %}
+<div class="card" style="text-align:center;">
+  <p>Database is connected and ready. <a href="{{ url_for('oauth_config') }}">Continue to OAuth setup →</a></p>
+</div>
+{% endif %}
+{% endblock %}

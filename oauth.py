@@ -6,7 +6,7 @@ and can be used by the poller, UI, or CLI.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.1.0
+Version:     0.2.0
 Date:        2026-04-26
 """
 
@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import requests
 
 import db
+import crypto
 
 log = logging.getLogger("oauth")
 
@@ -78,11 +79,17 @@ def log_token_diagnostics(token: str, context: str = "") -> None:
 # ── Credential lookup ──────────────────────────────────────────────
 
 def get_credentials(provider: str, vin: str) -> dict | None:
-    """Return the oauth_credentials row for a provider/VIN pair, or None."""
-    return db.fetch_one(
+    """Return the oauth_credentials row for a provider/VIN pair, or None.
+
+    The client_secret is transparently decrypted before being returned.
+    """
+    row = db.fetch_one(
         "SELECT * FROM oauth_credentials WHERE provider = %s AND vin = %s AND enabled = TRUE",
         (provider, vin),
     )
+    if row and row.get("client_secret"):
+        row["client_secret"] = crypto.decrypt(row["client_secret"])
+    return row
 
 
 def get_valid_access_token(provider: str, vin: str) -> str | None:
@@ -261,7 +268,7 @@ def save_credentials(provider: str, vin: str | None, form_data: dict, token_data
         """,
         (
             provider, vin,
-            form_data["client_id"], form_data["client_secret"],
+            form_data["client_id"], crypto.encrypt(form_data["client_secret"]),
             form_data["scope"], form_data["redirect_uri"],
             new_refresh, form_data["token_endpoint"],
             token_data["access_token"], expires_at,
