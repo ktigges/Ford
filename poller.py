@@ -21,6 +21,7 @@ import requests
 
 import db
 import config
+import crypto
 import oauth
 
 log = logging.getLogger("poller")
@@ -212,6 +213,9 @@ def initial_setup_poll(provider: str, vin: str | None = None) -> str:
             "SELECT * FROM oauth_credentials WHERE provider = %s AND enabled = TRUE ORDER BY id DESC LIMIT 1",
             (provider,),
         )
+        # Decrypt client_secret — db.fetch_one returns the raw encrypted value
+        if creds and creds.get("client_secret"):
+            creds["client_secret"] = crypto.decrypt(creds["client_secret"])
     if creds is None:
         raise RuntimeError("SETUP STEP 1 FAILED: No OAuth credentials found in database")
 
