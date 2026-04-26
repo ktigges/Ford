@@ -40,11 +40,6 @@ def database() -> dict:
     return get_config()["database"]
 
 
-def vin() -> str:
-    """Return the configured VIN."""
-    return get_config()["vehicle"]["vin"]
-
-
 def environment() -> str:
     """Return the current environment name (e.g. 'development', 'production')."""
     return get_config().get("environment", "development")

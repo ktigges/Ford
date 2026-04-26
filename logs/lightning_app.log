@@ -816,3 +816,193 @@ HINT:  You will need to rewrite or cast the expression.
 2026-04-26 11:45:04,571  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
 2026-04-26 11:45:04,642  WARNING   werkzeug               * Debugger is active!
 2026-04-26 11:45:04,662  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 11:53:25,581  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 11:53:25,757  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:03:05,064  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:03:05,357  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:03:05,674  INFO      werkzeug              [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.100.63:5000
+2026-04-26 12:03:05,674  INFO      werkzeug              [33mPress CTRL+C to quit[0m
+2026-04-26 12:03:05,704  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:03:06,167  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:03:06,224  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:03:06,298  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:03:06,336  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:03:14,107  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:14] "GET / HTTP/1.1" 200 -
+2026-04-26 12:03:14,179  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:14] "GET /static/style.css HTTP/1.1" 200 -
+2026-04-26 12:03:23,605  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:23] "GET /db HTTP/1.1" 200 -
+2026-04-26 12:03:23,641  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:23] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:03:25,186  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:25] "GET /manage HTTP/1.1" 200 -
+2026-04-26 12:03:25,211  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:25] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:03:28,888  INFO      poller                ═══ INITIAL SETUP POLL START ═══
+2026-04-26 12:03:28,888  INFO      poller                [SETUP STEP 1/4] Obtaining access token...
+2026-04-26 12:03:28,892  INFO      oauth                 Access token expired or missing; refreshing (provider=ford, vin=1FT6W5L78RWG14285)
+2026-04-26 12:03:28,892  INFO      oauth                 [TOKEN REFRESH] Requesting new access token from https://api.vehicle.ford.com/dah2vb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=B2C_1A_FCON_AUTHORIZE  fields=['grant_type', 'client_id', 'client_secret', 'refresh_token', 'scope', 'redirect_url']
+2026-04-26 12:03:31,168  INFO      oauth                 [TOKEN REFRESH] SUCCESS – access token received (expires_in=1200)
+2026-04-26 12:03:31,170  INFO      oauth                 [refresh:ford/1FT6W5L78RWG14285] Token claims: {'aud': '7926ba4a-9e20-4984-baf8-dde00444736f', 'scope': 'vehicleHealth,vehicleLocation,vehicleBasicInfo,evData,drivingData,vehicleData,vehicleSecurity,tripData,chargingData,upfitterData', 'exp': 1777227811, 'iss': 'https://dah2vb2cprod.b2clogin.com/914d88b1-3523-4bf6-9be4-1b96b4f6f919/v2.0/', 'iat': 1777226611, 'tid': '914d88b1-3523-4bf6-9be4-1b96b4f6f919', 'azp': '7926ba4a-9e20-4984-baf8-dde00444736f', 'sub': 'f2560edb...', 'exp_utc': '2026-04-26T18:23:31+00:00', 'iat_utc': '2026-04-26T18:03:31+00:00'}
+2026-04-26 12:03:31,189  INFO      oauth                 Token refresh succeeded (provider=ford, vin=1FT6W5L78RWG14285)
+2026-04-26 12:03:31,190  INFO      poller                [SETUP STEP 1/4] Access token obtained successfully
+2026-04-26 12:03:31,190  INFO      poller                [SETUP STEP 2/4] Fetching garage info from Ford API...
+2026-04-26 12:03:31,190  INFO      oauth                 [GARAGE] Token claims: {'aud': '7926ba4a-9e20-4984-baf8-dde00444736f', 'scope': 'vehicleHealth,vehicleLocation,vehicleBasicInfo,evData,drivingData,vehicleData,vehicleSecurity,tripData,chargingData,upfitterData', 'exp': 1777227811, 'iss': 'https://dah2vb2cprod.b2clogin.com/914d88b1-3523-4bf6-9be4-1b96b4f6f919/v2.0/', 'iat': 1777226611, 'tid': '914d88b1-3523-4bf6-9be4-1b96b4f6f919', 'azp': '7926ba4a-9e20-4984-baf8-dde00444736f', 'sub': 'f2560edb...', 'exp_utc': '2026-04-26T18:23:31+00:00', 'iat_utc': '2026-04-26T18:03:31+00:00'}
+2026-04-26 12:03:31,190  INFO      poller                [GARAGE] GET https://api.vehicle.ford.com/fcon-query/v1/garage
+2026-04-26 12:03:31,510  INFO      poller                [GARAGE] → HTTP 200 (attempt 1/3)
+2026-04-26 12:03:31,516  INFO      poller                [GARAGE] SUCCESS – keys: ['vin', 'nickName', 'vehicleType', 'color', 'modelName', 'modelCode', 'modelYear', 'tcuEnabled', 'make', 'ngSdnManaged', 'vehicleAuthorizationIndicator', 'engineType']
+2026-04-26 12:03:31,516  INFO      ford_api              [GARAGE] SUCCESS – full response written above
+2026-04-26 12:03:31,521  INFO      poller                [SETUP STEP 2/4] Garage data received – storing to database
+2026-04-26 12:03:31,521  INFO      poller                [GARAGE] Found 1 vehicle(s) in garage response
+2026-04-26 12:03:31,522  INFO      poller                [GARAGE] Vehicle: vin=1FT6W5L78RWG14285 nickname=Kevin's Lightning make=Ford model=F-150 year=2024
+2026-04-26 12:03:31,529  INFO      poller                [SETUP STEP 3/4] Fetching telemetry from Ford API...
+2026-04-26 12:03:31,530  INFO      oauth                 [TELEMETRY] Token claims: {'aud': '7926ba4a-9e20-4984-baf8-dde00444736f', 'scope': 'vehicleHealth,vehicleLocation,vehicleBasicInfo,evData,drivingData,vehicleData,vehicleSecurity,tripData,chargingData,upfitterData', 'exp': 1777227811, 'iss': 'https://dah2vb2cprod.b2clogin.com/914d88b1-3523-4bf6-9be4-1b96b4f6f919/v2.0/', 'iat': 1777226611, 'tid': '914d88b1-3523-4bf6-9be4-1b96b4f6f919', 'azp': '7926ba4a-9e20-4984-baf8-dde00444736f', 'sub': 'f2560edb...', 'exp_utc': '2026-04-26T18:23:31+00:00', 'iat_utc': '2026-04-26T18:03:31+00:00'}
+2026-04-26 12:03:31,530  INFO      poller                [TELEMETRY] GET https://api.vehicle.ford.com/fcon-query/v1/telemetry
+2026-04-26 12:03:32,700  INFO      poller                [TELEMETRY] → HTTP 200 (attempt 1/3)
+2026-04-26 12:03:32,702  INFO      poller                [TELEMETRY] SUCCESS – keys: ['updateTime', 'vehicleId', 'vin', 'metrics']
+2026-04-26 12:03:32,702  INFO      ford_api              [TELEMETRY] SUCCESS – full response written above
+2026-04-26 12:03:32,708  INFO      poller                [SETUP STEP 3/4] Telemetry data received
+2026-04-26 12:03:32,709  INFO      poller                [SETUP STEP 4/4] Storing telemetry and populating state tables...
+2026-04-26 12:03:32,775  INFO      poller                [SETUP STEP 4/4] All data stored successfully
+2026-04-26 12:03:32,775  INFO      poller                ═══ INITIAL SETUP POLL COMPLETE (VIN=1FT6W5L78RWG14285) ═══
+2026-04-26 12:03:32,777  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:32] "[32mPOST /manage/repoll HTTP/1.1[0m" 302 -
+2026-04-26 12:03:32,831  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:32] "GET /manage HTTP/1.1" 200 -
+2026-04-26 12:03:32,877  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:32] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:03:38,554  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:38] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:03:38,580  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:03:38] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:20,154  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:20] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:04:20,189  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:20] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:22,721  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:22] "GET /telemetry HTTP/1.1" 200 -
+2026-04-26 12:04:22,751  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:22] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:25,252  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:25] "GET /oauth HTTP/1.1" 200 -
+2026-04-26 12:04:25,275  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:25] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:29,028  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:29] "GET /poller HTTP/1.1" 200 -
+2026-04-26 12:04:29,068  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:29] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:30,401  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:30] "GET /settings HTTP/1.1" 200 -
+2026-04-26 12:04:30,430  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:30] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:50,284  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:50] "GET / HTTP/1.1" 200 -
+2026-04-26 12:04:50,314  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:50] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:55,761  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:55] "GET /db HTTP/1.1" 200 -
+2026-04-26 12:04:55,785  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:55] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:56,824  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:56] "GET /manage HTTP/1.1" 200 -
+2026-04-26 12:04:56,852  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:56] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:04:59,196  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:59] "GET /settings HTTP/1.1" 200 -
+2026-04-26 12:04:59,226  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:04:59] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:05:15,170  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:05:15] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:05:15,199  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:05:15] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:05:57,887  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:05:57] "GET / HTTP/1.1" 200 -
+2026-04-26 12:05:57,915  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:05:57] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:06:14,967  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:06:14] "GET /vehicle HTTP/1.1" 200 -
+2026-04-26 12:06:15,003  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:06:15] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:06:19,635  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:06:19] "GET / HTTP/1.1" 200 -
+2026-04-26 12:06:19,662  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:06:19] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:13:49,497  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:13:49] "GET /manage HTTP/1.1" 200 -
+2026-04-26 12:13:49,538  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:13:49] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:13:53,521  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:13:53] "GET /settings HTTP/1.1" 200 -
+2026-04-26 12:13:53,546  INFO      werkzeug              127.0.0.1 - - [26/Apr/2026 12:13:53] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-04-26 12:15:30,151  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:15:30,238  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:15:34,469  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:15:34,693  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:15:35,015  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:15:35,062  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:15:41,603  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:15:41,660  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:15:42,202  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:15:42,258  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:15:42,314  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:15:42,420  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:15:44,720  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:15:44,774  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:15:45,271  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:15:45,325  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:15:45,579  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:15:45,606  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:15:57,481  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:15:57,534  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:15:58,215  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:15:58,314  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:15:58,413  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:15:58,449  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:16:24,227  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:16:24,279  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:16:24,977  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:16:25,070  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:16:25,163  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:16:25,199  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:26:28,983  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:26:29,042  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:26:29,585  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:26:29,844  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:26:30,024  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:26:30,053  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:26:33,464  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/app.py', reloading
+2026-04-26 12:26:33,533  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:26:34,031  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:26:34,094  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:26:34,183  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:26:34,230  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:26:40,718  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:26:40,774  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:26:41,622  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:26:41,753  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:26:41,856  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:26:41,909  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:26:48,401  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:26:48,451  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:26:48,888  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:26:49,023  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:26:49,074  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:26:49,104  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:26:50,269  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:26:50,331  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:26:50,851  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:26:50,936  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:26:51,023  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:26:51,056  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:26:57,550  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:26:57,613  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:26:58,161  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:26:58,239  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:26:58,331  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:26:58,380  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:27:01,665  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:27:01,717  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:27:02,243  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:27:02,323  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:27:02,421  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:27:02,454  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:27:16,371  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:27:16,424  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:27:16,928  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:27:17,005  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:27:17,099  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:27:17,181  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:27:19,420  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:27:19,468  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:27:19,902  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:27:19,966  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:27:20,032  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:27:20,065  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:27:44,665  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:27:44,717  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:27:45,375  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:27:45,531  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:27:45,641  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:27:45,667  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:27:46,841  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:27:46,899  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:27:47,339  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:27:47,492  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:27:47,580  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:27:47,614  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:28:06,867  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:28:06,920  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:28:07,437  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:28:07,506  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:28:07,569  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:28:07,612  INFO      werkzeug               * Debugger PIN: 118-006-052
+2026-04-26 12:28:08,787  INFO      werkzeug               * Detected change in '/Users/kevin/dev/Ford/poller.py', reloading
+2026-04-26 12:28:08,839  INFO      werkzeug               * Restarting with stat
+2026-04-26 12:28:09,622  INFO      __main__              Starting Lightning app (env=development)
+2026-04-26 12:28:09,765  INFO      db                    Database connection pool initialised (host=localhost, db=lightning)
+2026-04-26 12:28:09,858  WARNING   werkzeug               * Debugger is active!
+2026-04-26 12:28:09,886  INFO      werkzeug               * Debugger PIN: 118-006-052

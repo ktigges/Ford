@@ -56,7 +56,6 @@ Reads `config.json` once at startup and caches the result. Exposes typed accesso
 | `load(path)` | Load configuration from disk. Caches after the first call so subsequent calls are free. |
 | `get_config()` | Return the cached config dict, loading from disk if not yet loaded. |
 | `database()` | Return the `database` section (host, port, name, user, password, connect_timeout). |
-| `vin()` | Return the configured vehicle VIN string. |
 | `environment()` | Return the environment name (`development` or `production`). |
 | `logging_config()` | Return logging settings (level, log_sql flag). |
 | `collector_config()` | Return collector/poller settings (default interval, max failures). |
@@ -77,6 +76,7 @@ Thin wrapper around `psycopg2.pool.ThreadedConnectionPool`. Provides context man
 | `fetch_all(sql, params)` | Execute a SELECT and return all rows as a list of dicts. |
 | `execute(sql, params)` | Execute a write statement (INSERT/UPDATE/DELETE) and auto-commit. |
 | `execute_returning(sql, params)` | Execute a write with a `RETURNING` clause and return the first result row. |
+| `active_vin()` | Return the most recently updated VIN from the `garage` table, or `None` if the garage is empty. |
 
 ---
 
@@ -117,7 +117,7 @@ Daemon thread that periodically calls Ford's telemetry API and stores the result
 | `_poll_loop()` | Main loop: runs in a daemon thread, polls at adaptive intervals based on ignition/charging/moving state, and stops after max consecutive failures. |
 | `_do_poll(provider, vin)` | Execute one poll cycle: get token → fetch telemetry → store raw JSON → upsert all state tables. |
 | `poll_once(provider, vin)` | Public alias to run a single poll (used by tests or manual triggers). |
-| `initial_setup_poll(provider, vin)` | 4-step first-run sequence: get token → fetch garage → fetch telemetry → store everything. Called after OAuth setup. |
+| `initial_setup_poll(provider, vin=None)` | 4-step first-run sequence: get token → fetch garage (discover VIN) → fetch telemetry → store everything. Returns the discovered VIN. |
 
 #### Ford API Interaction
 
@@ -127,7 +127,7 @@ Daemon thread that periodically calls Ford's telemetry API and stores the result
 | `_ford_get(url, token, application_id, label)` | Make a GET request with retry/backoff. Logs request and response to debug files. Classifies errors into auth, entitlement, or service errors. |
 | `fetch_garage(token, application_id)` | Call `/fcon-query/v1/garage` to get vehicle metadata (make, model, year, etc.). |
 | `fetch_telemetry(token, application_id)` | Call `/fcon-query/v1/telemetry` to get the full metrics snapshot. |
-| `_store_garage_data(vin, garage_data)` | Parse the garage API response (which may contain multiple vehicles) and upsert into the `garage` table. |
+| `_store_garage_data(garage_data)` | Parse the garage API response (which may contain multiple vehicles) and upsert into the `garage` table. Returns the first discovered VIN. |
 
 #### State Upsert Helpers
 

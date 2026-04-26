@@ -2,7 +2,7 @@
 {% block title %}OAuth Configuration – Lightning{% endblock %}
 {% block content %}
 <h1>OAuth Configuration</h1>
-<p>Configure OAuth credentials for VIN: <strong>{{ vin }}</strong></p>
+<p>Configure OAuth credentials{% if vin %} for VIN: <strong>{{ vin }}</strong>{% else %} (VIN will be discovered from Ford){% endif %}</p>
 
 <div class="card form-card">
   <form method="post">

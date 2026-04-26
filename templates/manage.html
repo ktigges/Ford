@@ -2,7 +2,7 @@
 {% block title %}Manage Vehicles – Lightning{% endblock %}
 {% block content %}
 <h1>Manage Vehicles</h1>
-<p>Active VIN (from config): <strong>{{ active_vin }}</strong></p>
+<p>Active VIN (from garage): <strong>{{ active_vin or 'None — not yet discovered' }}</strong></p>
 
 {% if vin_stats %}
 {% for vs in vin_stats %}

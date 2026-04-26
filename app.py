@@ -15,6 +15,7 @@ import sys
 from datetime import datetime, timezone
 
 from flask import Flask, redirect, render_template, request, url_for, flash
+from werkzeug.utils import secure_filename
 
 import config
 import db
@@ -96,10 +97,27 @@ def create_app() -> Flask:
     _SETTINGS_DEFAULTS = {
         "units": "imperial",
         "poll_interval_off": "120",
-        "poll_interval_on": "30",
-        "poll_interval_moving": "10",
+        "poll_interval_on": "60",
+        "poll_interval_moving": "15",
         "poll_interval_charging": "60",
     }
+
+    # Safety limits for polling intervals (seconds)
+    _POLL_LIMITS = {
+        "poll_interval_off":      {"min": 60, "max": 3600},
+        "poll_interval_on":       {"min": 60, "max": 3600},
+        "poll_interval_moving":   {"min": 15, "max": 3600},
+        "poll_interval_charging": {"min": 60, "max": 3600},
+    }
+
+    def _clamp_interval(key: str, raw_value: str) -> int:
+        """Clamp a polling interval to its configured min/max range."""
+        limits = _POLL_LIMITS.get(key, {"min": 15, "max": 3600})
+        try:
+            val = int(raw_value)
+        except (ValueError, TypeError):
+            val = int(_SETTINGS_DEFAULTS.get(key, "60"))
+        return max(limits["min"], min(limits["max"], val))
 
     def _get_setting(key: str) -> str:
         """Read a single app setting from the app_config table, with fallback defaults."""
@@ -139,27 +157,25 @@ def create_app() -> Flask:
 
     # ── Startup checks ─────────────────────────────────────────────
 
-    vin = config.vin()
-    needs_setup = False
+    def _active_vin() -> str | None:
+        """Return the current active VIN from the garage table (may be None)."""
+        return db.active_vin()
 
-    garage_row = db.fetch_one("SELECT vin FROM garage WHERE vin = %s", (vin,))
-    if garage_row is None:
-        log.warning("VIN %s not found in garage – entering configuration mode", vin)
-        needs_setup = True
-
-    oauth_row = db.fetch_one(
-        "SELECT id FROM oauth_credentials WHERE vin = %s AND enabled = TRUE", (vin,)
-    )
-    if oauth_row is None:
-        log.warning("No enabled OAuth credentials for VIN %s – entering configuration mode", vin)
-        needs_setup = True
+    def _needs_setup() -> bool:
+        """Check whether the system still needs OAuth / garage configuration."""
+        vin = _active_vin()
+        if not vin:
+            return True
+        creds = db.fetch_one(
+            "SELECT id FROM oauth_credentials WHERE vin = %s AND enabled = TRUE", (vin,)
+        )
+        return creds is None
 
     # ── Request hook: redirect to setup if not configured ──────────
 
     @app.before_request
     def _check_setup():
-        nonlocal needs_setup
-        if needs_setup and request.endpoint not in ("oauth_config", "reset", "manage", "manage_delete_vin", "manage_repoll", "db_browser", "db_table", "db_delete_row", "settings", "static"):
+        if _needs_setup() and request.endpoint not in ("oauth_config", "reset", "manage", "manage_delete_vin", "manage_repoll", "db_browser", "db_table", "db_delete_row", "settings", "static"):
             return redirect(url_for("oauth_config"))
 
     # ── Routes ─────────────────────────────────────────────────────
@@ -167,10 +183,17 @@ def create_app() -> Flask:
     @app.route("/")
     def dashboard():
         """Main dashboard showing vehicle overview, battery, poller status."""
-        garage = db.fetch_one("SELECT * FROM garage WHERE vin = %s", (vin,))
-        status = db.fetch_one("SELECT * FROM collector_status WHERE vin = %s", (vin,))
-        battery = db.fetch_one("SELECT * FROM battery_state WHERE vin = %s", (vin,))
-        vehicle = db.fetch_one("SELECT * FROM vehicle_state WHERE vin = %s", (vin,))
+        vin = _active_vin()
+        garage = db.fetch_one("SELECT * FROM garage WHERE vin = %s", (vin,)) if vin else None
+        status = db.fetch_one("SELECT * FROM collector_status WHERE vin = %s", (vin,)) if vin else None
+        battery = db.fetch_one("SELECT * FROM battery_state WHERE vin = %s", (vin,)) if vin else None
+        vehicle = db.fetch_one("SELECT * FROM vehicle_state WHERE vin = %s", (vin,)) if vin else None
+        charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
+        tires = db.fetch_all("SELECT * FROM tire_state WHERE vin = %s ORDER BY wheel_position", (vin,)) if vin else []
+
+        # Determine vehicle image filename
+        vehicle_img = _get_setting("vehicle_image") or "vehicle.png"
+
         return render_template(
             "dashboard.html",
             vin=vin,
@@ -178,39 +201,44 @@ def create_app() -> Flask:
             status=status,
             battery=battery,
             vehicle=vehicle,
+            charging=charging,
+            tires=tires,
+            vehicle_img=vehicle_img,
             poller_running=poller.is_running(),
         )
 
     @app.route("/vehicle")
     def vehicle_state():
         """Detailed view of all state tables for the active VIN."""
+        vin = _active_vin()
         states = {}
         tables = [
             "vehicle_state", "battery_state", "charging_state", "location_state",
             "brake_state", "security_state", "environment_state",
         ]
         for t in tables:
-            states[t] = db.fetch_one(f"SELECT * FROM {t} WHERE vin = %s", (vin,))
+            states[t] = db.fetch_one(f"SELECT * FROM {t} WHERE vin = %s", (vin,)) if vin else None
 
         # Composite-key tables
-        states["tire_state"] = db.fetch_all("SELECT * FROM tire_state WHERE vin = %s", (vin,))
-        states["door_state"] = db.fetch_all("SELECT * FROM door_state WHERE vin = %s", (vin,))
-        states["window_state"] = db.fetch_all("SELECT * FROM window_state WHERE vin = %s", (vin,))
+        states["tire_state"] = db.fetch_all("SELECT * FROM tire_state WHERE vin = %s", (vin,)) if vin else []
+        states["door_state"] = db.fetch_all("SELECT * FROM door_state WHERE vin = %s", (vin,)) if vin else []
+        states["window_state"] = db.fetch_all("SELECT * FROM window_state WHERE vin = %s", (vin,)) if vin else []
 
         return render_template("vehicle_state.html", vin=vin, states=states)
 
     @app.route("/telemetry")
     def telemetry_overview():
         """Show telemetry count, latest poll time, and recent poll history."""
-        count_row = db.fetch_one("SELECT count(*) AS cnt FROM telemetry WHERE vin = %s", (vin,))
+        vin = _active_vin()
+        count_row = db.fetch_one("SELECT count(*) AS cnt FROM telemetry WHERE vin = %s", (vin,)) if vin else None
         count = count_row["cnt"] if count_row else 0
         latest = db.fetch_one(
             "SELECT polled_at FROM telemetry WHERE vin = %s ORDER BY polled_at DESC LIMIT 1", (vin,)
-        )
+        ) if vin else None
         recent = db.fetch_all(
             "SELECT id, polled_at, created_at FROM telemetry WHERE vin = %s ORDER BY polled_at DESC LIMIT 20",
             (vin,),
-        )
+        ) if vin else []
         return render_template(
             "telemetry.html", vin=vin, count=count,
             latest=latest, recent=recent,
@@ -219,7 +247,6 @@ def create_app() -> Flask:
     @app.route("/oauth", methods=["GET", "POST"])
     def oauth_config():
         """OAuth configuration form. Validates credentials and kicks off initial data poll."""
-        nonlocal needs_setup
 
         if request.method == "POST":
             form = {
@@ -231,6 +258,8 @@ def create_app() -> Flask:
                 "refresh_token": request.form.get("refresh_token", "").strip(),
                 "token_endpoint": request.form.get("token_endpoint", "").strip(),
             }
+
+            vin = _active_vin()
 
             # Basic presence validation
             missing = [k for k in ("client_id", "client_secret", "refresh_token", "token_endpoint") if not form[k]]
@@ -247,45 +276,38 @@ def create_app() -> Flask:
                 return render_template("oauth_config.html", vin=vin, form=form)
             log.info("OAuth validation SUCCEEDED – token received")
 
-            # Ensure garage row exists (minimal – will be enriched by garage API call)
-            db.execute(
-                """
-                INSERT INTO garage (vin, make, created_at, updated_at)
-                VALUES (%s, 'Ford', now(), now())
-                ON CONFLICT (vin) DO NOTHING
-                """,
-                (vin,),
-            )
-
-            # Save credentials
+            # Save credentials (VIN may be None on first setup — will be
+            # updated after garage discovery in initial_setup_poll)
             provider = form["provider"]
             oauth.save_credentials(provider, vin, form, token_data)
-            log.info("OAuth credentials saved to database")
+            log.info("OAuth credentials saved to database (vin=%s)", vin)
 
-            # Initialize collector_status
-            db.execute(
-                """
-                INSERT INTO collector_status (vin, consecutive_failures)
-                VALUES (%s, 0)
-                ON CONFLICT (vin) DO NOTHING
-                """,
-                (vin,),
-            )
-
-            # Initial setup: garage first, then telemetry
+            # Initial setup: discover VIN from garage, then fetch telemetry
             try:
-                poller.initial_setup_poll(provider, vin)
+                discovered_vin = poller.initial_setup_poll(provider, vin)
+                log.info("Initial setup discovered VIN=%s", discovered_vin)
+
+                # Initialize collector_status for the discovered VIN
+                db.execute(
+                    """
+                    INSERT INTO collector_status (vin, consecutive_failures)
+                    VALUES (%s, 0)
+                    ON CONFLICT (vin) DO NOTHING
+                    """,
+                    (discovered_vin,),
+                )
+
                 flash("Configuration saved. Garage and telemetry data loaded.", "success")
             except Exception as exc:
                 log.error("Initial setup poll failed: %s", exc)
                 flash(f"Credentials saved but initial poll failed: {exc}", "warning")
 
-            needs_setup = False
             return redirect(url_for("dashboard"))
 
         # GET – pre-populate from DB if available
+        vin = _active_vin()
         existing = db.fetch_one(
-            "SELECT * FROM oauth_credentials WHERE vin = %s ORDER BY id DESC LIMIT 1", (vin,)
+            "SELECT * FROM oauth_credentials WHERE provider = 'ford' ORDER BY id DESC LIMIT 1"
         )
         form = {
             "provider": (existing or {}).get("provider", "ford"),
@@ -315,13 +337,13 @@ def create_app() -> Flask:
                     flash("Poller is not running.", "warning")
             return redirect(url_for("poller_control"))
 
-        status = db.fetch_one("SELECT * FROM collector_status WHERE vin = %s", (vin,))
+        status = db.fetch_one("SELECT * FROM collector_status WHERE vin = %s", (_active_vin(),))
         polling_cfg = db.fetch_one(
             "SELECT * FROM polling_config WHERE vin = %s AND enabled = TRUE ORDER BY id DESC LIMIT 1",
-            (vin,),
+            (_active_vin(),),
         )
         return render_template(
-            "poller.html", vin=vin,
+            "poller.html", vin=_active_vin(),
             status=status, polling_cfg=polling_cfg,
             running=poller.is_running(),
         )
@@ -329,7 +351,7 @@ def create_app() -> Flask:
     @app.route("/reset", methods=["GET", "POST"])
     def reset():
         """Factory reset: delete all data for the active VIN and return to setup mode."""
-        nonlocal needs_setup
+        vin = _active_vin()
         if request.method == "POST":
             confirm = request.form.get("confirm")
             if confirm != "RESET":
@@ -341,22 +363,24 @@ def create_app() -> Flask:
                 poller.stop()
                 log.info("Poller stopped for reset")
 
-            # Delete all data for this VIN (cascade handles FK references)
-            # Order matters: telemetry and state tables reference garage
-            tables_to_clear = [
-                "telemetry", "vehicle_state", "battery_state", "charging_state",
-                "location_state", "tire_state", "door_state", "window_state",
-                "brake_state", "security_state", "environment_state",
-                "collector_status", "polling_config", "oauth_credentials",
-                "vehicle_configuration", "departure_schedule",
-            ]
-            for t in tables_to_clear:
-                db.execute(f"DELETE FROM {t} WHERE vin = %s", (vin,))
+            if vin:
+                # Delete all data for this VIN (cascade handles FK references)
+                tables_to_clear = [
+                    "telemetry", "vehicle_state", "battery_state", "charging_state",
+                    "location_state", "tire_state", "door_state", "window_state",
+                    "brake_state", "security_state", "environment_state",
+                    "collector_status", "polling_config", "oauth_credentials",
+                    "vehicle_configuration", "departure_schedule",
+                ]
+                for t in tables_to_clear:
+                    db.execute(f"DELETE FROM {t} WHERE vin = %s", (vin,))
 
-            db.execute("DELETE FROM garage WHERE vin = %s", (vin,))
-            log.info("All data cleared for VIN=%s", vin)
+                db.execute("DELETE FROM garage WHERE vin = %s", (vin,))
+                log.info("All data cleared for VIN=%s", vin)
 
-            needs_setup = True
+            # Also clear any orphan credentials (NULL VIN)
+            db.execute("DELETE FROM oauth_credentials WHERE vin IS NULL")
+
             flash("All data and OAuth configuration cleared. Please re-configure.", "success")
             return redirect(url_for("oauth_config"))
 
@@ -369,13 +393,20 @@ def create_app() -> Flask:
         """Application settings: display units (metric/imperial), polling intervals."""
         if request.method == "POST":
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
-            _set_setting("poll_interval_off", request.form.get("poll_interval_off", "120"), "Ignition-off poll interval (sec)")
-            _set_setting("poll_interval_on", request.form.get("poll_interval_on", "30"), "Ignition-on poll interval (sec)")
-            _set_setting("poll_interval_moving", request.form.get("poll_interval_moving", "10"), "Moving poll interval (sec)")
-            _set_setting("poll_interval_charging", request.form.get("poll_interval_charging", "60"), "Charging poll interval (sec)")
+
+            # Clamp all polling intervals to safe limits
+            iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
+            iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
+            iv_moving   = _clamp_interval("poll_interval_moving",   request.form.get("poll_interval_moving", "15"))
+            iv_charging = _clamp_interval("poll_interval_charging", request.form.get("poll_interval_charging", "60"))
+
+            _set_setting("poll_interval_off",      str(iv_off),      "Ignition-off poll interval (sec)")
+            _set_setting("poll_interval_on",       str(iv_on),       "Ignition-on poll interval (sec)")
+            _set_setting("poll_interval_moving",   str(iv_moving),   "Moving poll interval (sec)")
+            _set_setting("poll_interval_charging", str(iv_charging), "Charging poll interval (sec)")
 
             # Sync poller intervals to polling_config table for the active VIN
-            active_vin = config.vin()
+            active_vin = _active_vin()
             db.execute(
                 """
                 INSERT INTO polling_config (vin, ignition_off_interval_sec, ignition_on_interval_sec,
@@ -383,11 +414,7 @@ def create_app() -> Flask:
                 VALUES (%s, %s, %s, %s, %s, TRUE)
                 ON CONFLICT ON CONSTRAINT polling_config_pkey DO NOTHING
                 """,
-                (active_vin,
-                 int(request.form.get("poll_interval_off", 120)),
-                 int(request.form.get("poll_interval_on", 30)),
-                 int(request.form.get("poll_interval_moving", 10)),
-                 int(request.form.get("poll_interval_charging", 60))),
+                (active_vin, iv_off, iv_on, iv_moving, iv_charging),
             )
             # Also update the latest row for this VIN if one exists
             existing = db.fetch_one(
@@ -405,11 +432,7 @@ def create_app() -> Flask:
                         updated_at = now()
                     WHERE id = %s
                     """,
-                    (int(request.form.get("poll_interval_off", 120)),
-                     int(request.form.get("poll_interval_on", 30)),
-                     int(request.form.get("poll_interval_moving", 10)),
-                     int(request.form.get("poll_interval_charging", 60)),
-                     existing["id"]),
+                    (iv_off, iv_on, iv_moving, iv_charging, existing["id"]),
                 )
 
             flash("Settings saved.", "success")
@@ -424,6 +447,27 @@ def create_app() -> Flask:
         }
         return render_template("settings.html", settings=current)
 
+    @app.route("/settings/upload-image", methods=["POST"])
+    def upload_vehicle_image():
+        """Handle vehicle image upload from the settings page."""
+        file = request.files.get("vehicle_image")
+        if not file or file.filename == "":
+            flash("No file selected.", "error")
+            return redirect(url_for("settings"))
+
+        ALLOWED = {"png", "jpg", "jpeg", "gif", "webp"}
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in ALLOWED:
+            flash(f"Invalid file type. Allowed: {', '.join(ALLOWED)}", "error")
+            return redirect(url_for("settings"))
+
+        filename = secure_filename(f"vehicle.{ext}")
+        save_path = os.path.join(app.static_folder, filename)
+        file.save(save_path)
+        _set_setting("vehicle_image", filename, "Custom vehicle image filename")
+        flash("Vehicle image updated.", "success")
+        return redirect(url_for("settings"))
+
     # ── Manage Vehicles ──────────────────────────────────────────────
 
     _VIN_TABLES = [
@@ -437,7 +481,7 @@ def create_app() -> Flask:
     @app.route("/manage")
     def manage():
         """Show all VINs in the system with per-table row counts."""
-        active_vin = config.vin()
+        active_vin = _active_vin()
         garage_rows = db.fetch_all("SELECT * FROM garage ORDER BY updated_at DESC")
 
         # Build per-VIN stats
@@ -488,7 +532,7 @@ def create_app() -> Flask:
             return redirect(url_for("manage"))
 
         # Safety: stop poller if deleting the active VIN
-        active_vin = config.vin()
+        active_vin = _active_vin()
         if target_vin == active_vin and poller.is_running():
             poller.stop()
             log.info("Poller stopped – deleting active VIN %s", target_vin)
@@ -498,21 +542,14 @@ def create_app() -> Flask:
         log.info("Deleted VIN=%s and all associated data (cascade)", target_vin)
         flash(f"Deleted VIN {target_vin} and all associated records.", "success")
 
-        # If we just deleted the active VIN, enter setup mode
-        nonlocal needs_setup
-        remaining = db.fetch_one("SELECT vin FROM garage WHERE vin = %s", (active_vin,))
-        if remaining is None:
-            needs_setup = True
-
         return redirect(url_for("manage"))
 
     @app.route("/manage/repoll", methods=["POST"])
     def manage_repoll():
         """Re-run initial setup poll for the active VIN."""
-        active_vin = config.vin()
-        garage_row = db.fetch_one("SELECT vin FROM garage WHERE vin = %s", (active_vin,))
-        if garage_row is None:
-            flash("Active VIN not in garage. Configure OAuth first.", "error")
+        active_vin = _active_vin()
+        if not active_vin:
+            flash("No active VIN in garage. Configure OAuth first.", "error")
             return redirect(url_for("manage"))
 
         creds = db.fetch_one(

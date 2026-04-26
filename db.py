@@ -101,3 +101,15 @@ def execute_returning(sql: str, params: tuple | None = None) -> dict | None:
     with get_cursor(commit=True) as cur:
         cur.execute(sql, params)
         return cur.fetchone()
+
+
+# ── VIN helpers ────────────────────────────────────────────────────
+
+def active_vin() -> str | None:
+    """Return the single active VIN from the garage table, or None if empty.
+
+    For this prototype we expect exactly one vehicle in the garage.
+    If multiple exist, returns the most recently updated one.
+    """
+    row = fetch_one("SELECT vin FROM garage ORDER BY updated_at DESC LIMIT 1")
+    return row["vin"] if row else None

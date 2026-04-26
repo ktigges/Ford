@@ -11,10 +11,6 @@
     "connect_timeout": 10
   },
 
-  "vehicle": {
-    "vin": "1FT6W5L78RWG14285"
-  },
-
   "logging": {
     "level": "INFO",
     "log_sql": false
