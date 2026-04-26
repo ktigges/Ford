@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Settings – Lightning{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<form method="post" class="card form-card">
+  <h2>Display Units</h2>
+  <div class="form-group">
+    <label for="units">Unit System</label>
+    <select name="units" id="units" class="form-select">
+      <option value="imperial" {% if settings.units == 'imperial' %}selected{% endif %}>Imperial (mph, mi, °F, PSI)</option>
+      <option value="metric" {% if settings.units == 'metric' %}selected{% endif %}>Metric (km/h, km, °C, kPa)</option>
+    </select>
+  </div>
+
+  <h2>Polling Intervals (seconds)</h2>
+  <div class="form-group">
+    <label for="poll_interval_off">Ignition Off</label>
+    <input type="number" name="poll_interval_off" id="poll_interval_off"
+           value="{{ settings.poll_interval_off }}" min="5" max="3600">
+  </div>
+  <div class="form-group">
+    <label for="poll_interval_on">Ignition On</label>
+    <input type="number" name="poll_interval_on" id="poll_interval_on"
+           value="{{ settings.poll_interval_on }}" min="5" max="3600">
+  </div>
+  <div class="form-group">
+    <label for="poll_interval_moving">Moving</label>
+    <input type="number" name="poll_interval_moving" id="poll_interval_moving"
+           value="{{ settings.poll_interval_moving }}" min="5" max="3600">
+  </div>
+  <div class="form-group">
+    <label for="poll_interval_charging">Charging</label>
+    <input type="number" name="poll_interval_charging" id="poll_interval_charging"
+           value="{{ settings.poll_interval_charging }}" min="5" max="3600">
+  </div>
+
+  <div class="btn-group">
+    <button type="submit" class="btn">Save Settings</button>
+  </div>
+</form>
+
+<div class="card">
+  <h2>Unit Reference</h2>
+  <p>Ford sends all telemetry in metric/SI. Values are stored in metric and converted at display time.</p>
+  <table>
+    <thead><tr><th>Measurement</th><th>Ford Unit</th><th>Imperial Display</th></tr></thead>
+    <tbody>
+      <tr><td>Speed</td><td>km/h</td><td>mph</td></tr>
+      <tr><td>Distance / Range</td><td>km</td><td>mi</td></tr>
+      <tr><td>Odometer</td><td>km</td><td>mi</td></tr>
+      <tr><td>Temperature</td><td>°C</td><td>°F</td></tr>
+      <tr><td>Tire Pressure</td><td>kPa</td><td>PSI</td></tr>
+      <tr><td>Altitude</td><td>m</td><td>ft</td></tr>
+      <tr><td>Energy</td><td>kWh</td><td>kWh</td></tr>
+      <tr><td>Voltage</td><td>V</td><td>V</td></tr>
+      <tr><td>Current</td><td>A</td><td>A</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}

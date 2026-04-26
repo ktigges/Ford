@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Telemetry – Lightning{% endblock %}
+{% block content %}
+<h1>Telemetry Overview</h1>
+
+<div class="card">
+  <h2>Summary</h2>
+  <table>
+    <tr><th>VIN</th><td>{{ vin }}</td></tr>
+    <tr><th>Total Rows</th><td>{{ count }}</td></tr>
+    <tr><th>Last Poll</th><td>{{ latest.polled_at if latest else '–' }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Recent Polls</h2>
+  {% if recent %}
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Polled At</th><th>Created At</th></tr>
+    </thead>
+    <tbody>
+      {% for r in recent %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.polled_at }}</td>
+        <td>{{ r.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No telemetry data yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

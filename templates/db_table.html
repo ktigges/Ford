@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ table_name }} – Database{% endblock %}
+{% block content %}
+<h1>{{ table_name }}</h1>
+<p>
+  Showing {{ row_count }} row{{ 's' if row_count != 1 else '' }}
+  (limit {{ limit }})
+  &nbsp;·&nbsp;
+  <a href="{{ url_for('db_browser') }}">← All tables</a>
+  {% if row_count >= limit %}
+  &nbsp;·&nbsp;
+  <a href="{{ url_for('db_table', table_name=table_name, limit=limit * 2) }}">Show more</a>
+  {% endif %}
+</p>
+
+<div class="card db-table-wrap">
+  {% if rows %}
+  <div class="table-scroll">
+    <table class="db-table">
+      <thead>
+        <tr>
+          {% for col in columns %}
+          <th title="{{ col_types.get(col, '') }}">{{ col }}</th>
+          {% endfor %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for col in columns %}
+          <td>
+            {% set val = row[col] %}
+            {% if val is none %}
+              <span class="null">NULL</span>
+            {% elif val is mapping or val is sequence and val is not string %}
+              <span class="json-preview" title="{{ val }}">{{ val | string | truncate(80) }}</span>
+            {% else %}
+              {{ val }}
+            {% endif %}
+          </td>
+          {% endfor %}
+          <td class="row-actions">
+            {% if table_name == 'telemetry' %}
+            <a href="{{ url_for('db_row_detail', table_name=table_name, row_id=row['id']) }}" class="btn btn-sm">Detail</a>
+            {% endif %}
+            <form method="post" action="{{ url_for('db_delete_row', table_name=table_name) }}" class="inline-form"
+                  onsubmit="return confirm('Delete this row?')">
+              <input type="hidden" name="pk_col" value="{{ pk_col }}">
+              <input type="hidden" name="pk_val" value="{{ row[pk_col] }}">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p>No rows.</p>
+  {% endif %}
+</div>
+{% endblock %}

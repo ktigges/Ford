@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Lightning{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="prototype-banner">** PROTOTYPE **</div>
+  <nav>
+    <div class="nav-brand">⚡ Lightning</div>
+    <ul>
+      <li><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+      <li><a href="{{ url_for('vehicle_state') }}">Vehicle State</a></li>
+      <li><a href="{{ url_for('telemetry_overview') }}">Telemetry</a></li>
+      <li><a href="{{ url_for('oauth_config') }}">OAuth Config</a></li>
+      <li><a href="{{ url_for('poller_control') }}">Poller</a></li>
+      <li><a href="{{ url_for('settings') }}">Settings</a></li>
+      <li><a href="{{ url_for('manage') }}">Manage</a></li>
+      <li><a href="{{ url_for('db_browser') }}">Database</a></li>
+      <li><a href="{{ url_for('reset') }}">Reset</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

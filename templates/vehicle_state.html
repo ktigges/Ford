@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Vehicle State – Lightning{% endblock %}
+{% block content %}
+<h1>Vehicle State</h1>
+<p>Current state for VIN: <strong>{{ vin }}</strong> &nbsp;·&nbsp; Units: <strong>{{ unit_system | title }}</strong></p>
+
+{% macro state_table(title, row, skip_cols=["vin"]) %}
+<div class="card">
+  <h2>{{ title }}</h2>
+  {% if row %}
+  <table>
+    {% for key, val in row.items() %}
+      {% if key not in skip_cols %}
+      <tr>
+        <th>{{ key }}</th>
+        <td>
+          {% if val is none %}–
+          {% else %}{{ convert(val, key) }}{% if ulabel_for_field(key) %} {{ ulabel_for_field(key) }}{% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No data.</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro multi_row_table(title, rows, skip_cols=["vin"]) %}
+<div class="card">
+  <h2>{{ title }}</h2>
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        {% for key in rows[0].keys() %}
+          {% if key not in skip_cols %}
+          <th>{{ key }}</th>
+          {% endif %}
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        {% for key, val in row.items() %}
+          {% if key not in skip_cols %}
+          <td>
+            {% if val is none %}–
+            {% else %}{{ convert(val, key) }}{% if ulabel_for_field(key) %} {{ ulabel_for_field(key) }}{% endif %}
+            {% endif %}
+          </td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No data.</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+<div class="card-grid">
+  {{ state_table("Vehicle", states.vehicle_state) }}
+  {{ state_table("Battery", states.battery_state) }}
+  {{ state_table("Charging", states.charging_state) }}
+  {{ state_table("Location", states.location_state) }}
+  {{ state_table("Brakes", states.brake_state) }}
+  {{ state_table("Security", states.security_state) }}
+  {{ state_table("Environment", states.environment_state) }}
+  {{ multi_row_table("Tires", states.tire_state) }}
+  {{ multi_row_table("Doors", states.door_state) }}
+  {{ multi_row_table("Windows", states.window_state) }}
+</div>
+{% endblock %}
