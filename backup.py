@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import config
+import crypto
 import db
 
 log = logging.getLogger("backup")
@@ -176,6 +177,11 @@ def backup_json(label: str = "") -> str:
 
     for table in TABLES_ORDERED:
         rows = db.fetch_all(f"SELECT * FROM {table}")
+        # Decrypt sensitive fields so backups are portable across hosts
+        if table == "oauth_credentials":
+            for row in rows:
+                if row.get("client_secret"):
+                    row["client_secret"] = crypto.decrypt(row["client_secret"])
         data[table] = rows
         log.info("  %s: %d rows", table, len(rows))
 
@@ -211,6 +217,10 @@ def restore_json(filepath: str) -> dict:
 
         restored = 0
         for row in rows:
+            # Re-encrypt sensitive fields with this host's key
+            if table == "oauth_credentials" and row.get("client_secret"):
+                row["client_secret"] = crypto.encrypt(row["client_secret"])
+
             columns = list(row.keys())
             placeholders = ", ".join(["%s"] * len(columns))
             col_list = ", ".join(columns)

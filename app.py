@@ -138,21 +138,45 @@ def create_app() -> Flask:
         except Exception:
             pass  # table may not exist yet
 
-        # Migrate: encrypt any plaintext client_secret values
+        # Migrate: ensure all client_secret values are encrypted with this host's key.
+        # After a backup/restore the ciphertext may be from a different host's key,
+        # so we try to decrypt — if that fails, the value is either plaintext or
+        # foreign ciphertext. Either way we need to flag it.
         try:
+            from cryptography.fernet import InvalidToken
             creds = db.fetch_all("SELECT id, client_secret FROM oauth_credentials WHERE client_secret IS NOT NULL")
             for cred in creds:
                 secret = cred["client_secret"]
                 if not secret:
                     continue
-                # Fernet tokens start with 'gAAAAA' — if it doesn't, it's plaintext
-                if not secret.startswith("gAAAAA"):
-                    encrypted = crypto.encrypt(secret)
-                    db.execute(
-                        "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
-                        (encrypted, cred["id"]),
-                    )
-                    log.info("Migrated client_secret to encrypted form (cred id=%s)", cred["id"])
+
+                # Try decrypting with our key
+                try:
+                    crypto._get_fernet().decrypt(secret.encode("utf-8"))
+                    # Success — already encrypted with our key, nothing to do
+                except (InvalidToken, Exception):
+                    # Not encrypted with our key. Could be:
+                    #  a) plaintext secret → encrypt it
+                    #  b) ciphertext from another host's key → unusable, clear it
+                    if secret.startswith("gAAAAA"):
+                        # Foreign Fernet token — can't recover the original secret
+                        db.execute(
+                            "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
+                            ("", cred["id"]),
+                        )
+                        log.warning(
+                            "client_secret for cred id=%s was encrypted with a different key "
+                            "and cannot be decrypted. It has been cleared — please re-enter "
+                            "your client_secret via OAuth Config.", cred["id"],
+                        )
+                    else:
+                        # Plaintext — encrypt it
+                        encrypted = crypto.encrypt(secret)
+                        db.execute(
+                            "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
+                            (encrypted, cred["id"]),
+                        )
+                        log.info("Migrated client_secret to encrypted form (cred id=%s)", cred["id"])
         except Exception:
             pass  # table may not exist yet
 
