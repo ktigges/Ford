@@ -929,7 +929,7 @@ def create_app() -> Flask:
 
     # Whitelist of tables the viewer can display
     _VIEWABLE_TABLES = [
-        "garage", "telemetry",
+        "garage", "telemetry", "drives", "drive_points",
         "vehicle_state", "battery_state", "charging_state", "location_state",
         "tire_state", "door_state", "window_state",
         "brake_state", "security_state", "environment_state",
