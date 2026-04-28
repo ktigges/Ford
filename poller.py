@@ -224,6 +224,9 @@ def _do_poll(provider: str, vin: str) -> None:
     _upsert_vehicle_configuration(vin, now, metrics)
     _upsert_departure_schedules(vin, metrics)
 
+    # ── Drive tracking ──────────────────────────────────────────────
+    _track_drive(vin, now, metrics)
+
     db.execute(
         """
         INSERT INTO collector_status (vin, last_poll, last_success, consecutive_failures)
@@ -684,18 +687,49 @@ def fetch_telemetry(token: str, application_id: str) -> dict:
 _IGNITION_ACTIVE = {"run", "on", "start"}
 # Gear positions that indicate the vehicle is driving
 _GEAR_ACTIVE = {"drive", "reverse"}
+# Plug statuses considered idle (not actively charging)
+_PLUG_IDLE = {"unplugged", "unknown", ""}
+# Charge display statuses that mean charging is finished
+_CHARGE_COMPLETE = {"completed", "complete", "not_ready", "charge_scheduling"}
+
+
+def _is_actively_charging(metrics: dict, vin: str) -> bool:
+    """Return True only if the vehicle is plugged in AND actively charging.
+
+    A connected plug with charge status COMPLETED is NOT active charging.
+    """
+    # Fresh metrics
+    plug = _v(metrics, "xevPlugChargerStatus", "value")
+    charge_display = _v(metrics, "xevBatteryChargeDisplayStatus", "value")
+
+    if plug and str(plug).lower() not in _PLUG_IDLE:
+        # Plugged in — but is it actually charging or just sitting there?
+        if charge_display and str(charge_display).lower() in _CHARGE_COMPLETE:
+            return False  # Charge finished, vehicle is idle
+        return True  # Actively charging
+
+    # Fallback to stored DB state
+    cs = db.fetch_one("SELECT plug_status FROM charging_state WHERE vin = %s", (vin,))
+    if cs and cs.get("plug_status") and cs["plug_status"].lower() not in _PLUG_IDLE:
+        # Check time_to_full — 0 means charge is done
+        cs_full = db.fetch_one("SELECT time_to_full_min FROM charging_state WHERE vin = %s", (vin,))
+        if cs_full and cs_full.get("time_to_full_min") is not None and float(cs_full["time_to_full_min"]) <= 0:
+            return False
+        return True
+
+    return False
 
 
 def _vehicle_is_active(vin: str, metrics: dict) -> bool:
-    """Return True if the vehicle appears to be on, moving, or charging.
+    """Return True if the vehicle appears to be on, moving, or actively charging.
 
     Checks both the fresh metrics from the API and the stored state as a fallback.
-    Detects: ignition on/run/start, gear in drive/reverse, speed > 0, charging.
+    Detects: ignition on/run/start, gear in drive/reverse, speed > 0, active charging.
+    A vehicle that is plugged in but charge-complete is considered IDLE.
     """
     # Check fresh metrics first
     ign = _v(metrics, "ignitionStatus", "value")
     speed = _v(metrics, "speed", "value")
-    plug = _v(metrics, "plugStatus", "value")
     gear = _v(metrics, "gearLeverPosition", "value")
 
     if speed is not None and float(speed) > 0:
@@ -704,22 +738,161 @@ def _vehicle_is_active(vin: str, metrics: dict) -> bool:
         return True
     if gear and str(gear).lower() in _GEAR_ACTIVE:
         return True
-    if plug and str(plug).lower() not in ("unplugged", "unknown", ""):
+    if _is_actively_charging(metrics, vin):
         return True
 
-    # Fallback to stored DB state
+    # Fallback to stored DB state (ignition + gear only — charging handled above)
     vs = db.fetch_one("SELECT ignition_status, speed_mph, gear_position FROM vehicle_state WHERE vin = %s", (vin,))
-    cs = db.fetch_one("SELECT plug_status FROM charging_state WHERE vin = %s", (vin,))
     if vs and vs.get("speed_mph") and vs["speed_mph"] > 0:
         return True
     if vs and vs.get("ignition_status") and vs["ignition_status"].lower() in _IGNITION_ACTIVE:
         return True
     if vs and vs.get("gear_position") and vs["gear_position"].lower() in _GEAR_ACTIVE:
         return True
-    if cs and cs.get("plug_status") and cs["plug_status"].lower() not in ("unplugged", "unknown"):
-        return True
 
     return False
+
+
+# ── Drive tracking ─────────────────────────────────────────────────
+
+def _is_driving(metrics: dict) -> bool:
+    """Return True if the vehicle is currently in a drive (moving or in gear)."""
+    speed = _v(metrics, "speed", "value")
+    if speed is not None and float(speed) > 0:
+        return True
+    gear = _v(metrics, "gearLeverPosition", "value")
+    if gear and str(gear).lower() in _GEAR_ACTIVE:
+        return True
+    ign = _v(metrics, "ignitionStatus", "value")
+    if ign and str(ign).lower() in _IGNITION_ACTIVE:
+        return True
+    return False
+
+
+def _get_active_drive(vin: str) -> dict | None:
+    """Return the in-progress drive row for a VIN, or None."""
+    return db.fetch_one(
+        "SELECT * FROM drives WHERE vin = %s AND in_progress = TRUE ORDER BY id DESC LIMIT 1",
+        (vin,),
+    )
+
+
+def _start_drive(vin: str, ts: datetime, metrics: dict) -> int:
+    """Create a new drive session and return its ID."""
+    row = db.execute_returning(
+        """
+        INSERT INTO drives (vin, started_at, start_odometer_km, start_soc_percent,
+            start_energy_kwh, avg_ambient_temp_c, avg_outside_temp_c,
+            start_lat, start_lon, start_heading_deg, start_compass, in_progress)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+        RETURNING id, drive_uuid
+        """,
+        (vin, ts,
+         _v(metrics, "odometer", "value"),
+         _v(metrics, "xevBatteryStateOfCharge", "value"),
+         _v(metrics, "xevBatteryEnergyRemaining", "value"),
+         _v(metrics, "ambientTemp", "value"),
+         _v(metrics, "outsideTemperature", "value"),
+         _v(metrics, "position", "value", "location", "lat"),
+         _v(metrics, "position", "value", "location", "lon"),
+         _v(metrics, "heading", "value", "heading"),
+         _v(metrics, "compassDirection", "value")),
+    )
+    drive_id = row["id"]
+    drive_uuid = row["drive_uuid"]
+    log.info("[DRIVE] Started drive #%d (uuid=%s) for VIN=%s", drive_id, drive_uuid, vin)
+    return drive_id
+
+
+def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
+    """Finalize a drive session with end-state data."""
+    end_odo = _v(metrics, "odometer", "value")
+    end_soc = _v(metrics, "xevBatteryStateOfCharge", "value")
+    end_energy = _v(metrics, "xevBatteryEnergyRemaining", "value")
+    end_lat = _v(metrics, "position", "value", "location", "lat")
+    end_lon = _v(metrics, "position", "value", "location", "lon")
+    end_heading = _v(metrics, "heading", "value", "heading")
+    end_compass = _v(metrics, "compassDirection", "value")
+
+    distance = None
+    if end_odo is not None and drive.get("start_odometer_km") is not None:
+        distance = float(end_odo) - float(drive["start_odometer_km"])
+
+    energy_used = None
+    if drive.get("start_energy_kwh") is not None and end_energy is not None:
+        energy_used = float(drive["start_energy_kwh"]) - float(end_energy)
+
+    db.execute(
+        """
+        UPDATE drives SET
+            ended_at = %s, end_odometer_km = %s, distance_km = %s,
+            end_soc_percent = %s, end_energy_kwh = %s, energy_used_kwh = %s,
+            end_lat = %s, end_lon = %s, end_heading_deg = %s, end_compass = %s,
+            in_progress = FALSE
+        WHERE id = %s
+        """,
+        (ts, end_odo, distance, end_soc, end_energy, energy_used,
+         end_lat, end_lon, end_heading, end_compass, drive["id"]),
+    )
+    log.info("[DRIVE] Ended drive #%d (uuid=%s)  distance=%.1f km  energy=%.2f kWh",
+             drive["id"], drive.get("drive_uuid", "?"),
+             distance if distance is not None else 0,
+             energy_used if energy_used is not None else 0)
+
+
+def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
+    """Insert a drive point with all relevant metrics."""
+    db.execute(
+        """
+        INSERT INTO drive_points (drive_id, recorded_at, speed_kmh, odometer_km,
+            heading_deg, compass_direction, latitude, longitude, altitude_m,
+            soc_percent, actual_soc_percent, energy_remaining_kwh,
+            battery_voltage, battery_current, battery_temp_c,
+            motor_current, motor_voltage, torque_at_transmission,
+            accelerator_pedal_pct, brake_torque, ambient_temp_c, outside_temp_c)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (drive_id, ts,
+         _v(metrics, "speed", "value"),
+         _v(metrics, "odometer", "value"),
+         _v(metrics, "heading", "value", "heading"),
+         _v(metrics, "compassDirection", "value"),
+         _v(metrics, "position", "value", "location", "lat"),
+         _v(metrics, "position", "value", "location", "lon"),
+         _v(metrics, "position", "value", "location", "alt"),
+         _v(metrics, "xevBatteryStateOfCharge", "value"),
+         _v(metrics, "xevBatteryActualStateOfCharge", "value"),
+         _v(metrics, "xevBatteryEnergyRemaining", "value"),
+         _v(metrics, "xevBatteryVoltage", "value"),
+         _v(metrics, "xevBatteryIoCurrent", "value"),
+         _v(metrics, "xevBatteryTemperature", "value"),
+         _v(metrics, "xevTractionMotorCurrent", "value"),
+         _v(metrics, "xevTractionMotorVoltage", "value"),
+         _v(metrics, "torqueAtTransmission", "value"),
+         _v(metrics, "acceleratorPedalPosition", "value"),
+         _v(metrics, "brakeTorque", "value"),
+         _v(metrics, "ambientTemp", "value"),
+         _v(metrics, "outsideTemperature", "value")),
+    )
+
+
+def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
+    """Detect drive start/end and record drive points."""
+    driving = _is_driving(metrics)
+    active_drive = _get_active_drive(vin)
+
+    if driving and not active_drive:
+        # Drive just started
+        drive_id = _start_drive(vin, ts, metrics)
+        _record_drive_point(drive_id, ts, metrics)
+    elif driving and active_drive:
+        # Drive in progress — record point
+        _record_drive_point(active_drive["id"], ts, metrics)
+    elif not driving and active_drive:
+        # Drive just ended — record final point and close
+        _record_drive_point(active_drive["id"], ts, metrics)
+        _end_drive(active_drive, ts, metrics)
+    # else: not driving and no active drive — nothing to do
 
 
 def _get_poll_interval(vin: str, default: int) -> int:
@@ -742,12 +915,15 @@ def _get_poll_interval(vin: str, default: int) -> int:
         return max(_MIN_GENERAL, min(_MAX_INTERVAL, default))
 
     vs = db.fetch_one("SELECT ignition_status, speed_mph, gear_position FROM vehicle_state WHERE vin = %s", (vin,))
-    cs = db.fetch_one("SELECT plug_status FROM charging_state WHERE vin = %s", (vin,))
+    cs = db.fetch_one("SELECT plug_status, time_to_full_min FROM charging_state WHERE vin = %s", (vin,))
 
     if vs and vs.get("speed_mph") and vs["speed_mph"] > 0:
         return max(_MIN_MOVING, min(_MAX_INTERVAL, pc["moving_interval_sec"]))
-    if cs and cs.get("plug_status") and cs["plug_status"].lower() not in ("unplugged", "unknown"):
-        return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["charging_interval_sec"]))
+    # Only use charging interval if actively charging (not charge-complete)
+    if cs and cs.get("plug_status") and cs["plug_status"].lower() not in _PLUG_IDLE:
+        ttf = cs.get("time_to_full_min")
+        if ttf is None or float(ttf) > 0:
+            return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["charging_interval_sec"]))
     if vs and vs.get("ignition_status") and vs["ignition_status"].lower() in _IGNITION_ACTIVE:
         return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["ignition_on_interval_sec"]))
     if vs and vs.get("gear_position") and vs["gear_position"].lower() in _GEAR_ACTIVE:

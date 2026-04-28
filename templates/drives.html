@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Drives – Lightning{% endblock %}
+{% block content %}
+<h1>Drives</h1>
+
+{% if drives %}
+<table>
+  <thead>
+    <tr>
+      <th>Drive ID</th>
+      <th>Started</th>
+      <th>Ended</th>
+      <th>Distance</th>
+      <th>Energy Used</th>
+      <th>SOC Start → End</th>
+      <th>Points</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in drives %}
+    <tr>
+      <td><a href="{{ url_for('drive_detail', drive_id=d.id) }}" title="{{ d.drive_uuid }}">{{ d.drive_uuid|string|truncate(8, True, '') }}</a></td>
+      <td>{{ d.started_at.strftime('%Y-%m-%d %H:%M') if d.started_at else '–' }}</td>
+      <td>{{ d.ended_at.strftime('%Y-%m-%d %H:%M') if d.ended_at else '–' }}</td>
+      <td>
+        {% if d.distance_km is not none %}
+          {{ "%.1f"|format(d.distance_km * 0.621371) }} mi / {{ "%.1f"|format(d.distance_km) }} km
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.energy_used_kwh is not none %}
+          {{ "%.2f"|format(d.energy_used_kwh) }} kWh
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.start_soc_percent is not none and d.end_soc_percent is not none %}
+          {{ "%.1f"|format(d.start_soc_percent) }}% → {{ "%.1f"|format(d.end_soc_percent) }}%
+        {% elif d.start_soc_percent is not none %}
+          {{ "%.1f"|format(d.start_soc_percent) }}% → …
+        {% else %}–{% endif %}
+      </td>
+      <td>{{ d.point_count }}</td>
+      <td>
+        {% if d.in_progress %}
+          <span class="badge ok">In Progress</span>
+        {% else %}
+          <span class="badge off">Complete</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card">
+  <p>No drives recorded yet. Drives are automatically tracked when the vehicle is in motion or in gear.</p>
+</div>
+{% endif %}
+{% endblock %}

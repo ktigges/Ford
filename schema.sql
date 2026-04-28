@@ -283,9 +283,95 @@ CREATE TABLE oauth_credentials (
 );
 
 -- =========================
+-- Drive sessions
+-- =========================
+CREATE TABLE drives (
+    id BIGSERIAL PRIMARY KEY,
+    drive_uuid UUID NOT NULL DEFAULT gen_random_uuid(),
+    vin TEXT NOT NULL REFERENCES garage(vin) ON DELETE CASCADE,
+
+    started_at TIMESTAMPTZ NOT NULL,
+    ended_at TIMESTAMPTZ,
+
+    -- Odometer at start/end (km from Ford)
+    start_odometer_km REAL,
+    end_odometer_km REAL,
+    distance_km REAL,
+
+    -- Battery at start/end
+    start_soc_percent REAL,
+    end_soc_percent REAL,
+    start_energy_kwh REAL,
+    end_energy_kwh REAL,
+    energy_used_kwh REAL,
+
+    -- Environment
+    avg_ambient_temp_c REAL,
+    avg_outside_temp_c REAL,
+
+    -- Location at start/end
+    start_lat DOUBLE PRECISION,
+    start_lon DOUBLE PRECISION,
+    start_heading_deg REAL,
+    start_compass TEXT,
+    end_lat DOUBLE PRECISION,
+    end_lon DOUBLE PRECISION,
+    end_heading_deg REAL,
+    end_compass TEXT,
+
+    -- Status
+    in_progress BOOLEAN DEFAULT TRUE,
+
+    created_at TIMESTAMPTZ DEFAULT now(),
+
+    UNIQUE (drive_uuid)
+);
+
+CREATE TABLE drive_points (
+    id BIGSERIAL PRIMARY KEY,
+    drive_id BIGINT NOT NULL REFERENCES drives(id) ON DELETE CASCADE,
+
+    recorded_at TIMESTAMPTZ NOT NULL,
+
+    -- Motion
+    speed_kmh REAL,
+    odometer_km REAL,
+    heading_deg REAL,
+    compass_direction TEXT,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    altitude_m DOUBLE PRECISION,
+
+    -- Battery
+    soc_percent REAL,
+    actual_soc_percent REAL,
+    energy_remaining_kwh REAL,
+    battery_voltage REAL,
+    battery_current REAL,
+    battery_temp_c REAL,
+
+    -- Powertrain
+    motor_current REAL,
+    motor_voltage REAL,
+    torque_at_transmission REAL,
+    accelerator_pedal_pct REAL,
+    brake_torque REAL,
+
+    -- Environment
+    ambient_temp_c REAL,
+    outside_temp_c REAL,
+
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- =========================
 -- Indexes
 -- =========================
 CREATE INDEX idx_telemetry_vin_time ON telemetry (vin, polled_at);
 CREATE INDEX idx_telemetry_time ON telemetry (polled_at);
 CREATE INDEX idx_telemetry_raw_metrics ON telemetry USING GIN (raw_metrics);
 CREATE INDEX idx_location_latlon ON location_state (latitude, longitude);
+CREATE INDEX idx_drives_vin_time ON drives (vin, started_at);
+CREATE INDEX idx_drives_uuid ON drives (drive_uuid);
+CREATE INDEX idx_drives_in_progress ON drives (vin) WHERE in_progress = TRUE;
+CREATE INDEX idx_drive_points_drive_time ON drive_points (drive_id, recorded_at);

@@ -186,6 +186,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
+    app.config["APP_VERSION"] = "0.2.1"
 
     # ── Settings helper (reads from app_config table) ──────────────
 
@@ -492,6 +493,33 @@ def create_app() -> Flask:
             latest=latest, recent=recent,
         )
 
+    @app.route("/drives")
+    def drives_list():
+        """List all drive sessions for the active VIN."""
+        vin = _active_vin()
+        drives = db.fetch_all(
+            """SELECT d.*,
+                      (SELECT count(*) FROM drive_points WHERE drive_id = d.id) AS point_count
+               FROM drives d
+               WHERE d.vin = %s
+               ORDER BY d.started_at DESC LIMIT 50""",
+            (vin,),
+        ) if vin else []
+        return render_template("drives.html", vin=vin, drives=drives)
+
+    @app.route("/drives/<int:drive_id>")
+    def drive_detail(drive_id):
+        """Show a single drive with all its data points."""
+        drive = db.fetch_one("SELECT * FROM drives WHERE id = %s", (drive_id,))
+        if not drive:
+            flash("Drive not found.", "error")
+            return redirect(url_for("drives_list"))
+        points = db.fetch_all(
+            "SELECT * FROM drive_points WHERE drive_id = %s ORDER BY recorded_at ASC",
+            (drive_id,),
+        )
+        return render_template("drive_detail.html", drive=drive, points=points)
+
     @app.route("/oauth", methods=["GET", "POST"])
     def oauth_config():
         """OAuth configuration form. Validates credentials and kicks off initial data poll."""
@@ -625,6 +653,8 @@ def create_app() -> Flask:
                     "collector_status", "polling_config", "oauth_credentials",
                     "vehicle_configuration", "departure_schedule",
                 ]
+                # drive_points cascade-deletes when drives rows are removed
+                db.execute("DELETE FROM drives WHERE vin = %s", (vin,))
                 for t in tables_to_clear:
                     db.execute(f"DELETE FROM {t} WHERE vin = %s", (vin,))
 
