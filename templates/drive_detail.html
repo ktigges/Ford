@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Drive {{ drive.drive_uuid|string|truncate(8, True, '') }} – Lightning{% endblock %}
+{% block content %}
+<h1>Drive {{ drive.drive_uuid }}</h1>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Summary</h2>
+    <table>
+      <tr><th>Drive UUID</th><td style="font-family:monospace; font-size:0.85rem;">{{ drive.drive_uuid }}</td></tr>
+      <tr><th>VIN</th><td>{{ drive.vin }}</td></tr>
+      <tr><th>Started</th><td>{{ drive.started_at.strftime('%Y-%m-%d %H:%M:%S') if drive.started_at else '–' }}</td></tr>
+      <tr><th>Ended</th><td>{{ drive.ended_at.strftime('%Y-%m-%d %H:%M:%S') if drive.ended_at else '–' }}</td></tr>
+      <tr><th>Status</th><td>
+        {% if drive.in_progress %}<span class="badge ok">In Progress</span>
+        {% else %}<span class="badge off">Complete</span>{% endif %}
+      </td></tr>
+      <tr><th>Distance</th><td>
+        {% if drive.distance_km is not none %}
+          {{ "%.1f"|format(drive.distance_km * 0.621371) }} mi / {{ "%.1f"|format(drive.distance_km) }} km
+        {% else %}–{% endif %}
+      </td></tr>
+      <tr><th>Energy Used</th><td>
+        {% if drive.energy_used_kwh is not none %}{{ "%.2f"|format(drive.energy_used_kwh) }} kWh{% else %}–{% endif %}
+      </td></tr>
+      {% if drive.distance_km and drive.energy_used_kwh and drive.distance_km > 0 %}
+      <tr><th>Efficiency</th><td>
+        {{ "%.1f"|format(drive.energy_used_kwh / (drive.distance_km * 0.621371) * 100) }} kWh/100mi
+        / {{ "%.1f"|format(drive.energy_used_kwh / drive.distance_km * 100) }} kWh/100km
+      </td></tr>
+      {% endif %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Battery</h2>
+    <table>
+      <tr><th>SOC Start</th><td>{{ "%.1f"|format(drive.start_soc_percent) }}%</td></tr>
+      <tr><th>SOC End</th><td>{{ "%.1f"|format(drive.end_soc_percent) if drive.end_soc_percent is not none else '…' }}%</td></tr>
+      <tr><th>Energy Start</th><td>{{ "%.2f"|format(drive.start_energy_kwh) if drive.start_energy_kwh is not none else '–' }} kWh</td></tr>
+      <tr><th>Energy End</th><td>{{ "%.2f"|format(drive.end_energy_kwh) if drive.end_energy_kwh is not none else '–' }} kWh</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Location</h2>
+    <table>
+      <tr><th>Start</th><td>
+        {% if drive.start_lat is not none %}{{ "%.6f"|format(drive.start_lat) }}, {{ "%.6f"|format(drive.start_lon) }}{% else %}–{% endif %}
+        {% if drive.start_compass %} ({{ drive.start_compass }}, {{ "%.0f"|format(drive.start_heading_deg) if drive.start_heading_deg is not none else '–' }}°){% endif %}
+      </td></tr>
+      <tr><th>End</th><td>
+        {% if drive.end_lat is not none %}{{ "%.6f"|format(drive.end_lat) }}, {{ "%.6f"|format(drive.end_lon) }}{% else %}–{% endif %}
+        {% if drive.end_compass %} ({{ drive.end_compass }}, {{ "%.0f"|format(drive.end_heading_deg) if drive.end_heading_deg is not none else '–' }}°){% endif %}
+      </td></tr>
+    </table>
+  </div>
+</div>
+
+{% if points %}
+<h2>Drive Points ({{ points|length }})</h2>
+<div style="overflow-x:auto;">
+<table style="font-size:0.8rem;">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Speed (km/h)</th>
+      <th>Heading</th>
+      <th>Compass</th>
+      <th>SOC %</th>
+      <th>Actual SOC %</th>
+      <th>Energy (kWh)</th>
+      <th>Batt V</th>
+      <th>Batt A</th>
+      <th>Batt °C</th>
+      <th>Motor A</th>
+      <th>Motor V</th>
+      <th>Torque</th>
+      <th>Accel %</th>
+      <th>Brake</th>
+      <th>Ambient °C</th>
+      <th>Outside °C</th>
+      <th>Lat</th>
+      <th>Lon</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in points %}
+    <tr>
+      <td>{{ p.recorded_at.strftime('%H:%M:%S') }}</td>
+      <td>{{ "%.1f"|format(p.speed_kmh) if p.speed_kmh is not none else '–' }}</td>
+      <td>{{ "%.0f"|format(p.heading_deg) if p.heading_deg is not none else '–' }}°</td>
+      <td>{{ p.compass_direction or '–' }}</td>
+      <td>{{ "%.1f"|format(p.soc_percent) if p.soc_percent is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.actual_soc_percent) if p.actual_soc_percent is not none else '–' }}</td>
+      <td>{{ "%.2f"|format(p.energy_remaining_kwh) if p.energy_remaining_kwh is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.battery_voltage) if p.battery_voltage is not none else '–' }}</td>
+      <td>{{ "%.2f"|format(p.battery_current) if p.battery_current is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.battery_temp_c) if p.battery_temp_c is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.motor_current) if p.motor_current is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.motor_voltage) if p.motor_voltage is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.torque_at_transmission) if p.torque_at_transmission is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.accelerator_pedal_pct) if p.accelerator_pedal_pct is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.brake_torque) if p.brake_torque is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.ambient_temp_c) if p.ambient_temp_c is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.outside_temp_c) if p.outside_temp_c is not none else '–' }}</td>
+      <td>{{ "%.6f"|format(p.latitude) if p.latitude is not none else '–' }}</td>
+      <td>{{ "%.6f"|format(p.longitude) if p.longitude is not none else '–' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="card"><p>No data points recorded for this drive.</p></div>
+{% endif %}
+
+<div class="btn-group" style="margin-top:1rem;">
+  <a href="{{ url_for('drives_list') }}" class="btn">← Back to Drives</a>
+</div>
+{% endblock %}
