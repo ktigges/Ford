@@ -1,8 +1,8 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.2.0  
-**Date:** 2026-04-26
+**Version:** 0.2.1  
+**Date:** 2026-04-28
 
 ---
 
@@ -526,6 +526,18 @@ The app will start with `ssl_context=(cert, key)`. If the cert/key files are mis
 
 ---
 
+## Changelog
+
+### v0.2.1 — 2026-04-28
+- **Conservative polling mode** — when enabled, idle vehicles are still polled at normal intervals but telemetry records are only written to the DB when the vehicle state changes or once every 60 minutes. Active states (ignition on/run/start, gear in drive/reverse, speed > 0, charging) always write normally.
+- Broadened active-vehicle detection: added `gearLeverPosition` (drive/reverse) and `ignitionStatus` value `start` to both `_vehicle_is_active()` and `_get_poll_interval()`.
+- Fixed encrypted `client_secret` being sent to Ford during initial setup (VIN-less `db.fetch_one` path was missing decryption).
+
+### v0.2.0 — 2026-04-26
+- Database setup mode, SSL/TLS with recovery certs, client secret encryption, runtime log level switching, configurable Flask port, backup/restore with cross-host encryption portability.
+
+---
+
 ## Phase 1 Scope
 
 - [x] OAuth2 authentication with Ford's Azure AD B2C
@@ -539,6 +551,7 @@ The app will start with `ssl_context=(cert, key)`. If the cert/key files are mis
 - [x] SSL/TLS support (cert + key PEM files via config.json)
 - [x] Client secret encryption (Fernet AES-128-CBC)
 - [x] Runtime log level switching (DEBUG/INFO/WARNING/ERROR)
+- [x] Conservative polling mode (idle writes once per hour)
 - [ ] GEO information integration (Phase 2)
 - [ ] Charger location data (Phase 2)
 - [ ] AI model training pipeline (Phase 3)

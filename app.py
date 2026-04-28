@@ -5,8 +5,8 @@ poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.2.0
-Date:        2026-04-26
+Version:     0.2.1
+Date:        2026-04-28
 """
 
 import logging
@@ -195,6 +195,7 @@ def create_app() -> Flask:
         "poll_interval_on": "60",
         "poll_interval_moving": "15",
         "poll_interval_charging": "60",
+        "conservative_polling": "off",
     }
 
     # Safety limits for polling intervals (seconds)
@@ -597,6 +598,7 @@ def create_app() -> Flask:
             "poller.html", vin=_active_vin(),
             status=status, polling_cfg=polling_cfg,
             running=poller.is_running(),
+            conservative=poller.conservative_mode(),
         )
 
     @app.route("/reset", methods=["GET", "POST"])
@@ -651,6 +653,10 @@ def create_app() -> Flask:
             _set_setting("log_level", applied, "Console / app-file log level")
             log.info("Settings: log level set to %s", applied)
 
+            # Conservative polling toggle
+            cons = "on" if request.form.get("conservative_polling") == "on" else "off"
+            _set_setting("conservative_polling", cons, "Conservative idle polling (write once per hour when idle)")
+
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
             iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
@@ -702,6 +708,7 @@ def create_app() -> Flask:
             "poll_interval_on": _get_setting("poll_interval_on"),
             "poll_interval_moving": _get_setting("poll_interval_moving"),
             "poll_interval_charging": _get_setting("poll_interval_charging"),
+            "conservative_polling": _get_setting("conservative_polling"),
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
