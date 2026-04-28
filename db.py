@@ -5,8 +5,8 @@ for common query patterns (fetch_one, fetch_all, execute).
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.2.0
-Date:        2026-04-26
+Version:     0.2.1
+Date:        2026-04-28
 """
 
 import logging

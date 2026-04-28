@@ -17,6 +17,17 @@
           {% endif %}
         </td>
       </tr>
+      <tr>
+        <th>Conservative Mode</th>
+        <td>
+          {% if conservative %}
+            <span class="badge ok">On</span>
+            <span style="font-size:0.8rem; color:var(--muted);"> – writes idle record once every 60 min</span>
+          {% else %}
+            <span class="badge off">Off</span>
+          {% endif %}
+        </td>
+      </tr>
       {% if status %}
       <tr><th>Last Poll</th><td>{{ status.last_poll or '–' }}</td></tr>
       <tr><th>Last Success</th><td>{{ status.last_success or '–' }}</td></tr>

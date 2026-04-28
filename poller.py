@@ -6,16 +6,17 @@ Extract metrics from Ford's API response and upserts into PostgreSQL state table
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.2.0
-Date:        2026-04-26
+Version:     0.2.1
+Date:        2026-04-28
 """
 
+import hashlib
 import json
 import logging
 import random
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -31,12 +32,23 @@ _lock = threading.Lock()
 _poller_thread: threading.Thread | None = None
 _stop_event = threading.Event()
 
+# Conservative mode: write idle records only once per this interval
+_CONSERVATIVE_IDLE_INTERVAL_SEC = 3600  # 60 minutes
+_last_idle_write: datetime | None = None
+_last_metrics_hash: str | None = None
+
 
 # ── Public control API ─────────────────────────────────────────────
 
 def is_running() -> bool:
     """Check whether the poller thread is alive."""
     return _poller_thread is not None and _poller_thread.is_alive()
+
+
+def conservative_mode() -> bool:
+    """Return True if conservative polling is enabled."""
+    row = db.fetch_one("SELECT value FROM app_config WHERE key = 'conservative_polling'")
+    return (row and row["value"].lower() in ("on", "true", "1")) if row else False
 
 
 def start() -> bool:
@@ -151,15 +163,53 @@ def _do_poll(provider: str, vin: str) -> None:
     log.info("[STEP 2/3] Telemetry fetched successfully")
     now = datetime.now(timezone.utc)
 
+    # Ford wraps all metrics under a "metrics" key
+    metrics = raw.get("metrics", raw)
+
+    # ── Conservative mode: skip write if vehicle is idle and state unchanged ──
+    if conservative_mode() and not _vehicle_is_active(vin, metrics):
+        global _last_idle_write, _last_metrics_hash
+        metrics_hash = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
+        time_since_last = (now - _last_idle_write).total_seconds() if _last_idle_write else None
+        state_changed = (_last_metrics_hash is not None and metrics_hash != _last_metrics_hash)
+
+        if _last_idle_write and not state_changed and time_since_last < _CONSERVATIVE_IDLE_INTERVAL_SEC:
+            # Update collector_status so the UI knows we're still polling, but skip the DB write
+            db.execute(
+                """
+                INSERT INTO collector_status (vin, last_poll, last_success, consecutive_failures)
+                VALUES (%s, %s, %s, 0)
+                ON CONFLICT (vin) DO UPDATE SET
+                    last_poll = EXCLUDED.last_poll,
+                    last_success = EXCLUDED.last_success,
+                    last_error = NULL,
+                    consecutive_failures = 0
+                """,
+                (vin, now, now),
+            )
+            _last_metrics_hash = metrics_hash
+            log.info("[CONSERVATIVE] Vehicle idle, state unchanged – skipping write (last write %ds ago)",
+                     int(time_since_last))
+            log.info("── POLL CYCLE COMPLETE (VIN=%s) [skipped write] ──", vin)
+            return
+
+        if state_changed:
+            log.info("[CONSERVATIVE] Vehicle idle but state changed – writing record")
+        else:
+            log.info("[CONSERVATIVE] Vehicle idle – writing hourly idle record")
+        _last_idle_write = now
+        _last_metrics_hash = metrics_hash
+    else:
+        # Active vehicle or conservative mode off – always write, reset idle tracking
+        _last_idle_write = None
+        _last_metrics_hash = None
+
     # Step 3: Store data
     log.info("[STEP 3/3] Storing telemetry and updating state tables...")
     db.execute(
         "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)",
         (vin, now, json.dumps(raw)),
     )
-
-    # Ford wraps all metrics under a "metrics" key
-    metrics = raw.get("metrics", raw)
 
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
@@ -630,6 +680,48 @@ def fetch_telemetry(token: str, application_id: str) -> dict:
 
 # ── Polling interval logic ─────────────────────────────────────────
 
+# Ignition values that indicate the vehicle is "on"
+_IGNITION_ACTIVE = {"run", "on", "start"}
+# Gear positions that indicate the vehicle is driving
+_GEAR_ACTIVE = {"drive", "reverse"}
+
+
+def _vehicle_is_active(vin: str, metrics: dict) -> bool:
+    """Return True if the vehicle appears to be on, moving, or charging.
+
+    Checks both the fresh metrics from the API and the stored state as a fallback.
+    Detects: ignition on/run/start, gear in drive/reverse, speed > 0, charging.
+    """
+    # Check fresh metrics first
+    ign = _v(metrics, "ignitionStatus", "value")
+    speed = _v(metrics, "speed", "value")
+    plug = _v(metrics, "plugStatus", "value")
+    gear = _v(metrics, "gearLeverPosition", "value")
+
+    if speed is not None and float(speed) > 0:
+        return True
+    if ign and str(ign).lower() in _IGNITION_ACTIVE:
+        return True
+    if gear and str(gear).lower() in _GEAR_ACTIVE:
+        return True
+    if plug and str(plug).lower() not in ("unplugged", "unknown", ""):
+        return True
+
+    # Fallback to stored DB state
+    vs = db.fetch_one("SELECT ignition_status, speed_mph, gear_position FROM vehicle_state WHERE vin = %s", (vin,))
+    cs = db.fetch_one("SELECT plug_status FROM charging_state WHERE vin = %s", (vin,))
+    if vs and vs.get("speed_mph") and vs["speed_mph"] > 0:
+        return True
+    if vs and vs.get("ignition_status") and vs["ignition_status"].lower() in _IGNITION_ACTIVE:
+        return True
+    if vs and vs.get("gear_position") and vs["gear_position"].lower() in _GEAR_ACTIVE:
+        return True
+    if cs and cs.get("plug_status") and cs["plug_status"].lower() not in ("unplugged", "unknown"):
+        return True
+
+    return False
+
+
 def _get_poll_interval(vin: str, default: int) -> int:
     """Determine the appropriate polling interval from polling_config + vehicle state.
 
@@ -649,14 +741,16 @@ def _get_poll_interval(vin: str, default: int) -> int:
     if pc is None:
         return max(_MIN_GENERAL, min(_MAX_INTERVAL, default))
 
-    vs = db.fetch_one("SELECT ignition_status, speed_mph FROM vehicle_state WHERE vin = %s", (vin,))
+    vs = db.fetch_one("SELECT ignition_status, speed_mph, gear_position FROM vehicle_state WHERE vin = %s", (vin,))
     cs = db.fetch_one("SELECT plug_status FROM charging_state WHERE vin = %s", (vin,))
 
     if vs and vs.get("speed_mph") and vs["speed_mph"] > 0:
         return max(_MIN_MOVING, min(_MAX_INTERVAL, pc["moving_interval_sec"]))
     if cs and cs.get("plug_status") and cs["plug_status"].lower() not in ("unplugged", "unknown"):
         return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["charging_interval_sec"]))
-    if vs and vs.get("ignition_status") and vs["ignition_status"].lower() in ("run", "on"):
+    if vs and vs.get("ignition_status") and vs["ignition_status"].lower() in _IGNITION_ACTIVE:
+        return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["ignition_on_interval_sec"]))
+    if vs and vs.get("gear_position") and vs["gear_position"].lower() in _GEAR_ACTIVE:
         return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["ignition_on_interval_sec"]))
 
     return max(_MIN_GENERAL, min(_MAX_INTERVAL, pc["ignition_off_interval_sec"]))

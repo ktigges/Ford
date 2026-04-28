@@ -32,6 +32,21 @@
   <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
     Moving: min 15s. All others: min 60s, max 3600s. Values outside these limits will be clamped.
   </p>
+
+  <div class="form-group">
+    <label for="conservative_polling">
+      <input type="checkbox" name="conservative_polling" id="conservative_polling" value="on"
+             {% if settings.conservative_polling == 'on' %}checked{% endif %}
+             style="width:auto; margin-right:0.5rem;">
+      Conservative Mode
+    </label>
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      When enabled, idle vehicles are still polled at the normal interval but records are only
+      written to the database when the vehicle state changes <strong>or</strong> once every 60 minutes.
+      Active states (ignition on, moving, charging) always write normally.
+    </p>
+  </div>
+
   <div class="form-group">
     <label for="poll_interval_off">Ignition Off</label>
     <input type="number" name="poll_interval_off" id="poll_interval_off"
