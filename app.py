@@ -186,7 +186,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.2.1"
+    app.config["APP_VERSION"] = "0.3.0"
 
     # ── Settings helper (reads from app_config table) ──────────────
 

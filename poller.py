@@ -756,16 +756,34 @@ def _vehicle_is_active(vin: str, metrics: dict) -> bool:
 # ── Drive tracking ─────────────────────────────────────────────────
 
 def _is_driving(metrics: dict) -> bool:
-    """Return True if the vehicle is currently in a drive (moving or in gear)."""
+    """Return True if the vehicle is actually driving (not just ignition on).
+
+    Uses multiple signals for reliability — a single poll with ignition ON
+    but gear in PARK is not considered driving (could be warming up).
+    Ford's own ``tripProgress == TRIP_IN_PROGRESS`` is the strongest signal.
+    """
+    # Ford's trip computer is the best signal
+    trip = _v(metrics, "tripFuelEconomy", "tripProgress")
+    if trip and str(trip).upper() == "TRIP_IN_PROGRESS":
+        return True
+
     speed = _v(metrics, "speed", "value")
+    gear = _v(metrics, "gearLeverPosition", "value")
+    ign = _v(metrics, "ignitionStatus", "value")
+
+    # Moving at any speed = driving
     if speed is not None and float(speed) > 0:
         return True
-    gear = _v(metrics, "gearLeverPosition", "value")
+
+    # In drive/reverse gear = driving (even at 0 speed, e.g. stopped at light)
     if gear and str(gear).lower() in _GEAR_ACTIVE:
         return True
-    ign = _v(metrics, "ignitionStatus", "value")
+
+    # Ignition on + NOT in park = likely driving (catch neutral, etc.)
     if ign and str(ign).lower() in _IGNITION_ACTIVE:
-        return True
+        if gear and str(gear).lower() != "park":
+            return True
+
     return False
 
 
@@ -778,7 +796,22 @@ def _get_active_drive(vin: str) -> dict | None:
 
 
 def _start_drive(vin: str, ts: datetime, metrics: dict) -> int:
-    """Create a new drive session and return its ID."""
+    """Create a new drive session and return its ID.
+
+    Uses the last known parked location (from location_state) as the start point,
+    since the GPS may not have updated yet when the drive begins.
+    """
+    # Prefer the stored location_state (captured while parked) over the current
+    # API metrics, since GPS updates may lag behind ignition changes.
+    loc = db.fetch_one(
+        "SELECT latitude, longitude, heading_deg, compass_direction FROM location_state WHERE vin = %s",
+        (vin,),
+    )
+    start_lat = (loc["latitude"] if loc else None) or _v(metrics, "position", "value", "location", "lat")
+    start_lon = (loc["longitude"] if loc else None) or _v(metrics, "position", "value", "location", "lon")
+    start_heading = (loc["heading_deg"] if loc else None) or _v(metrics, "heading", "value", "heading")
+    start_compass = (loc["compass_direction"] if loc else None) or _v(metrics, "compassDirection", "value")
+
     row = db.execute_returning(
         """
         INSERT INTO drives (vin, started_at, start_odometer_km, start_soc_percent,
@@ -793,10 +826,7 @@ def _start_drive(vin: str, ts: datetime, metrics: dict) -> int:
          _v(metrics, "xevBatteryEnergyRemaining", "value"),
          _v(metrics, "ambientTemp", "value"),
          _v(metrics, "outsideTemperature", "value"),
-         _v(metrics, "position", "value", "location", "lat"),
-         _v(metrics, "position", "value", "location", "lon"),
-         _v(metrics, "heading", "value", "heading"),
-         _v(metrics, "compassDirection", "value")),
+         start_lat, start_lon, start_heading, start_compass),
     )
     drive_id = row["id"]
     drive_uuid = row["drive_uuid"]
@@ -805,7 +835,7 @@ def _start_drive(vin: str, ts: datetime, metrics: dict) -> int:
 
 
 def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
-    """Finalize a drive session with end-state data."""
+    """Finalize a drive session with end-state data and derived stats."""
     end_odo = _v(metrics, "odometer", "value")
     end_soc = _v(metrics, "xevBatteryStateOfCharge", "value")
     end_energy = _v(metrics, "xevBatteryEnergyRemaining", "value")
@@ -822,22 +852,42 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
     if drive.get("start_energy_kwh") is not None and end_energy is not None:
         energy_used = float(drive["start_energy_kwh"]) - float(end_energy)
 
+    # Duration in seconds
+    duration = (ts - drive["started_at"]).total_seconds() if drive.get("started_at") else None
+
+    # Derived stats from drive_points
+    stats = db.fetch_one(
+        "SELECT max(speed_kmh) AS max_speed, sum(trip_regen_charge_kwh) AS total_regen "
+        "FROM drive_points WHERE drive_id = %s",
+        (drive["id"],),
+    )
+    max_speed = stats["max_speed"] if stats else None
+    # Use the last drive point's trip_regen_charge_kwh as accumulated regen
+    last_pt = db.fetch_one(
+        "SELECT trip_regen_charge_kwh FROM drive_points WHERE drive_id = %s ORDER BY recorded_at DESC LIMIT 1",
+        (drive["id"],),
+    )
+    regen_energy = last_pt["trip_regen_charge_kwh"] if last_pt and last_pt.get("trip_regen_charge_kwh") else None
+
     db.execute(
         """
         UPDATE drives SET
             ended_at = %s, end_odometer_km = %s, distance_km = %s,
             end_soc_percent = %s, end_energy_kwh = %s, energy_used_kwh = %s,
             end_lat = %s, end_lon = %s, end_heading_deg = %s, end_compass = %s,
+            duration_sec = %s, max_speed_kmh = %s, regen_energy_kwh = %s,
             in_progress = FALSE
         WHERE id = %s
         """,
         (ts, end_odo, distance, end_soc, end_energy, energy_used,
-         end_lat, end_lon, end_heading, end_compass, drive["id"]),
+         end_lat, end_lon, end_heading, end_compass,
+         duration, max_speed, regen_energy, drive["id"]),
     )
-    log.info("[DRIVE] Ended drive #%d (uuid=%s)  distance=%.1f km  energy=%.2f kWh",
+    log.info("[DRIVE] Ended drive #%d (uuid=%s)  distance=%.1f km  energy=%.2f kWh  duration=%.0fs",
              drive["id"], drive.get("drive_uuid", "?"),
              distance if distance is not None else 0,
-             energy_used if energy_used is not None else 0)
+             energy_used if energy_used is not None else 0,
+             duration if duration is not None else 0)
 
 
 def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
@@ -846,11 +896,14 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
         """
         INSERT INTO drive_points (drive_id, recorded_at, speed_kmh, odometer_km,
             heading_deg, compass_direction, latitude, longitude, altitude_m,
+            gear_position, ignition_status,
             soc_percent, actual_soc_percent, energy_remaining_kwh,
-            battery_voltage, battery_current, battery_temp_c,
+            battery_voltage, battery_current, battery_temp_c, battery_max_range_km,
             motor_current, motor_voltage, torque_at_transmission,
-            accelerator_pedal_pct, brake_torque, ambient_temp_c, outside_temp_c)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            accelerator_pedal_pct, brake_torque, hybrid_mode,
+            trip_distance_km, trip_regen_range_km, trip_regen_charge_kwh, trip_fuel_economy,
+            ambient_temp_c, outside_temp_c, engine_coolant_temp_c)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (drive_id, ts,
          _v(metrics, "speed", "value"),
@@ -860,39 +913,89 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
          _v(metrics, "position", "value", "location", "lat"),
          _v(metrics, "position", "value", "location", "lon"),
          _v(metrics, "position", "value", "location", "alt"),
+         _v(metrics, "gearLeverPosition", "value"),
+         _v(metrics, "ignitionStatus", "value"),
          _v(metrics, "xevBatteryStateOfCharge", "value"),
          _v(metrics, "xevBatteryActualStateOfCharge", "value"),
          _v(metrics, "xevBatteryEnergyRemaining", "value"),
          _v(metrics, "xevBatteryVoltage", "value"),
          _v(metrics, "xevBatteryIoCurrent", "value"),
          _v(metrics, "xevBatteryTemperature", "value"),
+         _v(metrics, "xevBatteryMaximumRange", "value"),
          _v(metrics, "xevTractionMotorCurrent", "value"),
          _v(metrics, "xevTractionMotorVoltage", "value"),
          _v(metrics, "torqueAtTransmission", "value"),
          _v(metrics, "acceleratorPedalPosition", "value"),
          _v(metrics, "brakeTorque", "value"),
+         _v(metrics, "hybridVehicleModeStatus", "value"),
+         _v(metrics, "tripXevBatteryDistanceAccumulated", "value"),
+         _v(metrics, "tripXevBatteryRangeRegenerated", "value"),
+         _v(metrics, "tripXevBatteryChargeRegenerated", "value"),
+         _v(metrics, "tripFuelEconomy", "value"),
          _v(metrics, "ambientTemp", "value"),
-         _v(metrics, "outsideTemperature", "value")),
+         _v(metrics, "outsideTemperature", "value"),
+         _v(metrics, "engineCoolantTemp", "value")),
     )
 
 
+# Grace period: if vehicle stops but ignition is still on and gear is in park,
+# wait this many consecutive "not driving" polls before ending the drive.
+# This prevents short stops (red lights, brief park) from splitting a drive.
+_DRIVE_END_GRACE_POLLS = 2
+_drive_stop_count: int = 0
+
+
 def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
-    """Detect drive start/end and record drive points."""
+    """Detect drive start/end and record drive points.
+
+    Drive detection logic:
+    - START: Ford tripProgress == TRIP_IN_PROGRESS, or gear in drive/reverse, or speed > 0
+    - END: Vehicle stops driving for _DRIVE_END_GRACE_POLLS consecutive polls
+      (ignition off OR gear in park with speed 0 for 2+ polls)
+    - Stale drives (in_progress for > 24h) are auto-closed
+    """
+    global _drive_stop_count
     driving = _is_driving(metrics)
     active_drive = _get_active_drive(vin)
 
+    # Auto-close stale drives (>24h in_progress — likely a crash or restart)
+    if active_drive and active_drive.get("started_at"):
+        age = (ts - active_drive["started_at"]).total_seconds()
+        if age > 86400:  # 24 hours
+            log.warning("[DRIVE] Auto-closing stale drive #%d (age=%.0fh)",
+                        active_drive["id"], age / 3600)
+            _end_drive(active_drive, ts, metrics)
+            _drive_stop_count = 0
+            active_drive = None
+
     if driving and not active_drive:
         # Drive just started
+        _drive_stop_count = 0
         drive_id = _start_drive(vin, ts, metrics)
         _record_drive_point(drive_id, ts, metrics)
     elif driving and active_drive:
-        # Drive in progress — record point
+        # Drive in progress — record point, reset stop counter
+        _drive_stop_count = 0
         _record_drive_point(active_drive["id"], ts, metrics)
     elif not driving and active_drive:
-        # Drive just ended — record final point and close
+        _drive_stop_count += 1
+        # Still record this point (captures the stop/park transition)
         _record_drive_point(active_drive["id"], ts, metrics)
-        _end_drive(active_drive, ts, metrics)
-    # else: not driving and no active drive — nothing to do
+
+        ign = _v(metrics, "ignitionStatus", "value")
+        ign_off = ign and str(ign).lower() not in _IGNITION_ACTIVE
+
+        if ign_off or _drive_stop_count >= _DRIVE_END_GRACE_POLLS:
+            # Drive ended — ignition off is immediate, otherwise wait for grace period
+            _end_drive(active_drive, ts, metrics)
+            _drive_stop_count = 0
+            log.info("[DRIVE] Drive ended (ignition_off=%s, stop_count=%d)", ign_off, _drive_stop_count)
+        else:
+            log.info("[DRIVE] Vehicle stopped but ignition on — grace period %d/%d",
+                     _drive_stop_count, _DRIVE_END_GRACE_POLLS)
+    else:
+        # Not driving and no active drive — reset
+        _drive_stop_count = 0
 
 
 def _get_poll_interval(vin: str, default: int) -> int:

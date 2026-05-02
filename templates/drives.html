@@ -10,9 +10,11 @@
       <th>Drive ID</th>
       <th>Started</th>
       <th>Ended</th>
-      <th>Distance</th>
+      <th>Duration</th>
+      <th>Distance ({{ ulabel('distance') }})</th>
       <th>Energy Used</th>
       <th>SOC Start → End</th>
+      <th>Max Speed ({{ ulabel('speed') }})</th>
       <th>Points</th>
       <th>Status</th>
     </tr>
@@ -24,8 +26,13 @@
       <td>{{ d.started_at.strftime('%Y-%m-%d %H:%M') if d.started_at else '–' }}</td>
       <td>{{ d.ended_at.strftime('%Y-%m-%d %H:%M') if d.ended_at else '–' }}</td>
       <td>
+        {% if d.duration_sec is not none %}
+          {{ "%d"|format(d.duration_sec // 60) }}m {{ "%d"|format(d.duration_sec % 60) }}s
+        {% else %}–{% endif %}
+      </td>
+      <td>
         {% if d.distance_km is not none %}
-          {{ "%.1f"|format(d.distance_km * 0.621371) }} mi / {{ "%.1f"|format(d.distance_km) }} km
+          {{ convert(d.distance_km, 'distance_km')|round(1) }} {{ ulabel('distance') }}
         {% else %}–{% endif %}
       </td>
       <td>
@@ -38,6 +45,11 @@
           {{ "%.1f"|format(d.start_soc_percent) }}% → {{ "%.1f"|format(d.end_soc_percent) }}%
         {% elif d.start_soc_percent is not none %}
           {{ "%.1f"|format(d.start_soc_percent) }}% → …
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.max_speed_kmh is not none %}
+          {{ convert(d.max_speed_kmh, 'max_speed_kmh')|round(0)|int }} {{ ulabel('speed') }}
         {% else %}–{% endif %}
       </td>
       <td>{{ d.point_count }}</td>

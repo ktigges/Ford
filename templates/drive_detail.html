@@ -11,22 +11,35 @@
       <tr><th>VIN</th><td>{{ drive.vin }}</td></tr>
       <tr><th>Started</th><td>{{ drive.started_at.strftime('%Y-%m-%d %H:%M:%S') if drive.started_at else '–' }}</td></tr>
       <tr><th>Ended</th><td>{{ drive.ended_at.strftime('%Y-%m-%d %H:%M:%S') if drive.ended_at else '–' }}</td></tr>
+      <tr><th>Duration</th><td>
+        {% if drive.duration_sec is not none %}
+          {{ "%d"|format(drive.duration_sec // 60) }}m {{ "%d"|format(drive.duration_sec % 60) }}s
+        {% else %}–{% endif %}
+      </td></tr>
       <tr><th>Status</th><td>
         {% if drive.in_progress %}<span class="badge ok">In Progress</span>
         {% else %}<span class="badge off">Complete</span>{% endif %}
       </td></tr>
       <tr><th>Distance</th><td>
         {% if drive.distance_km is not none %}
-          {{ "%.1f"|format(drive.distance_km * 0.621371) }} mi / {{ "%.1f"|format(drive.distance_km) }} km
+          {{ convert(drive.distance_km, 'distance_km')|round(1) }} {{ ulabel('distance') }}
+        {% else %}–{% endif %}
+      </td></tr>
+      <tr><th>Max Speed</th><td>
+        {% if drive.max_speed_kmh is not none %}
+          {{ convert(drive.max_speed_kmh, 'max_speed_kmh')|round(0)|int }} {{ ulabel('speed') }}
         {% else %}–{% endif %}
       </td></tr>
       <tr><th>Energy Used</th><td>
         {% if drive.energy_used_kwh is not none %}{{ "%.2f"|format(drive.energy_used_kwh) }} kWh{% else %}–{% endif %}
       </td></tr>
+      <tr><th>Regen Energy</th><td>
+        {% if drive.regen_energy_kwh is not none %}{{ "%.2f"|format(drive.regen_energy_kwh) }} kWh{% else %}–{% endif %}
+      </td></tr>
       {% if drive.distance_km and drive.energy_used_kwh and drive.distance_km > 0 %}
       <tr><th>Efficiency</th><td>
-        {{ "%.1f"|format(drive.energy_used_kwh / (drive.distance_km * 0.621371) * 100) }} kWh/100mi
-        / {{ "%.1f"|format(drive.energy_used_kwh / drive.distance_km * 100) }} kWh/100km
+        {% set dist_converted = convert(drive.distance_km, 'distance_km') %}
+        {{ "%.1f"|format(drive.energy_used_kwh / dist_converted * 100) }} kWh/100{{ ulabel('distance') }}
       </td></tr>
       {% endif %}
     </table>
@@ -64,22 +77,31 @@
   <thead>
     <tr>
       <th>Time</th>
-      <th>Speed (km/h)</th>
+      <th>Speed ({{ ulabel('speed') }})</th>
+      <th>Gear</th>
+      <th>Ignition</th>
       <th>Heading</th>
       <th>Compass</th>
       <th>SOC %</th>
       <th>Actual SOC %</th>
       <th>Energy (kWh)</th>
+      <th>Max Range ({{ ulabel('distance') }})</th>
       <th>Batt V</th>
       <th>Batt A</th>
-      <th>Batt °C</th>
+      <th>Batt {{ ulabel('temperature') }}</th>
       <th>Motor A</th>
       <th>Motor V</th>
-      <th>Torque</th>
+      <th>Torque ({{ ulabel('torque') }})</th>
       <th>Accel %</th>
-      <th>Brake</th>
-      <th>Ambient °C</th>
-      <th>Outside °C</th>
+      <th>Brake ({{ ulabel('torque') }})</th>
+      <th>Hybrid</th>
+      <th>Trip Dist ({{ ulabel('distance') }})</th>
+      <th>Trip Regen Rng ({{ ulabel('distance') }})</th>
+      <th>Trip Regen kWh</th>
+      <th>Trip Econ</th>
+      <th>Coolant {{ ulabel('temperature') }}</th>
+      <th>Ambient {{ ulabel('temperature') }}</th>
+      <th>Outside {{ ulabel('temperature') }}</th>
       <th>Lat</th>
       <th>Lon</th>
     </tr>
@@ -88,22 +110,31 @@
     {% for p in points %}
     <tr>
       <td>{{ p.recorded_at.strftime('%H:%M:%S') }}</td>
-      <td>{{ "%.1f"|format(p.speed_kmh) if p.speed_kmh is not none else '–' }}</td>
+      <td>{{ convert(p.speed_kmh, 'speed_kmh')|round(1) if p.speed_kmh is not none else '–' }}</td>
+      <td>{{ p.gear_position or '–' }}</td>
+      <td>{{ p.ignition_status or '–' }}</td>
       <td>{{ "%.0f"|format(p.heading_deg) if p.heading_deg is not none else '–' }}°</td>
       <td>{{ p.compass_direction or '–' }}</td>
       <td>{{ "%.1f"|format(p.soc_percent) if p.soc_percent is not none else '–' }}</td>
       <td>{{ "%.1f"|format(p.actual_soc_percent) if p.actual_soc_percent is not none else '–' }}</td>
       <td>{{ "%.2f"|format(p.energy_remaining_kwh) if p.energy_remaining_kwh is not none else '–' }}</td>
+      <td>{{ convert(p.battery_max_range_km, 'battery_max_range_km')|round(1) if p.battery_max_range_km is not none else '–' }}</td>
       <td>{{ "%.1f"|format(p.battery_voltage) if p.battery_voltage is not none else '–' }}</td>
       <td>{{ "%.2f"|format(p.battery_current) if p.battery_current is not none else '–' }}</td>
-      <td>{{ "%.1f"|format(p.battery_temp_c) if p.battery_temp_c is not none else '–' }}</td>
+      <td>{{ convert(p.battery_temp_c, 'battery_temp_c')|round(1) if p.battery_temp_c is not none else '–' }}</td>
       <td>{{ "%.1f"|format(p.motor_current) if p.motor_current is not none else '–' }}</td>
       <td>{{ "%.1f"|format(p.motor_voltage) if p.motor_voltage is not none else '–' }}</td>
-      <td>{{ "%.1f"|format(p.torque_at_transmission) if p.torque_at_transmission is not none else '–' }}</td>
+      <td>{{ convert(p.torque_at_transmission, 'torque_at_transmission')|round(1) if p.torque_at_transmission is not none else '–' }}</td>
       <td>{{ "%.1f"|format(p.accelerator_pedal_pct) if p.accelerator_pedal_pct is not none else '–' }}</td>
-      <td>{{ "%.1f"|format(p.brake_torque) if p.brake_torque is not none else '–' }}</td>
-      <td>{{ "%.1f"|format(p.ambient_temp_c) if p.ambient_temp_c is not none else '–' }}</td>
-      <td>{{ "%.1f"|format(p.outside_temp_c) if p.outside_temp_c is not none else '–' }}</td>
+      <td>{{ convert(p.brake_torque, 'brake_torque')|round(1) if p.brake_torque is not none else '–' }}</td>
+      <td>{{ p.hybrid_mode or '–' }}</td>
+      <td>{{ convert(p.trip_distance_km, 'trip_distance_km')|round(2) if p.trip_distance_km is not none else '–' }}</td>
+      <td>{{ convert(p.trip_regen_range_km, 'trip_regen_range_km')|round(2) if p.trip_regen_range_km is not none else '–' }}</td>
+      <td>{{ "%.3f"|format(p.trip_regen_charge_kwh) if p.trip_regen_charge_kwh is not none else '–' }}</td>
+      <td>{{ "%.1f"|format(p.trip_fuel_economy) if p.trip_fuel_economy is not none else '–' }}</td>
+      <td>{{ convert(p.engine_coolant_temp_c, 'engine_coolant_temp_c')|round(1) if p.engine_coolant_temp_c is not none else '–' }}</td>
+      <td>{{ convert(p.ambient_temp_c, 'ambient_temp_c')|round(1) if p.ambient_temp_c is not none else '–' }}</td>
+      <td>{{ convert(p.outside_temp_c, 'outside_temp_c')|round(1) if p.outside_temp_c is not none else '–' }}</td>
       <td>{{ "%.6f"|format(p.latitude) if p.latitude is not none else '–' }}</td>
       <td>{{ "%.6f"|format(p.longitude) if p.longitude is not none else '–' }}</td>
     </tr>
