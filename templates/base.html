@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <div class="prototype-banner">** PROTOTYPE ** v{{ config.get('APP_VERSION', '0.2.1') }}</div>
+  <div class="prototype-banner">** PROTOTYPE ** v{{ config.get('APP_VERSION', '0.4.0') }}</div>
   <nav>
     <div class="nav-brand">⚡ Lightning</div>
     <ul>
@@ -16,6 +16,7 @@
       <li><a href="{{ url_for('telemetry_overview') }}">Telemetry</a></li>
       <li><a href="{{ url_for('charging_overview') }}">Charging</a></li>
       <li><a href="{{ url_for('drives_list') }}">Drives</a></li>
+      <li><a href="{{ url_for('analytics_overview') }}">Analytics</a></li>
       <li><a href="{{ url_for('oauth_config') }}">OAuth Config</a></li>
       <li><a href="{{ url_for('poller_control') }}">Poller</a></li>
       <li><a href="{{ url_for('settings') }}">Settings</a></li>

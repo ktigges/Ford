@@ -5,7 +5,7 @@ poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
+Version:     0.4.0
 Date:        2026-04-28
 """
 
@@ -187,7 +187,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.3.2"
+    app.config["APP_VERSION"] = "0.4.0"
 
     # ── Settings helper (reads from app_config table) ──────────────
 
@@ -304,7 +304,10 @@ def create_app() -> Flask:
 
     def _display_timezone() -> tuple[timezone | ZoneInfo, str]:
         """Resolve configured display timezone, with safe UTC fallback."""
-        tz_name = (_get_setting("timezone") or _SETTINGS_DEFAULTS["timezone"]).strip() or "UTC"
+        if db.is_available():
+            tz_name = (_get_setting("timezone") or _SETTINGS_DEFAULTS["timezone"]).strip() or "UTC"
+        else:
+            tz_name = _SETTINGS_DEFAULTS["timezone"]
         try:
             return ZoneInfo(tz_name), tz_name
         except ZoneInfoNotFoundError:
@@ -615,6 +618,148 @@ def create_app() -> Flask:
             environment=environment,
             history=history,
             history_available=_table_exists("charging_history"),
+        )
+
+    @app.route("/analytics")
+    def analytics_overview():
+        """Show phase-1 analytics charts and a latest-drive route preview map."""
+        vin = _active_vin()
+        system = _get_setting("units") if db.is_available() else "imperial"
+
+        drive_rows = db.fetch_all(
+            """
+            SELECT d.id,
+                   d.drive_uuid,
+                   d.started_at,
+                   d.ended_at,
+                   d.distance_km,
+                   d.energy_used_kwh,
+                   d.start_soc_percent,
+                   d.end_soc_percent,
+                   d.max_speed_kmh,
+                   (
+                     SELECT dp.battery_max_range_km
+                     FROM drive_points dp
+                     WHERE dp.drive_id = d.id
+                     ORDER BY dp.recorded_at ASC
+                     LIMIT 1
+                   ) AS start_range_km,
+                   (
+                     SELECT dp.battery_max_range_km
+                     FROM drive_points dp
+                     WHERE dp.drive_id = d.id
+                     ORDER BY dp.recorded_at DESC
+                     LIMIT 1
+                   ) AS end_range_km
+            FROM drives d
+            WHERE d.vin = %s
+            ORDER BY d.started_at DESC
+            LIMIT 60
+            """,
+            (vin,),
+        ) if vin else []
+
+        labels = []
+        distance_data = []
+        energy_data = []
+        soc_drop_data = []
+        range_drop_data = []
+        efficiency_data = []
+
+        for row in reversed(drive_rows):
+            labels.append(_format_local_datetime(row.get("started_at"), "%m-%d %H:%M"))
+
+            distance_km = row.get("distance_km")
+            energy_kwh = row.get("energy_used_kwh")
+            start_soc = row.get("start_soc_percent")
+            end_soc = row.get("end_soc_percent")
+            start_range_km = row.get("start_range_km")
+            end_range_km = row.get("end_range_km")
+
+            if distance_km is not None:
+                distance_data.append(round(units.convert_for_display(distance_km, "distance_km", system), 2))
+            else:
+                distance_data.append(None)
+
+            energy_data.append(round(float(energy_kwh), 2) if energy_kwh is not None else None)
+
+            if start_soc is not None and end_soc is not None:
+                soc_drop_data.append(round(float(start_soc) - float(end_soc), 2))
+            else:
+                soc_drop_data.append(None)
+
+            if start_range_km is not None and end_range_km is not None:
+                range_drop_native = float(start_range_km) - float(end_range_km)
+                range_drop_data.append(
+                    round(units.convert_for_display(range_drop_native, "distance_km", system), 2)
+                )
+            else:
+                range_drop_data.append(None)
+
+            if energy_kwh is not None and distance_km is not None and float(distance_km) > 0:
+                distance_display = units.convert_for_display(distance_km, "distance_km", system)
+                if distance_display > 0:
+                    efficiency_data.append(round((float(energy_kwh) / distance_display) * 100.0, 2))
+                else:
+                    efficiency_data.append(None)
+            else:
+                efficiency_data.append(None)
+
+        latest_drive = db.fetch_one(
+            """
+            SELECT id, drive_uuid, started_at, ended_at, in_progress
+            FROM drives
+            WHERE vin = %s
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (vin,),
+        ) if vin else None
+
+        map_points = []
+        if latest_drive:
+            point_rows = db.fetch_all(
+                """
+                SELECT recorded_at, latitude, longitude, speed_kmh
+                FROM drive_points
+                WHERE drive_id = %s
+                  AND latitude IS NOT NULL
+                  AND longitude IS NOT NULL
+                ORDER BY recorded_at ASC
+                LIMIT 4000
+                """,
+                (latest_drive["id"],),
+            )
+            for point in point_rows:
+                map_points.append({
+                    "lat": float(point["latitude"]),
+                    "lon": float(point["longitude"]),
+                    "time": _format_local_datetime(point.get("recorded_at"), "%Y-%m-%d %H:%M:%S"),
+                    "speed": (
+                        round(units.convert_for_display(point["speed_kmh"], "speed_kmh", system), 1)
+                        if point.get("speed_kmh") is not None else None
+                    ),
+                })
+
+        chart_data = {
+            "labels": labels,
+            "distance": distance_data,
+            "energy": energy_data,
+            "soc_drop": soc_drop_data,
+            "range_drop": range_drop_data,
+            "efficiency": efficiency_data,
+        }
+
+        return render_template(
+            "analytics.html",
+            vin=vin,
+            chart_data=chart_data,
+            latest_drive=latest_drive,
+            map_points=map_points,
+            distance_label=units.unit_label("distance", system),
+            speed_label=units.unit_label("speed", system),
+            efficiency_label=f"kWh/100{units.unit_label('distance', system)}",
+            display_timezone=_display_timezone()[1],
         )
 
     @app.route("/drives")

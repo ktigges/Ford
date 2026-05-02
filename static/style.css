@@ -1,21 +1,21 @@
 /* Lightning – minimal dashboard styles
    Author:      Kevin Tigges
    Description: Ford Lightning EV Tool Prototype
-   Version:     0.2.1
+   Version:     0.4.0
    Date:        2026-04-28
 */
 
 :root {
-  --bg: #f4f6f8;
-  --card-bg: #ffffff;
-  --text: #1a1a2e;
-  --muted: #6c757d;
-  --accent: #0d6efd;
-  --accent-hover: #0a58ca;
+  --bg: #e9eef3;
+  --card-bg: #f8fbff;
+  --text: #213547;
+  --muted: #5a6c7d;
+  --accent: #2d5f9a;
+  --accent-hover: #214a78;
   --danger: #dc3545;
   --success: #198754;
-  --warning: #ffc107;
-  --border: #dee2e6;
+  --warning: #f4d35e;
+  --border: #c9d6e2;
   --radius: 6px;
 }
 
@@ -25,7 +25,7 @@
 
 .prototype-banner {
   background: var(--warning);
-  color: #1a1a2e;
+  color: #1f2933;
   text-align: center;
   font-weight: 700;
   font-size: 0.85rem;
@@ -46,7 +46,7 @@ nav {
   display: flex;
   align-items: center;
   gap: 2rem;
-  background: var(--text);
+  background: linear-gradient(90deg, #2f4e68 0%, #3a617f 60%, #466f8d 100%);
   color: #fff;
   padding: 0.75rem 1.5rem;
 }
@@ -79,6 +79,11 @@ main {
 }
 
 h1 { margin-bottom: 1rem; }
+
+.muted {
+  color: var(--muted);
+  margin-bottom: 0.8rem;
+}
 
 /* ── Cards ──────────────────────────────────────────── */
 
@@ -121,7 +126,7 @@ th, td {
 th { color: var(--muted); font-weight: 600; width: 40%; }
 
 thead th {
-  background: var(--bg);
+  background: #edf3f9;
   color: var(--text);
   width: auto;
 }
@@ -306,6 +311,23 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
 
 .dot-green { background: var(--success); box-shadow: 0 0 4px var(--success); }
 .dot-grey  { background: var(--muted); }
+
+/* Analytics */
+.analytics-grid .card {
+  min-height: 320px;
+}
+
+.analytics-grid canvas {
+  width: 100% !important;
+  height: 240px !important;
+}
+
+.drive-map {
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
 
 .indicator-meta {
   margin-left: 0.3rem;
