@@ -214,6 +214,7 @@ def _do_poll(provider: str, vin: str) -> None:
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
     _upsert_charging_state(vin, now, metrics)
+    _record_charging_history(vin, now, metrics)
     _upsert_location_state(vin, now, metrics)
     _upsert_tire_state(vin, now, metrics)
     _upsert_door_state(vin, now, metrics)
@@ -322,6 +323,7 @@ def initial_setup_poll(provider: str, vin: str | None = None) -> str:
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
     _upsert_charging_state(vin, now, metrics)
+    _record_charging_history(vin, now, metrics)
     _upsert_location_state(vin, now, metrics)
     _upsert_tire_state(vin, now, metrics)
     _upsert_door_state(vin, now, metrics)
@@ -755,21 +757,18 @@ def _vehicle_is_active(vin: str, metrics: dict) -> bool:
 
 # ── Drive tracking ─────────────────────────────────────────────────
 
-def _is_driving(metrics: dict) -> bool:
+def _is_driving(vin: str, metrics: dict) -> bool:
     """Return True if the vehicle is actually driving (not just ignition on).
 
     Uses multiple signals for reliability — a single poll with ignition ON
     but gear in PARK is not considered driving (could be warming up).
-    Ford's own ``tripProgress == TRIP_IN_PROGRESS`` is the strongest signal.
+    Ford's ``tripProgress`` can lag, so it is only used as a fallback when
+    the current state is not parked/charging.
     """
-    # Ford's trip computer is the best signal
-    trip = _v(metrics, "tripFuelEconomy", "tripProgress")
-    if trip and str(trip).upper() == "TRIP_IN_PROGRESS":
-        return True
-
     speed = _v(metrics, "speed", "value")
     gear = _v(metrics, "gearLeverPosition", "value")
     ign = _v(metrics, "ignitionStatus", "value")
+    trip = _v(metrics, "tripFuelEconomy", "tripProgress")
 
     # Moving at any speed = driving
     if speed is not None and float(speed) > 0:
@@ -783,6 +782,14 @@ def _is_driving(metrics: dict) -> bool:
     if ign and str(ign).lower() in _IGNITION_ACTIVE:
         if gear and str(gear).lower() != "park":
             return True
+
+    # Ford's trip progress can remain stale after parking or when charging.
+    if trip and str(trip).upper() == "TRIP_IN_PROGRESS":
+        if not _is_actively_charging(metrics, vin):
+            if gear and str(gear).lower() != "park":
+                return True
+            if ign and str(ign).lower() in _IGNITION_ACTIVE:
+                return True
 
     return False
 
@@ -955,7 +962,7 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
     - Stale drives (in_progress for > 24h) are auto-closed
     """
     global _drive_stop_count
-    driving = _is_driving(metrics)
+    driving = _is_driving(vin, metrics)
     active_drive = _get_active_drive(vin)
 
     # Auto-close stale drives (>24h in_progress — likely a crash or restart)
@@ -1144,6 +1151,67 @@ def _upsert_charging_state(vin: str, ts: datetime, m: dict) -> None:
          _v(m, "xevBatteryChargerCurrentOutput", "value"),
          _v(m, "xevBatteryChargerVoltageOutput", "value"),
          _v(m, "xevEvseBatteryDcCurrentOutput", "value")),
+    )
+
+
+def _charging_power_kw(metrics: dict) -> float | None:
+    """Return instantaneous charging power in kW when voltage/current are available."""
+    voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
+    current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
+    if voltage is None or current is None:
+        return None
+    try:
+        return (float(voltage) * float(current)) / 1000.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
+    """Persist a charging history sample when the vehicle is plugged in or charging."""
+    plug_status = _v(metrics, "xevPlugChargerStatus", "value")
+    time_to_full = _v(metrics, "xevBatteryTimeToFullCharge", "value")
+    charger_current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
+    charger_voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
+
+    should_store = False
+    if plug_status and str(plug_status).lower() not in _PLUG_IDLE:
+        should_store = True
+    elif time_to_full is not None:
+        should_store = True
+    elif charger_current is not None or charger_voltage is not None:
+        should_store = True
+
+    if not should_store:
+        return
+
+    db.execute(
+        """
+        INSERT INTO charging_history (
+            vin, polled_at, plug_status, charger_power_type, communication_status,
+            time_to_full_min, charger_current, charger_voltage, evse_dc_current,
+            charge_power_kw, soc_percent, actual_soc_percent, energy_remaining_kwh,
+            battery_temp_c, outside_temp_c, ambient_temp_c
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            vin,
+            ts,
+            plug_status,
+            _v(metrics, "xevChargeStationPowerType", "value"),
+            _v(metrics, "xevChargeStationCommunicationStatus", "value"),
+            time_to_full,
+            charger_current,
+            charger_voltage,
+            _v(metrics, "xevEvseBatteryDcCurrentOutput", "value"),
+            _charging_power_kw(metrics),
+            _v(metrics, "xevBatteryStateOfCharge", "value"),
+            _v(metrics, "xevBatteryActualStateOfCharge", "value"),
+            _v(metrics, "xevBatteryEnergyRemaining", "value"),
+            _v(metrics, "xevBatteryTemperature", "value"),
+            _v(metrics, "outsideTemperature", "value"),
+            _v(metrics, "ambientTemp", "value"),
+        ),
     )
 
 

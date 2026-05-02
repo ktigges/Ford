@@ -86,6 +86,30 @@ CREATE TABLE charging_state (
     evse_dc_current REAL
 );
 
+CREATE TABLE charging_history (
+    id BIGSERIAL PRIMARY KEY,
+    vin TEXT NOT NULL REFERENCES garage(vin) ON DELETE CASCADE,
+    polled_at TIMESTAMPTZ NOT NULL,
+
+    plug_status TEXT,
+    charger_power_type TEXT,
+    communication_status TEXT,
+    time_to_full_min REAL CHECK (time_to_full_min >= 0),
+    charger_current REAL,
+    charger_voltage REAL,
+    evse_dc_current REAL,
+    charge_power_kw REAL,
+
+    soc_percent REAL CHECK (soc_percent BETWEEN 0 AND 100),
+    actual_soc_percent REAL CHECK (actual_soc_percent BETWEEN 0 AND 100),
+    energy_remaining_kwh REAL CHECK (energy_remaining_kwh >= 0),
+    battery_temp_c REAL,
+    outside_temp_c REAL,
+    ambient_temp_c REAL,
+
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- =========================
 -- Location / navigation state
 -- =========================
@@ -391,3 +415,4 @@ CREATE INDEX idx_drives_vin_time ON drives (vin, started_at);
 CREATE INDEX idx_drives_uuid ON drives (drive_uuid);
 CREATE INDEX idx_drives_in_progress ON drives (vin) WHERE in_progress = TRUE;
 CREATE INDEX idx_drive_points_drive_time ON drive_points (drive_id, recorded_at);
+CREATE INDEX idx_charging_history_vin_time ON charging_history (vin, polled_at DESC);

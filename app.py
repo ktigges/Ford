@@ -186,7 +186,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.3.1"
+    app.config["APP_VERSION"] = "0.3.2"
 
     # ── Settings helper (reads from app_config table) ──────────────
 
@@ -231,6 +231,42 @@ def create_app() -> Flask:
             """,
             (key, value, description),
         )
+
+    def _table_exists(table_name: str) -> bool:
+        """Return True when a table exists in the current PostgreSQL schema."""
+        row = db.fetch_one(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s",
+            (table_name,),
+        )
+        return row is not None
+
+    def _charging_power_kw_from_row(charging: dict | None) -> float | None:
+        """Compute kW from the latest charging_state row when possible."""
+        if not charging:
+            return None
+        voltage = charging.get("charger_voltage")
+        current = charging.get("charger_current")
+        if voltage is None or current is None:
+            return None
+        try:
+            return (float(voltage) * float(current)) / 1000.0
+        except (TypeError, ValueError):
+            return None
+
+    def _charging_is_active(charging: dict | None) -> bool:
+        """Return True when the latest charging row indicates active charging."""
+        if not charging:
+            return False
+        plug_status = (charging.get("plug_status") or "").lower()
+        if plug_status in ("", "unknown", "unplugged"):
+            return False
+        time_to_full = charging.get("time_to_full_min")
+        if time_to_full is None:
+            return True
+        try:
+            return float(time_to_full) > 0
+        except (TypeError, ValueError):
+            return True
 
     # ── Register Jinja globals for unit conversion ─────────────────
 
@@ -451,6 +487,8 @@ def create_app() -> Flask:
             battery=battery,
             vehicle=vehicle,
             charging=charging,
+            charging_active=_charging_is_active(charging),
+            charging_power_kw=_charging_power_kw_from_row(charging),
             tires=tires,
             vehicle_img=vehicle_img,
             poller_running=poller.is_running(),
@@ -493,15 +531,42 @@ def create_app() -> Flask:
             latest=latest, recent=recent,
         )
 
+    @app.route("/charging")
+    def charging_overview():
+        """Show current charging state plus recent charging history samples."""
+        vin = _active_vin()
+        charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
+        battery = db.fetch_one("SELECT * FROM battery_state WHERE vin = %s", (vin,)) if vin else None
+        environment = db.fetch_one("SELECT * FROM environment_state WHERE vin = %s", (vin,)) if vin else None
+
+        history = []
+        if vin and _table_exists("charging_history"):
+            history = db.fetch_all(
+                "SELECT * FROM charging_history WHERE vin = %s ORDER BY polled_at DESC LIMIT 100",
+                (vin,),
+            )
+
+        return render_template(
+            "charging.html",
+            vin=vin,
+            charging=charging,
+            charging_active=_charging_is_active(charging),
+            charging_power_kw=_charging_power_kw_from_row(charging),
+            battery=battery,
+            environment=environment,
+            history=history,
+            history_available=_table_exists("charging_history"),
+        )
+
     @app.route("/drives")
     def drives_list():
-        """List all drive sessions for the active VIN."""
+        """List only active drive sessions for the active VIN."""
         vin = _active_vin()
         drives = db.fetch_all(
             """SELECT d.*,
                       (SELECT count(*) FROM drive_points WHERE drive_id = d.id) AS point_count
                FROM drives d
-               WHERE d.vin = %s
+               WHERE d.vin = %s AND d.in_progress = TRUE
                ORDER BY d.started_at DESC LIMIT 50""",
             (vin,),
         ) if vin else []
@@ -681,6 +746,7 @@ def create_app() -> Flask:
                 # Delete all data for this VIN (cascade handles FK references)
                 tables_to_clear = [
                     "telemetry", "vehicle_state", "battery_state", "charging_state",
+                    "charging_history",
                     "location_state", "tire_state", "door_state", "window_state",
                     "brake_state", "security_state", "environment_state",
                     "collector_status", "polling_config", "oauth_credentials",
@@ -689,7 +755,8 @@ def create_app() -> Flask:
                 # drive_points cascade-deletes when drives rows are removed
                 db.execute("DELETE FROM drives WHERE vin = %s", (vin,))
                 for t in tables_to_clear:
-                    db.execute(f"DELETE FROM {t} WHERE vin = %s", (vin,))
+                    if _table_exists(t):
+                        db.execute(f"DELETE FROM {t} WHERE vin = %s", (vin,))
 
                 db.execute("DELETE FROM garage WHERE vin = %s", (vin,))
                 log.info("All data cleared for VIN=%s", vin)
@@ -861,7 +928,7 @@ def create_app() -> Flask:
 
     _VIN_TABLES = [
         "garage", "telemetry", "vehicle_state", "battery_state",
-        "charging_state", "location_state", "tire_state", "door_state",
+        "charging_state", "charging_history", "location_state", "tire_state", "door_state",
         "window_state", "brake_state", "security_state", "environment_state",
         "vehicle_configuration", "departure_schedule",
         "polling_config", "collector_status", "oauth_credentials",
@@ -881,6 +948,8 @@ def create_app() -> Flask:
             total = 0
             for t in _VIN_TABLES:
                 if t == "garage":
+                    continue
+                if not _table_exists(t):
                     continue
                 # composite-PK tables use vin column too
                 row = db.fetch_one(f"SELECT count(*) AS cnt FROM {t} WHERE vin = %s", (v,))
@@ -962,7 +1031,7 @@ def create_app() -> Flask:
 
     # Whitelist of tables the viewer can display
     _VIEWABLE_TABLES = [
-        "garage", "telemetry", "drives", "drive_points",
+        "garage", "telemetry", "drives", "drive_points", "charging_history",
         "vehicle_state", "battery_state", "charging_state", "location_state",
         "tire_state", "door_state", "window_state",
         "brake_state", "security_state", "environment_state",
@@ -975,6 +1044,8 @@ def create_app() -> Flask:
         """Show all tables with row counts."""
         table_info = []
         for t in _VIEWABLE_TABLES:
+            if not _table_exists(t):
+                continue
             row = db.fetch_one(f"SELECT count(*) AS cnt FROM {t}")
             table_info.append({"name": t, "count": row["cnt"] if row else 0})
         return render_template("db_browser.html", tables=table_info)
@@ -984,6 +1055,9 @@ def create_app() -> Flask:
         """Show contents of a single table."""
         if table_name not in _VIEWABLE_TABLES:
             flash(f"Table '{table_name}' is not viewable.", "error")
+            return redirect(url_for("db_browser"))
+        if not _table_exists(table_name):
+            flash(f"Table '{table_name}' does not exist in the current database.", "error")
             return redirect(url_for("db_browser"))
 
         limit = request.args.get("limit", 100, type=int)
@@ -1048,6 +1122,9 @@ def create_app() -> Flask:
         if table_name not in _VIEWABLE_TABLES:
             flash(f"Table '{table_name}' is not viewable.", "error")
             return redirect(url_for("db_browser"))
+        if not _table_exists(table_name):
+            flash(f"Table '{table_name}' does not exist in the current database.", "error")
+            return redirect(url_for("db_browser"))
 
         pk_col = request.form.get("pk_col", "").strip()
         pk_val = request.form.get("pk_val", "").strip()
@@ -1075,6 +1152,9 @@ def create_app() -> Flask:
         """Show a single row with full JSON expansion (useful for telemetry raw_metrics)."""
         if table_name not in _VIEWABLE_TABLES:
             flash(f"Table '{table_name}' is not viewable.", "error")
+            return redirect(url_for("db_browser"))
+        if not _table_exists(table_name):
+            flash(f"Table '{table_name}' does not exist in the current database.", "error")
             return redirect(url_for("db_browser"))
 
         # Try common PK column names

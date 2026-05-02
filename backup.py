@@ -41,6 +41,7 @@ TABLES_ORDERED = [
     "vehicle_state",
     "battery_state",
     "charging_state",
+    "charging_history",
     "location_state",
     "tire_state",
     "door_state",
@@ -50,6 +51,8 @@ TABLES_ORDERED = [
     "environment_state",
     "vehicle_configuration",
     "departure_schedule",
+    "drives",
+    "drive_points",
 ]
 
 

@@ -4,6 +4,9 @@
 <h1>Drives</h1>
 
 {% if drives %}
+<div class="card" style="margin-bottom:1rem;">
+  <p>Only active drives are shown here. A drive disappears from this screen after it ends.</p>
+</div>
 <table>
   <thead>
     <tr>
@@ -66,7 +69,7 @@
 </table>
 {% else %}
 <div class="card">
-  <p>No drives recorded yet. Drives are automatically tracked when the vehicle is in motion or in gear.</p>
+  <p>No active drives right now. Drives appear here only while the vehicle is actually driving.</p>
 </div>
 {% endif %}
 {% endblock %}
