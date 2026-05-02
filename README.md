@@ -1,7 +1,7 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.3.1  
+**Version:** 0.3.2  
 **Date:** 2026-05-02
 
 ---
@@ -40,7 +40,7 @@ The ultimate goal of this project is to train an AI model for **user-specific dr
                │  db.py  │  ← psycopg2 connection pool
                └────┬────┘
                ┌────┴─────┐
-               │ PostgreSQL│  ← 18 tables (schema.sql)
+               │ PostgreSQL│  ← 21 tables (schema.sql)
                └──────────┘
 ```
 
@@ -112,6 +112,8 @@ Self-contained OAuth module for Ford's Azure AD B2C endpoint. Handles token refr
 ### `poller.py` — Background Telemetry Poller
 
 Daemon thread that periodically calls Ford's telemetry API and stores the results. Handles retry with exponential backoff, classified error responses, and adaptive polling intervals.
+
+Charging history is also recorded while the vehicle is plugged in or actively charging.
 
 #### Control API
 
@@ -203,6 +205,7 @@ The main application factory. Creates the Flask app, initializes logging and dat
 | `/` | GET | **Dashboard** — vehicle overview, battery summary, poller status. |
 | `/vehicle` | GET | **Vehicle State** — detailed view of all state tables with unit-converted values. |
 | `/telemetry` | GET | **Telemetry** — poll count, latest timestamp, recent poll history. |
+| `/charging` | GET | **Charging** — current charging state plus recent charging history samples. |
 | `/oauth` | GET, POST | **OAuth Config** — manual paste-code flow. Enter OAuth settings, paste authorization code (or refresh token), exchange/validate, save credentials, then trigger initial data poll. |
 | `/poller` | GET, POST | **Poller Control** — start/stop the background poller, view collector status. |
 | `/settings` | GET, POST | **Settings** — toggle metric/imperial display, configure polling intervals, change runtime log level. |
@@ -253,7 +256,7 @@ Symmetric encryption for sensitive fields using Fernet (AES-128-CBC with HMAC-SH
 
 ### `schema.sql` — PostgreSQL Schema
 
-18 tables covering vehicle metadata, telemetry logs, per-domain state tables, OAuth credentials, polling configuration, and application settings. All vehicle tables reference `garage(vin)` with `ON DELETE CASCADE`.
+21 tables covering vehicle metadata, telemetry logs, per-domain state tables, charging history, drive tracking, OAuth credentials, polling configuration, and application settings. All vehicle tables reference `garage(vin)` with `ON DELETE CASCADE`.
 
 ---
 
@@ -292,7 +295,7 @@ Provides two backup strategies for the complete database and all configuration.
 |---|---|
 | `backup_sql(label)` | Full database dump using `pg_dump`. Requires PostgreSQL client tools on the server. |
 | `restore_sql(filepath)` | Restore from a SQL dump using `psql`. |
-| `backup_json(label)` | Export all 18 tables to a portable JSON file. No external tools required. |
+| `backup_json(label)` | Export all application tables to a portable JSON file. No external tools required. |
 | `restore_json(filepath)` | Restore from a JSON backup. Uses `INSERT ... ON CONFLICT DO NOTHING` — existing rows are never overwritten. |
 | `list_backups()` | List all `.sql` and `.json` files in the `backups/` directory. |
 | `delete_backup(filename)` | Delete a backup file (path-traversal safe). |
@@ -310,6 +313,7 @@ Backups are stored in the `backups/` directory at the project root.
 | `vehicle_state.html` | All state tables displayed as cards with unit-converted values. |
 | `telemetry.html` | Telemetry overview with poll count and recent history. |
 | `oauth_config.html` | OAuth credential entry form with pre-population from DB. |
+| `charging.html` | Current charging state plus charging history table. |
 | `poller.html` | Poller start/stop controls and collector status. |
 | `settings.html` | Unit system toggle and polling interval configuration. |
 | `manage.html` | Vehicle management — list VINs, delete, re-poll, orphan detection. |
@@ -568,6 +572,12 @@ Requires PostgreSQL client tools: `dropdb`, `createdb`, and `psql`.
 ---
 
 ## Changelog
+
+### v0.3.2 — 2026-05-02
+- Drive detection no longer leaves stale `In Progress` drives visible while the truck is parked and charging.
+- Added `charging_history` for sampled charging sessions, including charge rate, voltage/current, SOC, and temperatures.
+- Added a dedicated Charging page and made dashboard charging state much more prominent.
+- Drives list now shows only active drives while they are actually happening.
 
 ### v0.3.1 — 2026-05-02
 - OAuth setup updated for manual authorization-code paste flow.

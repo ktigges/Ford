@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Charging – Lightning{% endblock %}
+{% block content %}
+<div class="dash-header">
+  <h1>Charging</h1>
+  {% if charging_active %}
+    <span class="badge badge-charging">CHARGING</span>
+  {% elif charging %}
+    <span class="badge off">Not Charging</span>
+  {% endif %}
+</div>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Current Session</h2>
+    {% if charging %}
+    <table>
+      <tr><th>Plug Status</th><td>{{ charging.plug_status or '–' }}</td></tr>
+      <tr><th>Power Type</th><td>{{ charging.charger_power_type or '–' }}</td></tr>
+      <tr><th>Communication</th><td>{{ charging.communication_status or '–' }}</td></tr>
+      <tr><th>Charge Rate</th><td>{{ charging_power_kw|round(1) if charging_power_kw is not none else '–' }} kW</td></tr>
+      <tr><th>Voltage</th><td>{{ charging.charger_voltage|round(0)|int if charging.charger_voltage is not none else '–' }} V</td></tr>
+      <tr><th>Current</th><td>{{ charging.charger_current|round(1) if charging.charger_current is not none else '–' }} A</td></tr>
+      <tr><th>DC Current</th><td>{{ charging.evse_dc_current|round(1) if charging.evse_dc_current is not none else '–' }} A</td></tr>
+      <tr><th>Time to Full</th><td>{{ charging.time_to_full_min|round(0)|int if charging.time_to_full_min is not none else '–' }} min</td></tr>
+    </table>
+    {% else %}
+    <p class="no-data">No charging state data available.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Battery / Environment</h2>
+    <table>
+      <tr><th>SOC</th><td>{{ battery.soc_percent|round(1) if battery and battery.soc_percent is not none else '–' }}%</td></tr>
+      <tr><th>Actual SOC</th><td>{{ battery.actual_soc_percent|round(1) if battery and battery.actual_soc_percent is not none else '–' }}%</td></tr>
+      <tr><th>Energy Remaining</th><td>{{ battery.energy_remaining_kwh|round(1) if battery and battery.energy_remaining_kwh is not none else '–' }} kWh</td></tr>
+      <tr><th>Battery Voltage</th><td>{{ battery.voltage|round(0)|int if battery and battery.voltage is not none else '–' }} V</td></tr>
+      <tr><th>Battery Current</th><td>{{ battery.current|round(1) if battery and battery.current is not none else '–' }} A</td></tr>
+      <tr><th>Battery Temp</th><td>{{ convert(battery.temperature_c, 'temperature_c') if battery and battery.temperature_c is not none else '–' }} {{ ulabel('temperature') }}</td></tr>
+      <tr><th>Outside Temp</th><td>{{ convert(environment.outside_temp_c, 'temperature_c') if environment and environment.outside_temp_c is not none else '–' }} {{ ulabel('temperature') }}</td></tr>
+      <tr><th>Ambient Temp</th><td>{{ convert(environment.ambient_temp_c, 'temperature_c') if environment and environment.ambient_temp_c is not none else '–' }} {{ ulabel('temperature') }}</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Recent Charging History</h2>
+  {% if not history_available %}
+  <p class="no-data">The current database does not have the new charging_history table yet. Reset/apply the latest schema to enable charging history.</p>
+  {% elif history %}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>State</th>
+          <th>Rate</th>
+          <th>Voltage</th>
+          <th>Current</th>
+          <th>Time to Full</th>
+          <th>SOC</th>
+          <th>Battery Temp</th>
+          <th>Outside Temp</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in history %}
+        <tr>
+          <td>{{ row.polled_at.strftime('%Y-%m-%d %H:%M:%S') if row.polled_at else '–' }}</td>
+          <td>{{ row.plug_status or '–' }}</td>
+          <td>{{ row.charge_power_kw|round(1) if row.charge_power_kw is not none else '–' }} kW</td>
+          <td>{{ row.charger_voltage|round(0)|int if row.charger_voltage is not none else '–' }} V</td>
+          <td>{{ row.charger_current|round(1) if row.charger_current is not none else '–' }} A</td>
+          <td>{{ row.time_to_full_min|round(0)|int if row.time_to_full_min is not none else '–' }} min</td>
+          <td>{{ row.soc_percent|round(1) if row.soc_percent is not none else '–' }}%</td>
+          <td>{{ convert(row.battery_temp_c, 'temperature_c') if row.battery_temp_c is not none else '–' }} {{ ulabel('temperature') }}</td>
+          <td>{{ convert(row.outside_temp_c, 'temperature_c') if row.outside_temp_c is not none else '–' }} {{ ulabel('temperature') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="no-data">No charging history samples recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

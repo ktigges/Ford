@@ -138,6 +138,7 @@ thead th {
 
 .badge.ok  { background: #d1e7dd; color: var(--success); }
 .badge.off { background: #e2e3e5; color: var(--muted); }
+.badge-charging { background: #fff3cd; color: #8a5a00; }
 
 /* ── Flash messages ─────────────────────────────────── */
 
@@ -175,6 +176,15 @@ thead th {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 0.9rem;
+}
+
+.form-group textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  font-family: inherit;
 }
 
 .form-group input:focus {
@@ -315,6 +325,44 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
   border-radius: var(--radius);
   padding: 1.5rem;
   margin-bottom: 1.25rem;
+}
+
+.charging-alert {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  border-left: 6px solid var(--warning);
+  background: linear-gradient(90deg, #fff7db 0%, #ffffff 55%);
+}
+
+.charging-alert-label {
+  color: #8a5a00;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.charging-alert-main {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.charging-alert-meta {
+  display: inline-block;
+  margin-left: 0.75rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.charging-alert-side {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .hero-image {
@@ -494,6 +542,14 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
 @media (max-width: 700px) {
   .dash-hero {
     grid-template-columns: 1fr;
+  }
+  .charging-alert {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .charging-alert-side {
+    width: 100%;
+    justify-content: space-between;
   }
   .hero-charge {
     flex-direction: column;

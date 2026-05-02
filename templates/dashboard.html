@@ -17,6 +17,26 @@
   </div>
 </div>
 
+{% if charging_active %}
+<div class="charging-alert card">
+  <div>
+    <div class="charging-alert-label">Charging</div>
+    <div class="charging-alert-main">
+      {{ charging_power_kw|round(1) if charging_power_kw is not none else '–' }} kW
+      <span class="charging-alert-meta">
+        {{ charging.charger_voltage|round(0)|int if charging and charging.charger_voltage else '–' }}V / {{ charging.charger_current|round(1) if charging and charging.charger_current else '–' }}A
+      </span>
+    </div>
+  </div>
+  <div class="charging-alert-side">
+    {% if charging and charging.time_to_full_min is not none %}
+      <span>{{ charging.time_to_full_min|round(0)|int }} min to full</span>
+    {% endif %}
+    <a class="btn btn-sm" href="{{ url_for('charging_overview') }}">View Charging</a>
+  </div>
+</div>
+{% endif %}
+
 {# ── Hero section: vehicle image + charge ring + key stats ─── #}
 <div class="dash-hero">
   <div class="hero-image">
@@ -94,6 +114,16 @@
     {% if charging %}
     <table>
       <tr>
+        <th>State</th>
+        <td>
+          {% if charging_active %}
+            <span class="badge badge-charging">CHARGING</span>
+          {% else %}
+            <span class="badge off">Idle</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
         <th>Plug</th>
         <td>
           {% if charging.plug_status and 'connect' in charging.plug_status|lower %}
@@ -105,6 +135,7 @@
       </tr>
       <tr><th>Power Type</th><td>{{ charging.charger_power_type or '–' }}</td></tr>
       <tr><th>Status</th><td>{{ charging.communication_status or '–' }}</td></tr>
+      <tr><th>Charge Rate</th><td>{{ charging_power_kw|round(1) if charging_power_kw is not none else '–' }} kW</td></tr>
       {% if charging.time_to_full_min %}
       <tr><th>Time to Full</th><td>{{ charging.time_to_full_min|round(0)|int }} min</td></tr>
       {% endif %}
@@ -112,6 +143,9 @@
       <tr><th>Charger</th><td>{{ charging.charger_voltage|round(0)|int }}V / {{ charging.charger_current|round(1) if charging.charger_current else '–' }}A</td></tr>
       {% endif %}
     </table>
+    <div class="btn-group">
+      <a class="btn btn-sm" href="{{ url_for('charging_overview') }}">Charging Details</a>
+    </div>
     {% else %}
     <p class="no-data">No charging data.</p>
     {% endif %}
