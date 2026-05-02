@@ -23,18 +23,38 @@
       <input type="text" name="scope" id="scope" value="{{ form.scope }}">
     </div>
     <div class="form-group">
+      <label for="authorize_endpoint">Authorize URL</label>
+      <input type="text" name="authorize_endpoint" id="authorize_endpoint" value="{{ form.authorize_endpoint }}" placeholder="https://.../authorize">
+      <small style="color: var(--muted); display:block; margin-top:4px;">
+        Step 1: build a URL in this format and open it in your browser:
+        ?response_type=code&amp;client_id=...&amp;redirect_uri=...&amp;scope=...
+      </small>
+    </div>
+    <div class="form-group">
       <label for="redirect_uri">Redirect URI</label>
-      <input type="text" name="redirect_uri" id="redirect_uri" value="{{ form.redirect_uri }}">
+      <input type="text" name="redirect_uri" id="redirect_uri" value="{{ form.redirect_uri }}" placeholder="https://your-registered-redirect-uri">
+      <small style="color: var(--muted); display:block; margin-top:4px;">
+        Step 2: after login, copy the code value returned at your redirect URI and paste it below.
+      </small>
+    </div>
+    <div class="form-group">
+      <label for="authorization_code">Authorization Code</label>
+      <textarea name="authorization_code" id="authorization_code" rows="3" placeholder="Paste authorization code here">{{ form.authorization_code }}</textarea>
     </div>
     <div class="form-group">
       <label for="refresh_token">Refresh Token</label>
-      <input type="password" name="refresh_token" id="refresh_token" value="{{ form.refresh_token }}" required>
+      <input type="password" name="refresh_token" id="refresh_token" value="{{ form.refresh_token }}">
+      <small style="color: var(--muted); display:block; margin-top:4px;">
+        Optional if using authorization-code exchange. Required for direct refresh-token validation.
+      </small>
     </div>
     <div class="form-group">
       <label for="token_endpoint">Token Endpoint</label>
       <input type="text" name="token_endpoint" id="token_endpoint" value="{{ form.token_endpoint }}" required>
     </div>
-    <button type="submit" class="btn">Validate &amp; Save</button>
+    <div class="btn-group">
+      <button type="submit" class="btn">Exchange Code / Validate Refresh Token &amp; Save</button>
+    </div>
   </form>
 </div>
 {% endblock %}
