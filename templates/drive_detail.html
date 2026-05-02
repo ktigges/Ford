@@ -210,6 +210,13 @@
 <script>
 const driveChartData = JSON.parse(document.getElementById("drive-chart-data").textContent || "{}");
 const speedLabel = document.getElementById("drive-speed-label").dataset.speedLabel || "mph";
+const numericValues = (arr) => (arr || []).filter((v) => Number.isFinite(v));
+const paddedMax = (arr, fallback = 10) => {
+  const vals = numericValues(arr);
+  if (!vals.length) return fallback;
+  const max = Math.max(...vals);
+  return max <= 0 ? fallback : Math.ceil(max * 1.15);
+};
 if (driveChartData.labels && driveChartData.labels.length > 0) {
   new Chart(document.getElementById('driveChart'), {
     type: 'line',
@@ -226,8 +233,19 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       scales: {
-        y: { position: 'left', title: { display: true, text: speedLabel } },
-        y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'SOC %' } },
+        y: {
+          position: 'left',
+          beginAtZero: true,
+          suggestedMax: paddedMax(driveChartData.speed, 20),
+          title: { display: true, text: speedLabel }
+        },
+        y1: {
+          position: 'right',
+          min: 0,
+          max: 100,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'SOC %' }
+        },
         y2: { display: false }
       }
     }

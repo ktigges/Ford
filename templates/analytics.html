@@ -25,7 +25,7 @@
 </div>
 {% endif %}
 
-{% if charging_data.labels and charging_data.labels.length %}
+{% if charging_data.labels and charging_data.labels|length > 0 %}
 <div class="card">
   <h2>Charging History</h2>
   <canvas id="chargingChart" height="120"></canvas>
@@ -70,6 +70,23 @@
   const distanceLabel = {{ distance_label|tojson }};
   const efficiencyLabel = {{ efficiency_label|tojson }};
 
+  const numericValues = (arr) => (arr || []).filter((v) => Number.isFinite(v));
+  const paddedMax = (arr, fallback = 10) => {
+    const vals = numericValues(arr);
+    if (!vals.length) return fallback;
+    const max = Math.max(...vals);
+    return max <= 0 ? fallback : Math.ceil(max * 1.15);
+  };
+  const minMax = (arr, fallbackMin = 0, fallbackMax = 100) => {
+    const vals = numericValues(arr);
+    if (!vals.length) return { min: fallbackMin, max: fallbackMax };
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    if (max <= min) return { min: fallbackMin, max: fallbackMax };
+    const pad = (max - min) * 0.1;
+    return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
+  };
+
   if (chartData.labels && chartData.labels.length) {
     const commonOpts = {
       responsive: true,
@@ -86,7 +103,8 @@
     };
 
     // Distance chart
-    new Chart(document.getElementById('distanceChart'), {
+    const distanceEl = document.getElementById('distanceChart');
+    if (distanceEl) new Chart(distanceEl, {
       type: 'bar',
       data: {
         labels: chartData.labels,
@@ -104,7 +122,8 @@
     });
 
     // Energy chart
-    new Chart(document.getElementById('energyChart'), {
+    const energyEl = document.getElementById('energyChart');
+    if (energyEl) new Chart(energyEl, {
       type: 'bar',
       data: {
         labels: chartData.labels,
@@ -122,7 +141,8 @@
     });
 
     // Efficiency chart
-    new Chart(document.getElementById('efficiencyChart'), {
+    const efficiencyEl = document.getElementById('efficiencyChart');
+    if (efficiencyEl) new Chart(efficiencyEl, {
       type: 'line',
       data: {
         labels: chartData.labels,
@@ -139,6 +159,46 @@
       },
       options: commonOpts
     });
+
+    const distanceChart = Chart.getChart('distanceChart');
+    if (distanceChart) {
+      distanceChart.options.scales = {
+        ...distanceChart.options.scales,
+        y: {
+          beginAtZero: true,
+          suggestedMax: paddedMax(chartData.distance, 10),
+          ticks: { maxTicksLimit: 6 }
+        }
+      };
+      distanceChart.update();
+    }
+
+    const energyChart = Chart.getChart('energyChart');
+    if (energyChart) {
+      energyChart.options.scales = {
+        ...energyChart.options.scales,
+        y: {
+          beginAtZero: true,
+          suggestedMax: paddedMax(chartData.energy, 10),
+          ticks: { maxTicksLimit: 6 }
+        }
+      };
+      energyChart.update();
+    }
+
+    const efficiencyChart = Chart.getChart('efficiencyChart');
+    if (efficiencyChart) {
+      efficiencyChart.options.scales = {
+        ...efficiencyChart.options.scales,
+        y: {
+          beginAtZero: true,
+          suggestedMax: paddedMax(chartData.efficiency, 40),
+          ticks: { maxTicksLimit: 6 },
+          title: { display: true, text: efficiencyLabel }
+        }
+      };
+      efficiencyChart.update();
+    }
   }
 
   // Charging chart
@@ -157,7 +217,8 @@
       }
     };
 
-    new Chart(document.getElementById('chargingChart'), {
+    const chargingEl = document.getElementById('chargingChart');
+    if (chargingEl) new Chart(chargingEl, {
       type: 'line',
       data: {
         labels: chargingData.labels,
@@ -188,10 +249,13 @@
           ...commonOpts.scales,
           y: {
             position: 'left',
+            min: 0,
+            max: 100,
             title: { display: true, text: 'Charge %' }
           },
           y1: {
             position: 'right',
+            ...minMax((chargingData.voltage || []).filter((v) => Number.isFinite(v) && v >= 50 && v <= 1000), 80, 300),
             grid: { drawOnChartArea: false },
             title: { display: true, text: 'Voltage (V)' }
           }

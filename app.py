@@ -681,8 +681,13 @@ def create_app() -> Flask:
 
             if energy_kwh is not None and distance_km is not None and float(distance_km) > 0:
                 distance_display = units.convert_for_display(distance_km, "distance_km", system)
-                if distance_display > 0:
-                    efficiency_data.append(round((float(energy_kwh) / distance_display) * 100.0, 2))
+                # Ignore tiny-distance samples that create unrealistic efficiency spikes.
+                if distance_display >= 0.5:
+                    efficiency_val = (float(energy_kwh) / distance_display) * 100.0
+                    if 0 <= efficiency_val <= 200:
+                        efficiency_data.append(round(efficiency_val, 2))
+                    else:
+                        efficiency_data.append(None)
                 else:
                     efficiency_data.append(None)
             else:
