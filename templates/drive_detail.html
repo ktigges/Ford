@@ -2,6 +2,7 @@
 {% block title %}Drive {{ drive.drive_uuid|string|truncate(8, True, '') }} – Lightning{% endblock %}
 {% block content %}
 <h1>Drive {{ drive.drive_uuid }}</h1>
+<p class="muted">Times are shown in {{ display_timezone }}.</p>
 
 <div class="card drive-kpi-card">
   <div class="drive-kpi-grid">
@@ -54,8 +55,8 @@
     <table>
       <tr><th>Drive UUID</th><td style="font-family:monospace; font-size:0.85rem;">{{ drive.drive_uuid }}</td></tr>
       <tr><th>VIN</th><td>{{ drive.vin }}</td></tr>
-      <tr><th>Started</th><td>{{ drive.started_at.strftime('%Y-%m-%d %H:%M:%S') if drive.started_at else '–' }}</td></tr>
-      <tr><th>Ended</th><td>{{ drive.ended_at.strftime('%Y-%m-%d %H:%M:%S') if drive.ended_at else '–' }}</td></tr>
+      <tr><th>Started ({{ display_timezone }})</th><td>{{ format_local_dt(drive.started_at, '%Y-%m-%d %H:%M:%S') if drive.started_at else '–' }}</td></tr>
+      <tr><th>Ended ({{ display_timezone }})</th><td>{{ format_local_dt(drive.ended_at, '%Y-%m-%d %H:%M:%S') if drive.ended_at else '–' }}</td></tr>
       <tr><th>Duration</th><td>
         {% if drive.duration_sec is not none %}
           {{ "%d"|format(drive.duration_sec // 60) }}m {{ "%d"|format(drive.duration_sec % 60) }}s
@@ -121,7 +122,7 @@
 <table class="drive-points-table">
   <thead>
     <tr>
-      <th>Time</th>
+      <th>Time ({{ display_timezone }})</th>
       <th>Speed ({{ ulabel('speed') }})</th>
       <th>Gear</th>
       <th>Ignition</th>
@@ -154,7 +155,7 @@
   <tbody>
     {% for p in points %}
     <tr>
-      <td>{{ p.recorded_at.strftime('%H:%M:%S') }}</td>
+      <td>{{ format_local_dt(p.recorded_at, '%Y-%m-%d %H:%M:%S') }}</td>
       <td>{{ convert(p.speed_kmh, 'speed_kmh')|round(1) if p.speed_kmh is not none else '–' }}</td>
       <td>{{ p.gear_position or '–' }}</td>
       <td>{{ p.ignition_status or '–' }}</td>

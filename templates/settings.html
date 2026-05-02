@@ -13,6 +13,27 @@
     </select>
   </div>
 
+  <div class="form-group">
+    <label for="timezone">Display Timezone (IANA)</label>
+    <input type="text" name="timezone" id="timezone" class="form-input"
+           value="{{ settings.timezone }}" list="timezone-options" placeholder="America/Chicago">
+    <datalist id="timezone-options">
+      <option value="UTC">
+      <option value="America/New_York">
+      <option value="America/Chicago">
+      <option value="America/Denver">
+      <option value="America/Los_Angeles">
+      <option value="America/Phoenix">
+      <option value="Europe/London">
+      <option value="Europe/Berlin">
+      <option value="Asia/Tokyo">
+      <option value="Australia/Sydney">
+    </datalist>
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      Example: America/Chicago. This timezone is used for drive list/detail timestamps.
+    </p>
+  </div>
+
   <h2>Logging</h2>
   <p style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;">
     <strong>DEBUG</strong> writes verbose API/OAuth/poller details to the console and app log.

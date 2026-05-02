@@ -2,6 +2,7 @@
 {% block title %}Drives – Lightning{% endblock %}
 {% block content %}
 <h1>Drives</h1>
+<p class="muted">Times are shown in {{ display_timezone }}.</p>
 
 <div class="card drives-summary-card" style="margin-bottom:1rem;">
   <p>All drives are shown below. Active drives appear inline with history.</p>
@@ -64,8 +65,8 @@
   <thead>
     <tr>
       <th>Drive ID</th>
-      <th>Started</th>
-      <th>Ended</th>
+      <th>Started ({{ display_timezone }})</th>
+      <th>Ended ({{ display_timezone }})</th>
       <th>Duration</th>
       <th>Distance ({{ ulabel('distance') }})</th>
       <th>Energy Used</th>
@@ -79,8 +80,8 @@
     {% for d in drives %}
     <tr>
       <td><a href="{{ url_for('drive_detail', drive_id=d.id) }}" title="{{ d.drive_uuid }}">{{ d.drive_uuid|string|truncate(8, True, '') }}</a></td>
-      <td>{{ d.started_at.strftime('%Y-%m-%d %H:%M') if d.started_at else '–' }}</td>
-      <td>{{ d.ended_at.strftime('%Y-%m-%d %H:%M') if d.ended_at else '–' }}</td>
+      <td>{{ format_local_dt(d.started_at, '%Y-%m-%d %H:%M') if d.started_at else '–' }}</td>
+      <td>{{ format_local_dt(d.ended_at, '%Y-%m-%d %H:%M') if d.ended_at else '–' }}</td>
       <td>
         {% if d.duration_sec is not none %}
           {{ "%d"|format(d.duration_sec // 60) }}m {{ "%d"|format(d.duration_sec % 60) }}s

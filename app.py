@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file
 from werkzeug.utils import secure_filename
@@ -190,8 +191,20 @@ def create_app() -> Flask:
 
     # ── Settings helper (reads from app_config table) ──────────────
 
+    def _default_timezone_name() -> str:
+        """Best-effort local timezone name, falling back to UTC."""
+        local_tz = datetime.now().astimezone().tzinfo
+        tz_key = getattr(local_tz, "key", None)
+        if tz_key:
+            return tz_key
+        tz_env = os.environ.get("TZ", "").strip()
+        if tz_env:
+            return tz_env
+        return "UTC"
+
     _SETTINGS_DEFAULTS = {
         "units": "imperial",
+        "timezone": _default_timezone_name(),
         "poll_interval_off": "120",
         "poll_interval_on": "60",
         "poll_interval_moving": "15",
@@ -289,11 +302,32 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             return True
 
+    def _display_timezone() -> tuple[timezone | ZoneInfo, str]:
+        """Resolve configured display timezone, with safe UTC fallback."""
+        tz_name = (_get_setting("timezone") or _SETTINGS_DEFAULTS["timezone"]).strip() or "UTC"
+        try:
+            return ZoneInfo(tz_name), tz_name
+        except ZoneInfoNotFoundError:
+            return timezone.utc, "UTC"
+
+    def _format_local_datetime(value: datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+        """Format datetimes in configured local timezone for UI display."""
+        if value is None:
+            return "-"
+        try:
+            tz_obj, _ = _display_timezone()
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(tz_obj).strftime(fmt)
+        except Exception:
+            return value.strftime(fmt)
+
     # ── Register Jinja globals for unit conversion ─────────────────
 
     @app.context_processor
     def _inject_units():
         system = _get_setting("units") if db.is_available() else "imperial"
+        _, tz_name = _display_timezone()
 
         def _ulabel_for_field(field_name):
             """Return the unit label for a DB field name, or empty string."""
@@ -307,6 +341,8 @@ def create_app() -> Flask:
             "convert": lambda val, field: units.convert_for_display(val, field, system),
             "ulabel": lambda cat: units.unit_label(cat, system),
             "ulabel_for_field": _ulabel_for_field,
+            "format_local_dt": _format_local_datetime,
+            "display_timezone": tz_name,
         }
 
     # ── Startup checks ─────────────────────────────────────────────
@@ -825,6 +861,18 @@ def create_app() -> Flask:
         if request.method == "POST":
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
 
+            requested_tz = (request.form.get("timezone", "") or "").strip() or _SETTINGS_DEFAULTS["timezone"]
+            try:
+                ZoneInfo(requested_tz)
+                _set_setting("timezone", requested_tz, "Display timezone (IANA, e.g. America/Chicago)")
+            except ZoneInfoNotFoundError:
+                fallback_tz = _SETTINGS_DEFAULTS["timezone"]
+                _set_setting("timezone", fallback_tz, "Display timezone (IANA, e.g. America/Chicago)")
+                flash(
+                    f"Invalid timezone '{requested_tz}'. Using {fallback_tz} instead.",
+                    "warning",
+                )
+
             # Runtime log level switching
             new_level = request.form.get("log_level", "INFO").upper()
             applied = set_log_level(new_level)
@@ -881,6 +929,7 @@ def create_app() -> Flask:
 
         current = {
             "units": _get_setting("units"),
+            "timezone": _get_setting("timezone") or _SETTINGS_DEFAULTS["timezone"],
             "log_level": get_log_level(),
             "poll_interval_off": _get_setting("poll_interval_off"),
             "poll_interval_on": _get_setting("poll_interval_on"),
