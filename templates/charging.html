@@ -97,6 +97,7 @@
 
 <div class="card">
   <h2>Charging Chart (Voltage and Charge %)</h2>
+  <p class="muted" style="margin-top:-0.5rem;">Voltage profile: {{ charging_axis.label }}</p>
   {% if charging_chart_data.labels and charging_chart_data.labels|length > 0 %}
   <canvas id="chargingHistoryChart" height="120"></canvas>
   {% else %}
@@ -106,18 +107,10 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script id="charging-chart-data" type="application/json">{{ charging_chart_data|tojson }}</script>
+<script id="charging-axis-data" type="application/json">{{ charging_axis|tojson }}</script>
 <script>
 const cdata = JSON.parse(document.getElementById('charging-chart-data').textContent || '{}');
-const numericValues = (arr) => (arr || []).filter((v) => Number.isFinite(v));
-const minMax = (arr, fallbackMin = 80, fallbackMax = 300) => {
-  const vals = numericValues(arr);
-  if (!vals.length) return { min: fallbackMin, max: fallbackMax };
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  if (max <= min) return { min: fallbackMin, max: fallbackMax };
-  const pad = (max - min) * 0.1;
-  return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
-};
+const axis = JSON.parse(document.getElementById('charging-axis-data').textContent || '{}');
 
 if (cdata.labels && cdata.labels.length > 0) {
   new Chart(document.getElementById('chargingHistoryChart'), {
@@ -136,9 +129,10 @@ if (cdata.labels && cdata.labels.length > 0) {
         y: { position: 'left', min: 0, max: 100, title: { display: true, text: 'Charge %' } },
         y1: {
           position: 'right',
-          ...minMax((cdata.voltage || []).filter((v) => Number.isFinite(v) && v >= 50 && v <= 1000)),
+          min: Number.isFinite(axis.min) ? axis.min : 80,
+          max: Number.isFinite(axis.max) ? axis.max : 300,
           grid: { drawOnChartArea: false },
-          title: { display: true, text: 'Voltage (V)' }
+          title: { display: true, text: `Voltage (V) - ${axis.label || 'AC / L1-L2'}` }
         }
       }
     }

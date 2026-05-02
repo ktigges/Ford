@@ -1172,14 +1172,22 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     time_to_full = _v(metrics, "xevBatteryTimeToFullCharge", "value")
     charger_current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
     charger_voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
+    dc_current = _v(metrics, "xevEvseBatteryDcCurrentOutput", "value")
+    power_kw = _charging_power_kw(metrics)
 
-    should_store = False
-    if plug_status and str(plug_status).lower() not in _PLUG_IDLE:
-        should_store = True
-    elif time_to_full is not None:
-        should_store = True
-    elif charger_current is not None or charger_voltage is not None:
-        should_store = True
+    plug_connected = bool(plug_status and str(plug_status).lower() not in _PLUG_IDLE)
+
+    # Ford can report stale voltage/current/time-to-full when unplugged.
+    # Clear unplugged electrical fields so charts/history are not polluted.
+    if not plug_connected:
+        time_to_full = None
+        charger_current = None
+        charger_voltage = None
+        dc_current = None
+        power_kw = None
+
+    # Store only while plugged/charging; skip unplugged idle snapshots.
+    should_store = plug_connected or (power_kw is not None and power_kw > 0.1)
 
     if not should_store:
         return
@@ -1203,8 +1211,8 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
             time_to_full,
             charger_current,
             charger_voltage,
-            _v(metrics, "xevEvseBatteryDcCurrentOutput", "value"),
-            _charging_power_kw(metrics),
+            dc_current,
+            power_kw,
             _v(metrics, "xevBatteryStateOfCharge", "value"),
             _v(metrics, "xevBatteryActualStateOfCharge", "value"),
             _v(metrics, "xevBatteryEnergyRemaining", "value"),
