@@ -1,7 +1,7 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.3.2  
+**Version:** 0.4.0  
 **Date:** 2026-05-02
 
 ---
@@ -572,6 +572,12 @@ Requires PostgreSQL client tools: `dropdb`, `createdb`, and `psql`.
 ---
 
 ## Changelog
+
+### v0.4.0 — 2026-05-02
+- Added an in-app Analytics page with unit-aware charts for distance vs energy, battery/range drop, and efficiency trends.
+- Added a latest-drive route map preview directly in the app UI (OpenStreetMap/Leaflet).
+- Added configurable timezone display and local-time rendering for drive timestamps.
+- Refreshed the UI to a blue-grey eye-friendly theme while keeping the existing layout and controls.
 
 ### v0.3.2 — 2026-05-02
 - Drive detection no longer leaves stale `In Progress` drives visible while the truck is parked and charging.

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Analytics – Lightning{% endblock %}
+{% block content %}
+<h1>Analytics</h1>
+<p class="muted">Phase 1 analytics from your current telemetry database. Times use {{ display_timezone }}.</p>
+
+{% if chart_data.labels %}
+<div class="card-grid analytics-grid">
+  <div class="card">
+    <h2>Distance vs Energy</h2>
+    <canvas id="distanceEnergyChart" height="120"></canvas>
+  </div>
+  <div class="card">
+    <h2>Battery & Range Drop per Drive</h2>
+    <canvas id="batteryRangeChart" height="120"></canvas>
+  </div>
+  <div class="card">
+    <h2>Efficiency Trend</h2>
+    <canvas id="efficiencyChart" height="120"></canvas>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <p>No drive history yet. Start driving and this page will populate automatically.</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Latest Drive Route</h2>
+  {% if latest_drive and map_points %}
+  <p class="muted" style="margin-bottom:0.75rem;">
+    Drive {{ latest_drive.drive_uuid|string|truncate(8, True, '') }}
+    ({{ format_local_dt(latest_drive.started_at, '%Y-%m-%d %H:%M') }}
+    {% if latest_drive.ended_at %}
+      to {{ format_local_dt(latest_drive.ended_at, '%Y-%m-%d %H:%M') }}
+    {% else %}
+      in progress
+    {% endif %})
+  </p>
+  <div id="drive-map" class="drive-map"></div>
+  {% else %}
+  <p>No route points available for the latest drive yet.</p>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin=""
+/>
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin=""
+></script>
+
+<script>
+  const chartData = {{ chart_data|tojson }};
+  const distanceLabel = {{ distance_label|tojson }};
+  const efficiencyLabel = {{ efficiency_label|tojson }};
+  const speedLabel = {{ speed_label|tojson }};
+
+  if (chartData.labels && chartData.labels.length) {
+    const commonOpts = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom' }
+      },
+      scales: {
+        x: {
+          ticks: { maxTicksLimit: 8 }
+        }
+      }
+    };
+
+    new Chart(document.getElementById('distanceEnergyChart'), {
+      type: 'bar',
+      data: {
+        labels: chartData.labels,
+        datasets: [
+          {
+            type: 'bar',
+            label: `Distance (${distanceLabel})`,
+            data: chartData.distance,
+            backgroundColor: 'rgba(76, 110, 245, 0.42)',
+            borderColor: 'rgba(46, 74, 166, 0.9)',
+            borderWidth: 1
+          },
+          {
+            type: 'line',
+            label: 'Energy Used (kWh)',
+            data: chartData.energy,
+            borderColor: 'rgba(13, 110, 253, 1)',
+            backgroundColor: 'rgba(13, 110, 253, 0.15)',
+            tension: 0.3,
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        ...commonOpts,
+        scales: {
+          ...commonOpts.scales,
+          y: { title: { display: true, text: `Distance (${distanceLabel})` } },
+          y1: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            title: { display: true, text: 'Energy (kWh)' }
+          }
+        }
+      }
+    });
+
+    new Chart(document.getElementById('batteryRangeChart'), {
+      type: 'line',
+      data: {
+        labels: chartData.labels,
+        datasets: [
+          {
+            label: 'SOC Drop (%)',
+            data: chartData.soc_drop,
+            borderColor: 'rgba(42, 157, 143, 0.95)',
+            backgroundColor: 'rgba(42, 157, 143, 0.2)',
+            tension: 0.3
+          },
+          {
+            label: `Range Drop (${distanceLabel})`,
+            data: chartData.range_drop,
+            borderColor: 'rgba(230, 111, 81, 0.95)',
+            backgroundColor: 'rgba(230, 111, 81, 0.2)',
+            tension: 0.3,
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        ...commonOpts,
+        scales: {
+          ...commonOpts.scales,
+          y: { title: { display: true, text: 'SOC Drop (%)' } },
+          y1: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            title: { display: true, text: `Range Drop (${distanceLabel})` }
+          }
+        }
+      }
+    });
+
+    new Chart(document.getElementById('efficiencyChart'), {
+      type: 'line',
+      data: {
+        labels: chartData.labels,
+        datasets: [
+          {
+            label: efficiencyLabel,
+            data: chartData.efficiency,
+            borderColor: 'rgba(69, 123, 157, 0.95)',
+            backgroundColor: 'rgba(69, 123, 157, 0.2)',
+            tension: 0.28
+          }
+        ]
+      },
+      options: {
+        ...commonOpts,
+        scales: {
+          ...commonOpts.scales,
+          y: { title: { display: true, text: efficiencyLabel } }
+        }
+      }
+    });
+  }
+
+  const points = {{ map_points|tojson }};
+  if (points && points.length) {
+    const map = L.map('drive-map', { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const latLngs = points.map((p) => [p.lat, p.lon]);
+    const route = L.polyline(latLngs, {
+      color: '#316bcf',
+      weight: 4,
+      opacity: 0.85
+    }).addTo(map);
+
+    L.circleMarker(latLngs[0], {
+      radius: 7,
+      color: '#1f7a4f',
+      fillColor: '#1f7a4f',
+      fillOpacity: 0.9
+    }).addTo(map).bindPopup('Start');
+
+    L.circleMarker(latLngs[latLngs.length - 1], {
+      radius: 7,
+      color: '#b42318',
+      fillColor: '#b42318',
+      fillOpacity: 0.9
+    }).addTo(map).bindPopup('End');
+
+    route.bindTooltip(`Points: ${points.length}`, { sticky: true });
+    map.fitBounds(route.getBounds(), { padding: [20, 20] });
+  }
+</script>
+{% endblock %}
