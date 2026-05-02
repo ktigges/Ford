@@ -217,7 +217,23 @@ const paddedMax = (arr, fallback = 10) => {
   const max = Math.max(...vals);
   return max <= 0 ? fallback : Math.ceil(max * 1.15);
 };
+const percentile = (arr, p) => {
+  const vals = numericValues(arr).slice().sort((a, b) => a - b);
+  if (!vals.length) return null;
+  const idx = Math.min(vals.length - 1, Math.max(0, Math.floor((p / 100) * (vals.length - 1))));
+  return vals[idx];
+};
+const robustRange = (arr, fallbackMin = 0, fallbackMax = 30) => {
+  const vals = numericValues(arr);
+  if (!vals.length) return { min: fallbackMin, max: fallbackMax };
+  const p10 = percentile(vals, 10);
+  const p90 = percentile(vals, 90);
+  if (p10 === null || p90 === null || p90 <= p10) return { min: fallbackMin, max: paddedMax(vals, fallbackMax) };
+  const pad = (p90 - p10) * 0.2;
+  return { min: Math.max(0, Math.floor(p10 - pad)), max: Math.ceil(p90 + pad) };
+};
 if (driveChartData.labels && driveChartData.labels.length > 0) {
+  const speedRange = robustRange(driveChartData.speed, 0, 30);
   new Chart(document.getElementById('driveChart'), {
     type: 'line',
     data: {
@@ -235,8 +251,8 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
       scales: {
         y: {
           position: 'left',
-          beginAtZero: true,
-          suggestedMax: paddedMax(driveChartData.speed, 20),
+          min: speedRange.min,
+          max: Math.max(speedRange.max, 15),
           title: { display: true, text: speedLabel }
         },
         y1: {

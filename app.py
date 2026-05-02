@@ -302,6 +302,28 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             return True
 
+    def _charging_mode_from_data(charging: dict | None, voltage_series: list[int | None]) -> str:
+        """Infer charging profile from power-type hints and observed voltage samples."""
+        power_type = (charging.get("charger_power_type") if charging else "") or ""
+        normalized = power_type.strip().lower()
+        if "dc" in normalized:
+            return "dc"
+        if "ac" in normalized:
+            return "ac"
+
+        valid_voltages = [float(v) for v in voltage_series if v is not None]
+        if valid_voltages:
+            high_count = sum(1 for v in valid_voltages if v >= 280)
+            if high_count >= max(1, int(len(valid_voltages) * 0.25)):
+                return "dc"
+        return "ac"
+
+    def _charging_axis_for_mode(mode: str) -> dict:
+        """Return fixed, readable voltage axis bounds for AC/DC charging profiles."""
+        if mode == "dc":
+            return {"mode": "dc", "label": "DC Fast", "min": 200, "max": 520}
+        return {"mode": "ac", "label": "AC / L1-L2", "min": 80, "max": 300}
+
     def _display_timezone() -> tuple[timezone | ZoneInfo, str]:
         """Resolve configured display timezone, with safe UTC fallback."""
         if db.is_available():
@@ -599,6 +621,12 @@ def create_app() -> Flask:
         """Show current charging state plus recent charging history samples."""
         vin = _active_vin()
         charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
+        charging_display = dict(charging) if charging else None
+        if charging_display and _plug_status_idle(charging_display.get("plug_status")):
+            charging_display["time_to_full_min"] = None
+            charging_display["charger_current"] = None
+            charging_display["charger_voltage"] = None
+            charging_display["evse_dc_current"] = None
         battery = db.fetch_one("SELECT * FROM battery_state WHERE vin = %s", (vin,)) if vin else None
         environment = db.fetch_one("SELECT * FROM environment_state WHERE vin = %s", (vin,)) if vin else None
 
@@ -613,24 +641,45 @@ def create_app() -> Flask:
         charging_chart_data = {"labels": [], "soc": [], "voltage": []}
         if history:
             for row in reversed(history):
+                soc_raw = row.get("soc_percent")
+                voltage_raw = row.get("charger_voltage")
+                try:
+                    soc_val = round(float(soc_raw), 1) if soc_raw is not None else None
+                except (TypeError, ValueError):
+                    soc_val = None
+                try:
+                    voltage_val = int(float(voltage_raw)) if voltage_raw is not None else None
+                except (TypeError, ValueError):
+                    voltage_val = None
+
+                if soc_val is not None and not (0 <= soc_val <= 100):
+                    soc_val = None
+                if voltage_val is not None and not (80 <= voltage_val <= 500):
+                    voltage_val = None
+
                 charging_chart_data["labels"].append(_format_local_datetime(row.get("polled_at"), "%m-%d %H:%M"))
-                charging_chart_data["soc"].append(round(float(row.get("soc_percent", 0)), 1) if row.get("soc_percent") is not None else None)
-                charging_chart_data["voltage"].append(int(float(row.get("charger_voltage", 0))) if row.get("charger_voltage") is not None else None)
+                charging_chart_data["soc"].append(soc_val)
+                charging_chart_data["voltage"].append(voltage_val)
+
+        charging_axis = _charging_axis_for_mode(
+            _charging_mode_from_data(charging, charging_chart_data["voltage"])
+        )
 
         refresh_interval = request.args.get("refresh", 0, type=int)
 
         return render_template(
             "charging.html",
             vin=vin,
-            charging=charging,
+            charging=charging_display,
             plug_connected=_plug_status_connected(charging.get("plug_status") if charging else None),
             charging_active=_charging_is_active(charging),
-            charging_power_kw=_charging_power_kw_from_row(charging),
+            charging_power_kw=_charging_power_kw_from_row(charging_display),
             battery=battery,
             environment=environment,
             history=history,
             history_available=_table_exists("charging_history"),
             charging_chart_data=charging_chart_data,
+            charging_axis=charging_axis,
             refresh_interval=refresh_interval,
             display_timezone=_display_timezone()[1],
         )
@@ -695,6 +744,7 @@ def create_app() -> Flask:
 
         # Charging history data (if available)
         charging_data = {"labels": [], "soc": [], "voltage": []}
+        charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
         if _table_exists("charging_history"):
             charging_rows = db.fetch_all(
                 """
@@ -707,9 +757,29 @@ def create_app() -> Flask:
                 (vin,),
             )
             for row in charging_rows:
+                soc_raw = row.get("soc_percent")
+                voltage_raw = row.get("charger_voltage")
+                try:
+                    soc_val = round(float(soc_raw), 1) if soc_raw is not None else None
+                except (TypeError, ValueError):
+                    soc_val = None
+                try:
+                    voltage_val = int(float(voltage_raw)) if voltage_raw is not None else None
+                except (TypeError, ValueError):
+                    voltage_val = None
+
+                if soc_val is not None and not (0 <= soc_val <= 100):
+                    soc_val = None
+                if voltage_val is not None and not (80 <= voltage_val <= 500):
+                    voltage_val = None
+
                 charging_data["labels"].append(_format_local_datetime(row.get("polled_at"), "%m-%d %H:%M"))
-                charging_data["soc"].append(round(float(row.get("soc_percent", 0)), 1) if row.get("soc_percent") is not None else None)
-                charging_data["voltage"].append(int(float(row.get("charger_voltage", 0))) if row.get("charger_voltage") is not None else None)
+                charging_data["soc"].append(soc_val)
+                charging_data["voltage"].append(voltage_val)
+
+        charging_axis = _charging_axis_for_mode(
+            _charging_mode_from_data(charging, charging_data["voltage"])
+        )
 
         latest_drive = db.fetch_one(
             """
@@ -758,6 +828,7 @@ def create_app() -> Flask:
             vin=vin,
             chart_data=chart_data,
             charging_data=charging_data,
+            charging_axis=charging_axis,
             latest_drive=latest_drive,
             map_points=map_points,
             distance_label=units.unit_label("distance", system),
@@ -826,11 +897,19 @@ def create_app() -> Flask:
 
         for row in points:
             labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
-            speed_series.append(
+            speed_val = (
                 round(units.convert_for_display(row["speed_kmh"], "speed_kmh", system), 1)
                 if row.get("speed_kmh") is not None else None
             )
-            soc_series.append(round(float(row["soc_percent"]), 1) if row.get("soc_percent") is not None else None)
+            if speed_val is not None and not (0 <= speed_val <= 120):
+                speed_val = None
+
+            soc_val = round(float(row["soc_percent"]), 1) if row.get("soc_percent") is not None else None
+            if soc_val is not None and not (0 <= soc_val <= 100):
+                soc_val = None
+
+            speed_series.append(speed_val)
+            soc_series.append(soc_val)
             energy_series.append(round(float(row["energy_remaining_kwh"]), 2) if row.get("energy_remaining_kwh") is not None else None)
 
         drive_chart_data = {

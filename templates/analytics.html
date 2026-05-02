@@ -28,6 +28,7 @@
 {% if charging_data.labels and charging_data.labels|length > 0 %}
 <div class="card">
   <h2>Charging History</h2>
+  <p class="muted" style="margin-top:-0.5rem;">Voltage profile: {{ charging_axis.label }}</p>
   <canvas id="chargingChart" height="120"></canvas>
 </div>
 {% endif %}
@@ -67,6 +68,7 @@
 <script>
   const chartData = {{ chart_data|tojson }};
   const chargingData = {{ charging_data|tojson }};
+  const chargingAxis = {{ charging_axis|tojson }};
   const distanceLabel = {{ distance_label|tojson }};
   const efficiencyLabel = {{ efficiency_label|tojson }};
 
@@ -76,6 +78,21 @@
     if (!vals.length) return fallback;
     const max = Math.max(...vals);
     return max <= 0 ? fallback : Math.ceil(max * 1.15);
+  };
+  const percentile = (arr, p) => {
+    const vals = numericValues(arr).slice().sort((a, b) => a - b);
+    if (!vals.length) return null;
+    const idx = Math.min(vals.length - 1, Math.max(0, Math.floor((p / 100) * (vals.length - 1))));
+    return vals[idx];
+  };
+  const robustRange = (arr, fallbackMin = 0, fallbackMax = 100) => {
+    const vals = numericValues(arr);
+    if (!vals.length) return { min: fallbackMin, max: fallbackMax };
+    const p10 = percentile(vals, 10);
+    const p90 = percentile(vals, 90);
+    if (p10 === null || p90 === null || p90 <= p10) return { min: fallbackMin, max: fallbackMax };
+    const pad = (p90 - p10) * 0.2;
+    return { min: Math.floor(p10 - pad), max: Math.ceil(p90 + pad) };
   };
   const minMax = (arr, fallbackMin = 0, fallbackMax = 100) => {
     const vals = numericValues(arr);
@@ -88,19 +105,9 @@
   };
 
   if (chartData.labels && chartData.labels.length) {
-    const commonOpts = {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { position: 'bottom' }
-      },
-      scales: {
-        x: {
-          ticks: { maxTicksLimit: 8 }
-        }
-      }
-    };
+    const distanceYMax = paddedMax(chartData.distance, 10);
+    const energyYMax = paddedMax(chartData.energy, 10);
+    const effRange = robustRange(chartData.efficiency, 0, 60);
 
     // Distance chart
     const distanceEl = document.getElementById('distanceChart');
@@ -118,7 +125,20 @@
           }
         ]
       },
-      options: commonOpts
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom' } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8 } },
+          y: {
+            beginAtZero: true,
+            suggestedMax: distanceYMax,
+            ticks: { maxTicksLimit: 6 }
+          }
+        }
+      }
     });
 
     // Energy chart
@@ -137,7 +157,20 @@
           }
         ]
       },
-      options: commonOpts
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom' } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8 } },
+          y: {
+            beginAtZero: true,
+            suggestedMax: energyYMax,
+            ticks: { maxTicksLimit: 6 }
+          }
+        }
+      }
     });
 
     // Efficiency chart
@@ -157,66 +190,26 @@
           }
         ]
       },
-      options: commonOpts
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom' } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8 } },
+          y: {
+            min: Math.max(0, effRange.min),
+            max: Math.max(20, effRange.max),
+            ticks: { maxTicksLimit: 6 },
+            title: { display: true, text: efficiencyLabel }
+          }
+        }
+      }
     });
-
-    const distanceChart = Chart.getChart('distanceChart');
-    if (distanceChart) {
-      distanceChart.options.scales = {
-        ...distanceChart.options.scales,
-        y: {
-          beginAtZero: true,
-          suggestedMax: paddedMax(chartData.distance, 10),
-          ticks: { maxTicksLimit: 6 }
-        }
-      };
-      distanceChart.update();
-    }
-
-    const energyChart = Chart.getChart('energyChart');
-    if (energyChart) {
-      energyChart.options.scales = {
-        ...energyChart.options.scales,
-        y: {
-          beginAtZero: true,
-          suggestedMax: paddedMax(chartData.energy, 10),
-          ticks: { maxTicksLimit: 6 }
-        }
-      };
-      energyChart.update();
-    }
-
-    const efficiencyChart = Chart.getChart('efficiencyChart');
-    if (efficiencyChart) {
-      efficiencyChart.options.scales = {
-        ...efficiencyChart.options.scales,
-        y: {
-          beginAtZero: true,
-          suggestedMax: paddedMax(chartData.efficiency, 40),
-          ticks: { maxTicksLimit: 6 },
-          title: { display: true, text: efficiencyLabel }
-        }
-      };
-      efficiencyChart.update();
-    }
   }
 
   // Charging chart
   if (chargingData.labels && chargingData.labels.length) {
-    const commonOpts = {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { position: 'bottom' }
-      },
-      scales: {
-        x: {
-          ticks: { maxTicksLimit: 8 }
-        }
-      }
-    };
-
     const chargingEl = document.getElementById('chargingChart');
     if (chargingEl) new Chart(chargingEl, {
       type: 'line',
@@ -244,9 +237,12 @@
         ]
       },
       options: {
-        ...commonOpts,
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom' } },
         scales: {
-          ...commonOpts.scales,
+          x: { ticks: { maxTicksLimit: 8 } },
           y: {
             position: 'left',
             min: 0,
@@ -255,9 +251,10 @@
           },
           y1: {
             position: 'right',
-            ...minMax((chargingData.voltage || []).filter((v) => Number.isFinite(v) && v >= 50 && v <= 1000), 80, 300),
+            min: Number.isFinite(chargingAxis.min) ? chargingAxis.min : 80,
+            max: Number.isFinite(chargingAxis.max) ? chargingAxis.max : 300,
             grid: { drawOnChartArea: false },
-            title: { display: true, text: 'Voltage (V)' }
+            title: { display: true, text: `Voltage (V) - ${chargingAxis.label || 'AC / L1-L2'}` }
           }
         }
       }
