@@ -1,8 +1,8 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.2.1  
-**Date:** 2026-04-28
+**Version:** 0.3.1  
+**Date:** 2026-05-02
 
 ---
 
@@ -103,6 +103,7 @@ Self-contained OAuth module for Ford's Azure AD B2C endpoint. Handles token refr
 | `_build_token_fields(creds)` | Build multipart form fields for a token refresh request. Uses `redirect_url` (Ford's non-standard field name). |
 | `refresh_access_token(creds)` | Perform a refresh-token grant against Ford's token endpoint. Persists the new tokens and handles rotation-safe refresh-token updates. |
 | `validate_credentials(form_data)` | Test OAuth credentials by attempting a token refresh. Used by the setup UI to verify before saving. Returns `(token_data, None)` or `(None, error_message)`. |
+| `exchange_authorization_code(form_data, auth_code)` | Exchange an OAuth authorization code for `access_token` + `refresh_token`. Returns `(token_data, None)` or `(None, error_message)`. |
 | `save_credentials(provider, vin, form_data, token_data)` | Insert or upsert OAuth credentials with validated token data. The `client_secret` is encrypted before storage. |
 | `_persist_tokens(cred_id, ...)` | Internal helper to update access_token, expiry, and refresh_token on an existing credential row. |
 
@@ -202,7 +203,7 @@ The main application factory. Creates the Flask app, initializes logging and dat
 | `/` | GET | **Dashboard** — vehicle overview, battery summary, poller status. |
 | `/vehicle` | GET | **Vehicle State** — detailed view of all state tables with unit-converted values. |
 | `/telemetry` | GET | **Telemetry** — poll count, latest timestamp, recent poll history. |
-| `/oauth` | GET, POST | **OAuth Config** — enter/update Ford API credentials. Validates by attempting a token refresh, then triggers initial data poll. |
+| `/oauth` | GET, POST | **OAuth Config** — manual paste-code flow. Enter OAuth settings, paste authorization code (or refresh token), exchange/validate, save credentials, then trigger initial data poll. |
 | `/poller` | GET, POST | **Poller Control** — start/stop the background poller, view collector status. |
 | `/settings` | GET, POST | **Settings** — toggle metric/imperial display, configure polling intervals, change runtime log level. |
 | `/settings/ssl` | POST | Upload SSL cert/key files and enable/disable HTTPS. Requires restart. |
@@ -526,7 +527,52 @@ The app will start with `ssl_context=(cert, key)`. If the cert/key files are mis
 
 ---
 
+## Manual OAuth Authorization-Code Flow
+
+Current setup is manual by design.
+
+1. In the app, open `/oauth` and fill in provider, client_id, client_secret, scope, authorize URL, redirect URI, and token endpoint.
+2. Build and open your authorize URL in a browser using:
+   `authorize_endpoint?response_type=code&client_id=...&redirect_uri=...&scope=...`
+3. Authenticate with Ford and copy the `code` value returned to your redirect URI.
+4. Paste the code into the **Authorization Code** field.
+5. Click **Exchange Code / Validate Refresh Token & Save**.
+6. The app exchanges the code at the token endpoint, stores both `access_token` and `refresh_token`, then runs initial garage + telemetry setup.
+
+If your provider policy does not allow localhost redirect URIs, use a registered public HTTPS redirect URI.
+
+---
+
+## Reset Database from schema.sql
+
+Use the standalone script below when schema changes require a clean rebuild:
+
+`scripts/reset_db_from_schema.sh`
+
+This script drops the target DB, recreates it, and reapplies `schema.sql`.
+
+```bash
+# From project root
+./scripts/reset_db_from_schema.sh
+
+# Non-interactive
+./scripts/reset_db_from_schema.sh --yes
+
+# Override connection settings
+DB_HOST=localhost DB_PORT=5432 DB_NAME=lightning DB_USER=lightning DB_PASSWORD=lightningpass \
+  ./scripts/reset_db_from_schema.sh --yes
+```
+
+Requires PostgreSQL client tools: `dropdb`, `createdb`, and `psql`.
+
+---
+
 ## Changelog
+
+### v0.3.1 — 2026-05-02
+- OAuth setup updated for manual authorization-code paste flow.
+- Added authorization-code exchange path to obtain and persist both access and refresh tokens.
+- Added `scripts/reset_db_from_schema.sh` to rebuild the database from `schema.sql`.
 
 ### v0.2.1 — 2026-04-28
 - **Conservative polling mode** — when enabled, idle vehicles are still polled at normal intervals but telemetry records are only written to the DB when the vehicle state changes or once every 60 minutes. Active states (ignition on/run/start, gear in drive/reverse, speed > 0, charging) always write normally.

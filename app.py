@@ -186,7 +186,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.3.0"
+    app.config["APP_VERSION"] = "0.3.1"
 
     # ── Settings helper (reads from app_config table) ──────────────
 
@@ -533,24 +533,55 @@ def create_app() -> Flask:
                 "redirect_uri": request.form.get("redirect_uri", "").strip(),
                 "refresh_token": request.form.get("refresh_token", "").strip(),
                 "token_endpoint": request.form.get("token_endpoint", "").strip(),
+                "authorize_endpoint": request.form.get("authorize_endpoint", "").strip(),
+                "authorization_code": request.form.get("authorization_code", "").strip(),
             }
 
             vin = _active_vin()
 
-            # Basic presence validation
-            missing = [k for k in ("client_id", "client_secret", "refresh_token", "token_endpoint") if not form[k]]
+            # Save authorize endpoint preference so it persists in the UI.
+            if form["authorize_endpoint"]:
+                _set_setting(
+                    "oauth_authorize_endpoint",
+                    form["authorize_endpoint"],
+                    "OAuth authorization endpoint URL",
+                )
+
+            # Shared required fields
+            missing = [k for k in ("client_id", "client_secret", "token_endpoint") if not form[k]]
             if missing:
                 flash(f"Missing required fields: {', '.join(missing)}", "error")
                 return render_template("oauth_config.html", vin=vin, form=form)
 
-            # Validate by attempting a token refresh
-            log.info("OAuth form submitted – validating credentials...")
-            token_data, err = oauth.validate_credentials(form)
+            # Two supported paths:
+            # 1) Existing refresh-token validation flow
+            # 2) New authorization-code exchange flow
+            if form["authorization_code"]:
+                log.info("OAuth form submitted – exchanging authorization code...")
+                token_data, err = oauth.exchange_authorization_code(
+                    form, form["authorization_code"]
+                )
+            else:
+                if not form["refresh_token"]:
+                    flash("Provide either a refresh token or an authorization code.", "error")
+                    return render_template("oauth_config.html", vin=vin, form=form)
+                log.info("OAuth form submitted – validating credentials via refresh token...")
+                token_data, err = oauth.validate_credentials(form)
+
             if err:
                 log.warning("OAuth validation FAILED: %s", err)
                 flash(err, "error")
                 return render_template("oauth_config.html", vin=vin, form=form)
             log.info("OAuth validation SUCCEEDED – token received")
+
+            # Ensure refresh token is available for ongoing background polling.
+            if not token_data.get("refresh_token") and not form["refresh_token"]:
+                flash(
+                    "OAuth succeeded but no refresh_token was returned. "
+                    "Request offline access and include required scopes.",
+                    "error",
+                )
+                return render_template("oauth_config.html", vin=vin, form=form)
 
             # Save credentials (VIN may be None on first setup — will be
             # updated after garage discovery in initial_setup_poll)
@@ -597,6 +628,8 @@ def create_app() -> Flask:
             "redirect_uri": (existing or {}).get("redirect_uri", ""),
             "refresh_token": (existing or {}).get("refresh_token", ""),
             "token_endpoint": (existing or {}).get("token_endpoint", ""),
+            "authorize_endpoint": _get_setting("oauth_authorize_endpoint"),
+            "authorization_code": "",
         }
         return render_template("oauth_config.html", vin=vin, form=form)
 

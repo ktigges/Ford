@@ -233,6 +233,48 @@ def validate_credentials(form_data: dict) -> tuple[dict | None, str | None]:
     return body, None
 
 
+def exchange_authorization_code(form_data: dict, auth_code: str) -> tuple[dict | None, str | None]:
+    """Exchange an OAuth authorization code for access/refresh tokens.
+
+    Uses multipart/form-data to align with the existing Ford token-exchange flow.
+    """
+    fields = {
+        "grant_type": (None, "authorization_code"),
+        "code": (None, auth_code),
+        "client_id": (None, form_data["client_id"]),
+        "client_secret": (None, form_data["client_secret"]),
+        "redirect_uri": (None, form_data.get("redirect_uri", "")),
+    }
+    if form_data.get("scope"):
+        fields["scope"] = (None, form_data["scope"])
+
+    log.info("[TOKEN EXCHANGE] Exchanging authorization code at %s  fields=%s",
+             form_data["token_endpoint"],
+             [k for k in fields])
+
+    try:
+        resp = requests.post(form_data["token_endpoint"], files=fields, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        log.error("[TOKEN EXCHANGE] FAILED: %s", exc)
+        if hasattr(exc, "response") and exc.response is not None:
+            log.error("[TOKEN EXCHANGE] Response status: %d  body: %s",
+                      exc.response.status_code, exc.response.text[:500])
+        return None, f"Authorization-code exchange failed: {exc}"
+
+    body = resp.json()
+    if "access_token" not in body:
+        return None, "OAuth response missing access_token"
+    if "refresh_token" not in body:
+        return None, (
+            "OAuth response missing refresh_token. Ensure your OAuth app requests "
+            "offline access and the correct scopes."
+        )
+
+    log_token_diagnostics(body["access_token"], context="auth_code_exchange")
+    return body, None
+
+
 # ── Save credentials ──────────────────────────────────────────────
 
 def save_credentials(provider: str, vin: str | None, form_data: dict, token_data: dict) -> None:
