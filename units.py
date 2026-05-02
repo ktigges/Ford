@@ -10,7 +10,7 @@ Usage in templates via Jinja globals:
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
+Version:     0.3.0
 Date:        2026-04-28
 """
 
@@ -145,16 +145,25 @@ _LABELS = {
 # Which fields need conversion and what category they belong to
 FIELD_CATEGORIES = {
     "speed_mph": "speed",
+    "speed_kmh": "speed",
+    "max_speed_kmh": "speed",
     "odometer_miles": "distance",
     "range_miles": "distance",
+    "distance_km": "distance",
+    "battery_max_range_km": "distance",
+    "trip_distance_km": "distance",
+    "trip_regen_range_km": "distance",
     "temperature_c": "temperature",
     "ambient_temp_c": "temperature",
     "outside_temp_c": "temperature",
+    "battery_temp_c": "temperature",
+    "engine_coolant_temp_c": "temperature",
     "pressure_kpa": "pressure",
     "placard_kpa": "pressure",
     "altitude_m": "altitude",
     "brake_torque": "torque",
     "transmission_torque": "torque",
+    "torque_at_transmission": "torque",
 }
 
 

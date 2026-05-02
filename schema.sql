@@ -322,6 +322,11 @@ CREATE TABLE drives (
     -- Status
     in_progress BOOLEAN DEFAULT TRUE,
 
+    -- Derived stats (updated on drive end)
+    duration_sec REAL,
+    max_speed_kmh REAL,
+    regen_energy_kwh REAL,
+
     created_at TIMESTAMPTZ DEFAULT now(),
 
     UNIQUE (drive_uuid)
@@ -341,6 +346,8 @@ CREATE TABLE drive_points (
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     altitude_m DOUBLE PRECISION,
+    gear_position TEXT,
+    ignition_status TEXT,
 
     -- Battery
     soc_percent REAL,
@@ -349,6 +356,7 @@ CREATE TABLE drive_points (
     battery_voltage REAL,
     battery_current REAL,
     battery_temp_c REAL,
+    battery_max_range_km REAL,
 
     -- Powertrain
     motor_current REAL,
@@ -356,10 +364,18 @@ CREATE TABLE drive_points (
     torque_at_transmission REAL,
     accelerator_pedal_pct REAL,
     brake_torque REAL,
+    hybrid_mode TEXT,
+
+    -- Trip computer (from Ford)
+    trip_distance_km REAL,
+    trip_regen_range_km REAL,
+    trip_regen_charge_kwh REAL,
+    trip_fuel_economy REAL,
 
     -- Environment
     ambient_temp_c REAL,
     outside_temp_c REAL,
+    engine_coolant_temp_c REAL,
 
     created_at TIMESTAMPTZ DEFAULT now()
 );
