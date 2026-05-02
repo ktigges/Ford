@@ -253,12 +253,33 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             return None
 
+    def _plug_status_idle(plug_status: str | None) -> bool:
+        """Return True when Ford's plug status represents unplugged/idle state."""
+        normalized = (plug_status or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return normalized in {
+            "",
+            "unknown",
+            "unplugged",
+            "disconnected",
+            "not_connected",
+            "no_connection",
+            "dc_disconnected",
+            "ac_disconnected",
+        }
+
+    def _plug_status_connected(plug_status: str | None) -> bool:
+        """Return True when Ford's plug status indicates the cable is attached."""
+        if _plug_status_idle(plug_status):
+            return False
+        normalized = (plug_status or "").strip().lower()
+        return any(token in normalized for token in ("connected", "plugged", "charging"))
+
     def _charging_is_active(charging: dict | None) -> bool:
         """Return True when the latest charging row indicates active charging."""
         if not charging:
             return False
         plug_status = (charging.get("plug_status") or "").lower()
-        if plug_status in ("", "unknown", "unplugged"):
+        if _plug_status_idle(plug_status):
             return False
         time_to_full = charging.get("time_to_full_min")
         if time_to_full is None:
@@ -487,6 +508,7 @@ def create_app() -> Flask:
             battery=battery,
             vehicle=vehicle,
             charging=charging,
+            plug_connected=_plug_status_connected(charging.get("plug_status") if charging else None),
             charging_active=_charging_is_active(charging),
             charging_power_kw=_charging_power_kw_from_row(charging),
             tires=tires,
@@ -550,6 +572,7 @@ def create_app() -> Flask:
             "charging.html",
             vin=vin,
             charging=charging,
+            plug_connected=_plug_status_connected(charging.get("plug_status") if charging else None),
             charging_active=_charging_is_active(charging),
             charging_power_kw=_charging_power_kw_from_row(charging),
             battery=battery,

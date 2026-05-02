@@ -126,7 +126,7 @@
       <tr>
         <th>Plug</th>
         <td>
-          {% if charging.plug_status and 'connect' in charging.plug_status|lower %}
+          {% if plug_connected %}
             <span class="badge ok">{{ charging.plug_status }}</span>
           {% else %}
             <span class="badge off">{{ charging.plug_status or 'Unknown' }}</span>
