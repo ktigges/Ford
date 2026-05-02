@@ -111,6 +111,20 @@
 <script>
 const cdata = JSON.parse(document.getElementById('charging-chart-data').textContent || '{}');
 const axis = JSON.parse(document.getElementById('charging-axis-data').textContent || '{}');
+const voltageValues = (cdata.voltage || []).filter((v) => Number.isFinite(v));
+let y1Min = Number.isFinite(axis.min) ? axis.min : 80;
+let y1Max = Number.isFinite(axis.max) ? axis.max : 300;
+let y1LabelSuffix = axis.label || 'AC / L1-L2';
+if (voltageValues.length) {
+  const outOfRange = voltageValues.filter((v) => v < y1Min || v > y1Max).length;
+  if ((outOfRange / voltageValues.length) > 0.2) {
+    const observedMin = Math.min(...voltageValues);
+    const observedMax = Math.max(...voltageValues);
+    y1Min = Math.floor(observedMin - 5);
+    y1Max = Math.ceil(observedMax + 5);
+    y1LabelSuffix = `${y1LabelSuffix} (auto-range)`;
+  }
+}
 
 if (cdata.labels && cdata.labels.length > 0) {
   new Chart(document.getElementById('chargingHistoryChart'), {
@@ -129,10 +143,10 @@ if (cdata.labels && cdata.labels.length > 0) {
         y: { position: 'left', min: 0, max: 100, title: { display: true, text: 'Charge %' } },
         y1: {
           position: 'right',
-          min: Number.isFinite(axis.min) ? axis.min : 80,
-          max: Number.isFinite(axis.max) ? axis.max : 300,
+          min: y1Min,
+          max: y1Max,
           grid: { drawOnChartArea: false },
-          title: { display: true, text: `Voltage (V) - ${axis.label || 'AC / L1-L2'}` }
+          title: { display: true, text: `Voltage (V) - ${y1LabelSuffix}` }
         }
       }
     }

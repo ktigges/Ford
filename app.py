@@ -324,6 +324,18 @@ def create_app() -> Flask:
             return {"mode": "dc", "label": "DC Fast", "min": 200, "max": 520}
         return {"mode": "ac", "label": "AC / L1-L2", "min": 80, "max": 300}
 
+    def _charging_sample_meaningful(row: dict) -> bool:
+        """Return True when a history row likely represents a real charging sample."""
+        if not _plug_status_idle(row.get("plug_status")):
+            return True
+        power_raw = row.get("charge_power_kw")
+        if power_raw is None:
+            return False
+        try:
+            return float(power_raw) > 0.1
+        except (TypeError, ValueError):
+            return False
+
     def _display_timezone() -> tuple[timezone | ZoneInfo, str]:
         """Resolve configured display timezone, with safe UTC fallback."""
         if db.is_available():
@@ -641,6 +653,9 @@ def create_app() -> Flask:
         charging_chart_data = {"labels": [], "soc": [], "voltage": []}
         if history:
             for row in reversed(history):
+                if not _charging_sample_meaningful(row):
+                    continue
+
                 soc_raw = row.get("soc_percent")
                 voltage_raw = row.get("charger_voltage")
                 try:
@@ -664,6 +679,10 @@ def create_app() -> Flask:
         charging_axis = _charging_axis_for_mode(
             _charging_mode_from_data(charging, charging_chart_data["voltage"])
         )
+        charging_chart_data["voltage"] = [
+            v if (v is None or (charging_axis["min"] <= v <= charging_axis["max"])) else None
+            for v in charging_chart_data["voltage"]
+        ]
 
         refresh_interval = request.args.get("refresh", 0, type=int)
 
@@ -757,6 +776,9 @@ def create_app() -> Flask:
                 (vin,),
             )
             for row in charging_rows:
+                if not _charging_sample_meaningful(row):
+                    continue
+
                 soc_raw = row.get("soc_percent")
                 voltage_raw = row.get("charger_voltage")
                 try:
@@ -780,6 +802,10 @@ def create_app() -> Flask:
         charging_axis = _charging_axis_for_mode(
             _charging_mode_from_data(charging, charging_data["voltage"])
         )
+        charging_data["voltage"] = [
+            v if (v is None or (charging_axis["min"] <= v <= charging_axis["max"])) else None
+            for v in charging_data["voltage"]
+        ]
 
         latest_drive = db.fetch_one(
             """
