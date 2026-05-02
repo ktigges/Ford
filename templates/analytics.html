@@ -7,12 +7,12 @@
 {% if chart_data.labels %}
 <div class="card-grid analytics-grid">
   <div class="card">
-    <h2>Distance vs Energy</h2>
-    <canvas id="distanceEnergyChart" height="120"></canvas>
+    <h2>Distance per Drive</h2>
+    <canvas id="distanceChart" height="120"></canvas>
   </div>
   <div class="card">
-    <h2>Battery & Range Drop per Drive</h2>
-    <canvas id="batteryRangeChart" height="120"></canvas>
+    <h2>Energy Used per Drive</h2>
+    <canvas id="energyChart" height="120"></canvas>
   </div>
   <div class="card">
     <h2>Efficiency Trend</h2>
@@ -22,6 +22,13 @@
 {% else %}
 <div class="card">
   <p>No drive history yet. Start driving and this page will populate automatically.</p>
+</div>
+{% endif %}
+
+{% if charging_data.labels and charging_data.labels.length %}
+<div class="card">
+  <h2>Charging History</h2>
+  <canvas id="chargingChart" height="120"></canvas>
 </div>
 {% endif %}
 
@@ -36,6 +43,7 @@
     {% else %}
       in progress
     {% endif %})
+    — {{ map_points|length }} points recorded
   </p>
   <div id="drive-map" class="drive-map"></div>
   {% else %}
@@ -58,9 +66,9 @@
 
 <script>
   const chartData = {{ chart_data|tojson }};
+  const chargingData = {{ charging_data|tojson }};
   const distanceLabel = {{ distance_label|tojson }};
   const efficiencyLabel = {{ efficiency_label|tojson }};
-  const speedLabel = {{ speed_label|tojson }};
 
   if (chartData.labels && chartData.labels.length) {
     const commonOpts = {
@@ -77,80 +85,43 @@
       }
     };
 
-    new Chart(document.getElementById('distanceEnergyChart'), {
+    // Distance chart
+    new Chart(document.getElementById('distanceChart'), {
       type: 'bar',
       data: {
         labels: chartData.labels,
         datasets: [
           {
-            type: 'bar',
             label: `Distance (${distanceLabel})`,
             data: chartData.distance,
-            backgroundColor: 'rgba(76, 110, 245, 0.42)',
-            borderColor: 'rgba(46, 74, 166, 0.9)',
+            backgroundColor: 'rgba(45, 95, 154, 0.6)',
+            borderColor: 'rgba(45, 95, 154, 1)',
             borderWidth: 1
-          },
-          {
-            type: 'line',
-            label: 'Energy Used (kWh)',
-            data: chartData.energy,
-            borderColor: 'rgba(13, 110, 253, 1)',
-            backgroundColor: 'rgba(13, 110, 253, 0.15)',
-            tension: 0.3,
-            yAxisID: 'y1'
           }
         ]
       },
-      options: {
-        ...commonOpts,
-        scales: {
-          ...commonOpts.scales,
-          y: { title: { display: true, text: `Distance (${distanceLabel})` } },
-          y1: {
-            position: 'right',
-            grid: { drawOnChartArea: false },
-            title: { display: true, text: 'Energy (kWh)' }
-          }
-        }
-      }
+      options: commonOpts
     });
 
-    new Chart(document.getElementById('batteryRangeChart'), {
-      type: 'line',
+    // Energy chart
+    new Chart(document.getElementById('energyChart'), {
+      type: 'bar',
       data: {
         labels: chartData.labels,
         datasets: [
           {
-            label: 'SOC Drop (%)',
-            data: chartData.soc_drop,
-            borderColor: 'rgba(42, 157, 143, 0.95)',
-            backgroundColor: 'rgba(42, 157, 143, 0.2)',
-            tension: 0.3
-          },
-          {
-            label: `Range Drop (${distanceLabel})`,
-            data: chartData.range_drop,
-            borderColor: 'rgba(230, 111, 81, 0.95)',
-            backgroundColor: 'rgba(230, 111, 81, 0.2)',
-            tension: 0.3,
-            yAxisID: 'y1'
+            label: 'Energy Used (kWh)',
+            data: chartData.energy,
+            backgroundColor: 'rgba(230, 111, 81, 0.6)',
+            borderColor: 'rgba(230, 111, 81, 1)',
+            borderWidth: 1
           }
         ]
       },
-      options: {
-        ...commonOpts,
-        scales: {
-          ...commonOpts.scales,
-          y: { title: { display: true, text: 'SOC Drop (%)' } },
-          y1: {
-            position: 'right',
-            grid: { drawOnChartArea: false },
-            title: { display: true, text: `Range Drop (${distanceLabel})` }
-          }
-        }
-      }
+      options: commonOpts
     });
 
+    // Efficiency chart
     new Chart(document.getElementById('efficiencyChart'), {
       type: 'line',
       data: {
@@ -159,9 +130,55 @@
           {
             label: efficiencyLabel,
             data: chartData.efficiency,
-            borderColor: 'rgba(69, 123, 157, 0.95)',
+            borderColor: 'rgba(69, 123, 157, 1)',
             backgroundColor: 'rgba(69, 123, 157, 0.2)',
-            tension: 0.28
+            tension: 0.3,
+            fill: true
+          }
+        ]
+      },
+      options: commonOpts
+    });
+  }
+
+  // Charging chart
+  if (chargingData.labels && chargingData.labels.length) {
+    const commonOpts = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom' }
+      },
+      scales: {
+        x: {
+          ticks: { maxTicksLimit: 8 }
+        }
+      }
+    };
+
+    new Chart(document.getElementById('chargingChart'), {
+      type: 'line',
+      data: {
+        labels: chargingData.labels,
+        datasets: [
+          {
+            type: 'line',
+            label: 'Charge %',
+            data: chargingData.soc,
+            borderColor: 'rgba(42, 157, 143, 0.95)',
+            backgroundColor: 'rgba(42, 157, 143, 0.2)',
+            tension: 0.3,
+            yAxisID: 'y'
+          },
+          {
+            type: 'line',
+            label: 'Input Voltage (V)',
+            data: chargingData.voltage,
+            borderColor: 'rgba(255, 159, 64, 0.95)',
+            backgroundColor: 'rgba(255, 159, 64, 0.2)',
+            tension: 0.3,
+            yAxisID: 'y1'
           }
         ]
       },
@@ -169,43 +186,61 @@
         ...commonOpts,
         scales: {
           ...commonOpts.scales,
-          y: { title: { display: true, text: efficiencyLabel } }
+          y: {
+            position: 'left',
+            title: { display: true, text: 'Charge %' }
+          },
+          y1: {
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            title: { display: true, text: 'Voltage (V)' }
+          }
         }
       }
     });
   }
 
+  // Map initialization
   const points = {{ map_points|tojson }};
-  if (points && points.length) {
-    const map = L.map('drive-map', { scrollWheelZoom: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
+  if (points && points.length > 1) {
+    setTimeout(() => {
+      const map = L.map('drive-map', { scrollWheelZoom: false });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
 
-    const latLngs = points.map((p) => [p.lat, p.lon]);
-    const route = L.polyline(latLngs, {
-      color: '#316bcf',
-      weight: 4,
-      opacity: 0.85
-    }).addTo(map);
+      const latLngs = points.map((p) => [p.lat, p.lon]);
+      
+      // Draw the route polyline
+      const route = L.polyline(latLngs, {
+        color: '#2d5f9a',
+        weight: 3,
+        opacity: 0.85
+      }).addTo(map);
 
-    L.circleMarker(latLngs[0], {
-      radius: 7,
-      color: '#1f7a4f',
-      fillColor: '#1f7a4f',
-      fillOpacity: 0.9
-    }).addTo(map).bindPopup('Start');
+      // Add start marker
+      L.circleMarker(latLngs[0], {
+        radius: 8,
+        color: '#1f7a4f',
+        fillColor: '#1f7a4f',
+        fillOpacity: 0.9,
+        weight: 2
+      }).addTo(map).bindPopup('Start', { autoClose: false });
 
-    L.circleMarker(latLngs[latLngs.length - 1], {
-      radius: 7,
-      color: '#b42318',
-      fillColor: '#b42318',
-      fillOpacity: 0.9
-    }).addTo(map).bindPopup('End');
+      // Add end marker
+      L.circleMarker(latLngs[latLngs.length - 1], {
+        radius: 8,
+        color: '#b42318',
+        fillColor: '#b42318',
+        fillOpacity: 0.9,
+        weight: 2
+      }).addTo(map).bindPopup('End', { autoClose: false });
 
-    route.bindTooltip(`Points: ${points.length}`, { sticky: true });
-    map.fitBounds(route.getBounds(), { padding: [20, 20] });
+      // Fit map to route bounds
+      const bounds = route.getBounds();
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }, 100);
   }
 </script>
 {% endblock %}
