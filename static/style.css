@@ -628,3 +628,83 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
   overflow-wrap: anywhere;
   white-space: normal;
 }
+
+/* Drives summary badges */
+.drives-summary-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.drives-badges {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.badge-count {
+  background: #e7f0ff;
+  color: #184f9c;
+}
+
+.badge-count-complete {
+  background: #e9ecef;
+  color: #495057;
+}
+
+.badge-count-active {
+  background: #d1e7dd;
+  color: #146c43;
+}
+
+/* Drive detail readability */
+.drive-kpi-card {
+  padding: 1rem 1.25rem;
+}
+
+.drive-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.drive-kpi {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.75rem;
+}
+
+.drive-kpi-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
+.drive-kpi-value {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.drive-points-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+}
+
+.drive-points-table {
+  font-size: 0.8rem;
+  min-width: 1250px;
+}
+
+.drive-points-table thead th {
+  position: sticky;
+  top: 0;
+  background: #eef3f8;
+  z-index: 1;
+}
