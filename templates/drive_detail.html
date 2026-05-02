@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Drive {{ drive.drive_uuid|string|truncate(8, True, '') }} – Lightning{% endblock %}
+{% block title %}Drive {{ drive.drive_uuid|string|truncate(8, True, "") }} – Lightning{% endblock %}
 {% block content %}
 <h1>Drive {{ drive.drive_uuid }}</h1>
 <p class="muted">Times are shown in {{ display_timezone }}.</p>
@@ -47,6 +47,15 @@
       <div class="drive-kpi-value">{{ points|length }}</div>
     </div>
   </div>
+</div>
+
+<div class="card">
+  <h2>Drive Analytics</h2>
+  {% if drive_chart_data and drive_chart_data.labels and drive_chart_data.labels|length > 0 %}
+  <canvas id="driveChart" height="120"></canvas>
+  {% else %}
+  <p class="no-data">No drive analytics points available.</p>
+  {% endif %}
 </div>
 
 <div class="card-grid">
@@ -195,4 +204,34 @@
 <div class="btn-group" style="margin-top:1rem;">
   <a href="{{ url_for('drives_list') }}" class="btn">← Back to Drives</a>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script id="drive-chart-data" type="application/json">{{ drive_chart_data|tojson }}</script>
+<span id="drive-speed-label" data-speed-label="{{ speed_label|default('mph') }}" style="display:none;"></span>
+<script>
+const driveChartData = JSON.parse(document.getElementById("drive-chart-data").textContent || "{}");
+const speedLabel = document.getElementById("drive-speed-label").dataset.speedLabel || "mph";
+if (driveChartData.labels && driveChartData.labels.length > 0) {
+  new Chart(document.getElementById('driveChart'), {
+    type: 'line',
+    data: {
+      labels: driveChartData.labels,
+      datasets: [
+        { label: `Speed (${speedLabel})`, data: driveChartData.speed, borderColor: 'rgba(45, 95, 154, 0.95)', backgroundColor: 'rgba(45, 95, 154, 0.2)', tension: 0.2, yAxisID: 'y' },
+        { label: 'SOC %', data: driveChartData.soc, borderColor: 'rgba(42, 157, 143, 0.95)', backgroundColor: 'rgba(42, 157, 143, 0.2)', tension: 0.2, yAxisID: 'y1' },
+        { label: 'Energy Remaining (kWh)', data: driveChartData.energy, borderColor: 'rgba(230, 111, 81, 0.95)', backgroundColor: 'rgba(230, 111, 81, 0.2)', tension: 0.2, yAxisID: 'y2' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        y: { position: 'left', title: { display: true, text: speedLabel } },
+        y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'SOC %' } },
+        y2: { display: false }
+      }
+    }
+  });
+}
+</script>
 {% endblock %}

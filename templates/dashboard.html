@@ -17,6 +17,15 @@
   </div>
 </div>
 
+<div class="card" style="margin-bottom:1rem;">
+  <strong>Auto Refresh:</strong>
+  <a class="btn btn-sm" href="{{ url_for('dashboard') }}">Off</a>
+  <a class="btn btn-sm" href="{{ url_for('dashboard', refresh=15) }}">15s</a>
+  <a class="btn btn-sm" href="{{ url_for('dashboard', refresh=30) }}">30s</a>
+  <a class="btn btn-sm" href="{{ url_for('dashboard', refresh=60) }}">60s</a>
+  {% if refresh_interval %}<span class="muted" style="margin-left:0.5rem;">Enabled: {{ refresh_interval }}s</span>{% endif %}
+</div>
+
 {% if charging_active %}
 <div class="charging-alert card">
   <div>
@@ -208,4 +217,7 @@
   </div>
 
 </div>
+{% if refresh_interval and refresh_interval > 0 %}
+<meta http-equiv="refresh" content="{{ refresh_interval }}">
+{% endif %}
 {% endblock %}

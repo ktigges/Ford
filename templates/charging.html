@@ -10,6 +10,15 @@
   {% endif %}
 </div>
 
+<div class="card" style="margin-bottom:1rem;">
+  <strong>Auto Refresh:</strong>
+  <a class="btn btn-sm" href="{{ url_for('charging_overview') }}">Off</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_overview', refresh=15) }}">15s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_overview', refresh=30) }}">30s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_overview', refresh=60) }}">60s</a>
+  {% if refresh_interval %}<span class="muted" style="margin-left:0.5rem;">Enabled: {{ refresh_interval }}s</span>{% endif %}
+</div>
+
 <div class="card-grid">
   <div class="card">
     <h2>Current Session</h2>
@@ -67,7 +76,7 @@
       <tbody>
         {% for row in history %}
         <tr>
-          <td>{{ row.polled_at.strftime('%Y-%m-%d %H:%M:%S') if row.polled_at else '–' }}</td>
+          <td>{{ format_local_dt(row.polled_at, '%Y-%m-%d %H:%M:%S') if row.polled_at else '–' }}</td>
           <td>{{ row.plug_status or '–' }}</td>
           <td>{{ row.charge_power_kw|round(1) if row.charge_power_kw is not none else '–' }} kW</td>
           <td>{{ row.charger_voltage|round(0)|int if row.charger_voltage is not none else '–' }} V</td>
@@ -85,4 +94,41 @@
   <p class="no-data">No charging history samples recorded yet.</p>
   {% endif %}
 </div>
+
+<div class="card">
+  <h2>Charging Chart (Voltage and Charge %)</h2>
+  {% if charging_chart_data.labels and charging_chart_data.labels|length > 0 %}
+  <canvas id="chargingHistoryChart" height="120"></canvas>
+  {% else %}
+  <p class="no-data">No charging chart data yet.</p>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const cdata = {{ charging_chart_data|tojson }};
+if (cdata.labels && cdata.labels.length > 0) {
+  new Chart(document.getElementById('chargingHistoryChart'), {
+    type: 'line',
+    data: {
+      labels: cdata.labels,
+      datasets: [
+        { label: 'Charge %', data: cdata.soc, borderColor: 'rgba(42, 157, 143, 0.95)', backgroundColor: 'rgba(42, 157, 143, 0.2)', tension: 0.3, yAxisID: 'y' },
+        { label: 'Input Voltage (V)', data: cdata.voltage, borderColor: 'rgba(255, 159, 64, 0.95)', backgroundColor: 'rgba(255, 159, 64, 0.2)', tension: 0.3, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { position: 'left', title: { display: true, text: 'Charge %' } },
+        y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Voltage (V)' } }
+      }
+    }
+  });
+}
+</script>
+{% if refresh_interval and refresh_interval > 0 %}
+<meta http-equiv="refresh" content="{{ refresh_interval }}">
+{% endif %}
 {% endblock %}

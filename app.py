@@ -538,6 +538,7 @@ def create_app() -> Flask:
 
         # Determine vehicle image filename
         vehicle_img = _get_setting("vehicle_image") or "vehicle.png"
+        refresh_interval = request.args.get("refresh", 0, type=int)
 
         return render_template(
             "dashboard.html",
@@ -553,6 +554,7 @@ def create_app() -> Flask:
             tires=tires,
             vehicle_img=vehicle_img,
             poller_running=poller.is_running(),
+            refresh_interval=refresh_interval,
         )
 
     @app.route("/vehicle")
@@ -607,6 +609,16 @@ def create_app() -> Flask:
                 (vin,),
             )
 
+        # Build charging history chart data
+        charging_chart_data = {"labels": [], "soc": [], "voltage": []}
+        if history:
+            for row in reversed(history):
+                charging_chart_data["labels"].append(_format_local_datetime(row.get("polled_at"), "%m-%d %H:%M"))
+                charging_chart_data["soc"].append(round(float(row.get("soc_percent", 0)), 1) if row.get("soc_percent") is not None else None)
+                charging_chart_data["voltage"].append(int(float(row.get("charger_voltage", 0))) if row.get("charger_voltage") is not None else None)
+
+        refresh_interval = request.args.get("refresh", 0, type=int)
+
         return render_template(
             "charging.html",
             vin=vin,
@@ -618,6 +630,9 @@ def create_app() -> Flask:
             environment=environment,
             history=history,
             history_available=_table_exists("charging_history"),
+            charging_chart_data=charging_chart_data,
+            refresh_interval=refresh_interval,
+            display_timezone=_display_timezone()[1],
         )
 
     @app.route("/analytics")
@@ -787,16 +802,46 @@ def create_app() -> Flask:
 
     @app.route("/drives/<int:drive_id>")
     def drive_detail(drive_id):
-        """Show a single drive with all its data points."""
+        """Show a single drive with all its data points and simple analytics."""
         drive = db.fetch_one("SELECT * FROM drives WHERE id = %s", (drive_id,))
         if not drive:
             flash("Drive not found.", "error")
             return redirect(url_for("drives_list"))
+
         points = db.fetch_all(
             "SELECT * FROM drive_points WHERE drive_id = %s ORDER BY recorded_at ASC",
             (drive_id,),
         )
-        return render_template("drive_detail.html", drive=drive, points=points)
+
+        system = _get_setting("units") if db.is_available() else "imperial"
+        labels = []
+        speed_series = []
+        soc_series = []
+        energy_series = []
+
+        for row in points:
+            labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
+            speed_series.append(
+                round(units.convert_for_display(row["speed_kmh"], "speed_kmh", system), 1)
+                if row.get("speed_kmh") is not None else None
+            )
+            soc_series.append(round(float(row["soc_percent"]), 1) if row.get("soc_percent") is not None else None)
+            energy_series.append(round(float(row["energy_remaining_kwh"]), 2) if row.get("energy_remaining_kwh") is not None else None)
+
+        drive_chart_data = {
+            "labels": labels,
+            "speed": speed_series,
+            "soc": soc_series,
+            "energy": energy_series,
+        }
+
+        return render_template(
+            "drive_detail.html",
+            drive=drive,
+            points=points,
+            drive_chart_data=drive_chart_data,
+            speed_label=units.unit_label("speed", system),
+        )
 
     @app.route("/oauth", methods=["GET", "POST"])
     def oauth_config():
