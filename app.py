@@ -635,22 +635,7 @@ def create_app() -> Flask:
                    d.distance_km,
                    d.energy_used_kwh,
                    d.start_soc_percent,
-                   d.end_soc_percent,
-                   d.max_speed_kmh,
-                   (
-                     SELECT dp.battery_max_range_km
-                     FROM drive_points dp
-                     WHERE dp.drive_id = d.id
-                     ORDER BY dp.recorded_at ASC
-                     LIMIT 1
-                   ) AS start_range_km,
-                   (
-                     SELECT dp.battery_max_range_km
-                     FROM drive_points dp
-                     WHERE dp.drive_id = d.id
-                     ORDER BY dp.recorded_at DESC
-                     LIMIT 1
-                   ) AS end_range_km
+                   d.end_soc_percent
             FROM drives d
             WHERE d.vin = %s
             ORDER BY d.started_at DESC
@@ -662,8 +647,6 @@ def create_app() -> Flask:
         labels = []
         distance_data = []
         energy_data = []
-        soc_drop_data = []
-        range_drop_data = []
         efficiency_data = []
 
         for row in reversed(drive_rows):
@@ -673,8 +656,6 @@ def create_app() -> Flask:
             energy_kwh = row.get("energy_used_kwh")
             start_soc = row.get("start_soc_percent")
             end_soc = row.get("end_soc_percent")
-            start_range_km = row.get("start_range_km")
-            end_range_km = row.get("end_range_km")
 
             if distance_km is not None:
                 distance_data.append(round(units.convert_for_display(distance_km, "distance_km", system), 2))
@@ -682,19 +663,6 @@ def create_app() -> Flask:
                 distance_data.append(None)
 
             energy_data.append(round(float(energy_kwh), 2) if energy_kwh is not None else None)
-
-            if start_soc is not None and end_soc is not None:
-                soc_drop_data.append(round(float(start_soc) - float(end_soc), 2))
-            else:
-                soc_drop_data.append(None)
-
-            if start_range_km is not None and end_range_km is not None:
-                range_drop_native = float(start_range_km) - float(end_range_km)
-                range_drop_data.append(
-                    round(units.convert_for_display(range_drop_native, "distance_km", system), 2)
-                )
-            else:
-                range_drop_data.append(None)
 
             if energy_kwh is not None and distance_km is not None and float(distance_km) > 0:
                 distance_display = units.convert_for_display(distance_km, "distance_km", system)
@@ -704,6 +672,24 @@ def create_app() -> Flask:
                     efficiency_data.append(None)
             else:
                 efficiency_data.append(None)
+
+        # Charging history data (if available)
+        charging_data = {"labels": [], "soc": [], "voltage": []}
+        if _table_exists("charging_history"):
+            charging_rows = db.fetch_all(
+                """
+                SELECT polled_at, charger_voltage, soc_percent
+                FROM charging_history
+                WHERE vin = %s
+                ORDER BY polled_at ASC
+                LIMIT 500
+                """,
+                (vin,),
+            )
+            for row in charging_rows:
+                charging_data["labels"].append(_format_local_datetime(row.get("polled_at"), "%m-%d %H:%M"))
+                charging_data["soc"].append(round(float(row.get("soc_percent", 0)), 1) if row.get("soc_percent") is not None else None)
+                charging_data["voltage"].append(int(float(row.get("charger_voltage", 0))) if row.get("charger_voltage") is not None else None)
 
         latest_drive = db.fetch_one(
             """
@@ -726,7 +712,6 @@ def create_app() -> Flask:
                   AND latitude IS NOT NULL
                   AND longitude IS NOT NULL
                 ORDER BY recorded_at ASC
-                LIMIT 4000
                 """,
                 (latest_drive["id"],),
             )
@@ -745,8 +730,6 @@ def create_app() -> Flask:
             "labels": labels,
             "distance": distance_data,
             "energy": energy_data,
-            "soc_drop": soc_drop_data,
-            "range_drop": range_drop_data,
             "efficiency": efficiency_data,
         }
 
@@ -754,6 +737,7 @@ def create_app() -> Flask:
             "analytics.html",
             vin=vin,
             chart_data=chart_data,
+            charging_data=charging_data,
             latest_drive=latest_drive,
             map_points=map_points,
             distance_label=units.unit_label("distance", system),
