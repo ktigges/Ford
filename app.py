@@ -583,17 +583,42 @@ def create_app() -> Flask:
 
     @app.route("/drives")
     def drives_list():
-        """List only active drive sessions for the active VIN."""
+        """Show all drives with summary counters and status."""
         vin = _active_vin()
         drives = db.fetch_all(
             """SELECT d.*,
                       (SELECT count(*) FROM drive_points WHERE drive_id = d.id) AS point_count
                FROM drives d
-               WHERE d.vin = %s AND d.in_progress = TRUE
-               ORDER BY d.started_at DESC LIMIT 50""",
+               WHERE d.vin = %s
+               ORDER BY d.started_at DESC LIMIT 200""",
             (vin,),
         ) if vin else []
-        return render_template("drives.html", vin=vin, drives=drives)
+
+        total_count = len(drives)
+        completed_count = sum(1 for d in drives if not d.get("in_progress"))
+        active_count = total_count - completed_count
+
+        distance_values_km = [float(d["distance_km"]) for d in drives if d.get("distance_km") is not None]
+        energy_values_kwh = [float(d["energy_used_kwh"]) for d in drives if d.get("energy_used_kwh") is not None]
+        max_speed_values_kmh = [float(d["max_speed_kmh"]) for d in drives if d.get("max_speed_kmh") is not None]
+
+        drive_stats = {
+            "total_distance_km": sum(distance_values_km) if distance_values_km else None,
+            "avg_distance_km": (sum(distance_values_km) / len(distance_values_km)) if distance_values_km else None,
+            "total_energy_kwh": sum(energy_values_kwh) if energy_values_kwh else None,
+            "avg_energy_kwh": (sum(energy_values_kwh) / len(energy_values_kwh)) if energy_values_kwh else None,
+            "avg_max_speed_kmh": (sum(max_speed_values_kmh) / len(max_speed_values_kmh)) if max_speed_values_kmh else None,
+        }
+
+        return render_template(
+            "drives.html",
+            vin=vin,
+            drives=drives,
+            total_count=total_count,
+            completed_count=completed_count,
+            active_count=active_count,
+            drive_stats=drive_stats,
+        )
 
     @app.route("/drives/<int:drive_id>")
     def drive_detail(drive_id):

@@ -3,10 +3,63 @@
 {% block content %}
 <h1>Drives</h1>
 
-{% if drives %}
-<div class="card" style="margin-bottom:1rem;">
-  <p>Only active drives are shown here. A drive disappears from this screen after it ends.</p>
+<div class="card drives-summary-card" style="margin-bottom:1rem;">
+  <p>All drives are shown below. Active drives appear inline with history.</p>
+  <div class="drives-badges">
+    <span class="badge badge-count">Total: {{ total_count }}</span>
+    <span class="badge badge-count badge-count-complete">Completed: {{ completed_count }}</span>
+    <span class="badge badge-count badge-count-active">Active: {{ active_count }}</span>
+  </div>
 </div>
+
+{% if total_count > 0 %}
+<div class="card drive-kpi-card" style="margin-bottom:1rem;">
+  <div class="drive-kpi-grid">
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Total Distance</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.total_distance_km is not none %}
+          {{ convert(drive_stats.total_distance_km, 'distance_km')|round(1) }} {{ ulabel('distance') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Distance</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_distance_km is not none %}
+          {{ convert(drive_stats.avg_distance_km, 'distance_km')|round(1) }} {{ ulabel('distance') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Total Energy</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.total_energy_kwh is not none %}
+          {{ drive_stats.total_energy_kwh|round(2) }} kWh
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Energy</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_energy_kwh is not none %}
+          {{ drive_stats.avg_energy_kwh|round(2) }} kWh
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Max Speed</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_max_speed_kmh is not none %}
+          {{ convert(drive_stats.avg_max_speed_kmh, 'max_speed_kmh')|round(0)|int }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if drives %}
 <table>
   <thead>
     <tr>
@@ -58,7 +111,7 @@
       <td>{{ d.point_count }}</td>
       <td>
         {% if d.in_progress %}
-          <span class="badge ok">In Progress</span>
+          <span class="badge ok">Active</span>
         {% else %}
           <span class="badge off">Complete</span>
         {% endif %}
@@ -69,7 +122,7 @@
 </table>
 {% else %}
 <div class="card">
-  <p>No active drives right now. Drives appear here only while the vehicle is actually driving.</p>
+  <p>No drives recorded yet.</p>
 </div>
 {% endif %}
 {% endblock %}

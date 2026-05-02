@@ -3,6 +3,51 @@
 {% block content %}
 <h1>Drive {{ drive.drive_uuid }}</h1>
 
+<div class="card drive-kpi-card">
+  <div class="drive-kpi-grid">
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Status</div>
+      <div class="drive-kpi-value">
+        {% if drive.in_progress %}<span class="badge ok">Active</span>{% else %}<span class="badge off">Complete</span>{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Duration</div>
+      <div class="drive-kpi-value">
+        {% if drive.duration_sec is not none %}
+          {{ "%d"|format(drive.duration_sec // 60) }}m {{ "%d"|format(drive.duration_sec % 60) }}s
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Distance</div>
+      <div class="drive-kpi-value">
+        {% if drive.distance_km is not none %}
+          {{ convert(drive.distance_km, 'distance_km')|round(1) }} {{ ulabel('distance') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Energy Used</div>
+      <div class="drive-kpi-value">
+        {% if drive.energy_used_kwh is not none %}{{ "%.2f"|format(drive.energy_used_kwh) }} kWh{% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Max Speed</div>
+      <div class="drive-kpi-value">
+        {% if drive.max_speed_kmh is not none %}
+          {{ convert(drive.max_speed_kmh, 'max_speed_kmh')|round(0)|int }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Points</div>
+      <div class="drive-kpi-value">{{ points|length }}</div>
+    </div>
+  </div>
+</div>
+
 <div class="card-grid">
   <div class="card">
     <h2>Summary</h2>
@@ -72,8 +117,8 @@
 
 {% if points %}
 <h2>Drive Points ({{ points|length }})</h2>
-<div style="overflow-x:auto;">
-<table style="font-size:0.8rem;">
+<div class="drive-points-wrap">
+<table class="drive-points-table">
   <thead>
     <tr>
       <th>Time</th>
