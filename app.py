@@ -1020,6 +1020,7 @@ def create_app() -> Flask:
             energy_series.append(energy_val)
             energy_used_series.append(energy_used_val)
             efficiency_series.append(efficiency_val)
+            battery_temp_series.append(battery_temp_val)
             outside_temp_series.append(outside_temp_val)
             elevation_series.append(elevation_val)
 
