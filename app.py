@@ -966,9 +966,25 @@ def create_app() -> Flask:
             if soc_val is not None and not (0 <= soc_val <= 100):
                 soc_val = None
 
+            energy_val = round(float(row["energy_remaining_kwh"]), 2) if row.get("energy_remaining_kwh") is not None else None
+            if energy_val is not None and energy_val < 0:
+                energy_val = None
+
             speed_series.append(speed_val)
             soc_series.append(soc_val)
-            energy_series.append(round(float(row["energy_remaining_kwh"]), 2) if row.get("energy_remaining_kwh") is not None else None)
+            energy_series.append(energy_val)
+
+        max_chart_points = 24
+        point_count = len(labels)
+        if point_count > max_chart_points:
+            step = max(1, point_count // max_chart_points)
+            sampled_indices = list(range(0, point_count, step))
+            if sampled_indices[-1] != point_count - 1:
+                sampled_indices.append(point_count - 1)
+            labels = [labels[idx] for idx in sampled_indices]
+            speed_series = [speed_series[idx] for idx in sampled_indices]
+            soc_series = [soc_series[idx] for idx in sampled_indices]
+            energy_series = [energy_series[idx] for idx in sampled_indices]
 
         drive_chart_data = {
             "labels": labels,
@@ -1019,6 +1035,8 @@ def create_app() -> Flask:
             points=points,
             drive_chart_data=drive_chart_data,
             drive_summary=drive_summary,
+            drive_chart_point_count=len(drive_chart_data["labels"]),
+            drive_total_point_count=len(points),
             speed_label=units.unit_label("speed", system),
         )
 
