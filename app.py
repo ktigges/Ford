@@ -952,6 +952,7 @@ def create_app() -> Flask:
         speed_series = []
         soc_series = []
         energy_series = []
+        battery_temp_series = []
 
         for row in points:
             labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
@@ -970,9 +971,15 @@ def create_app() -> Flask:
             if energy_val is not None and energy_val < 0:
                 energy_val = None
 
+            battery_temp_val = (
+                round(units.convert_for_display(row["battery_temp_c"], "battery_temp_c", system), 1)
+                if row.get("battery_temp_c") is not None else None
+            )
+
             speed_series.append(speed_val)
             soc_series.append(soc_val)
             energy_series.append(energy_val)
+            battery_temp_series.append(battery_temp_val)
 
         max_chart_points = 24
         point_count = len(labels)
@@ -985,12 +992,14 @@ def create_app() -> Flask:
             speed_series = [speed_series[idx] for idx in sampled_indices]
             soc_series = [soc_series[idx] for idx in sampled_indices]
             energy_series = [energy_series[idx] for idx in sampled_indices]
+            battery_temp_series = [battery_temp_series[idx] for idx in sampled_indices]
 
         drive_chart_data = {
             "labels": labels,
             "speed": speed_series,
             "soc": soc_series,
             "energy": energy_series,
+            "battery_temp": battery_temp_series,
         }
 
         summary_duration_sec = drive.get("duration_sec")
@@ -1021,12 +1030,58 @@ def create_app() -> Flask:
                     summary_kwh_remaining = p.get("energy_remaining_kwh")
                     break
 
+        wh_per_mile = None
+        if summary_miles_driven is not None and drive.get("energy_used_kwh") is not None:
+            try:
+                energy_val = float(drive["energy_used_kwh"])
+                if summary_miles_driven > 0:
+                    wh_per_mile = (energy_val * 1000.0) / summary_miles_driven
+            except (TypeError, ValueError):
+                wh_per_mile = None
+
+        battery_temps = [float(p["battery_temp_c"]) for p in points if p.get("battery_temp_c") is not None]
+        outside_temps = [float(p["outside_temp_c"]) for p in points if p.get("outside_temp_c") is not None]
+        altitudes = [float(p["altitude_m"]) for p in points if p.get("altitude_m") is not None]
+
+        battery_temp_avg_c = (sum(battery_temps) / len(battery_temps)) if battery_temps else None
+        battery_temp_min_c = min(battery_temps) if battery_temps else None
+        battery_temp_max_c = max(battery_temps) if battery_temps else None
+        outside_temp_avg_c = (sum(outside_temps) / len(outside_temps)) if outside_temps else None
+
+        elevation_delta_m = None
+        elevation_gain_m = None
+        if altitudes:
+            elevation_delta_m = altitudes[-1] - altitudes[0]
+            elevation_gain_m = 0.0
+            for idx in range(1, len(altitudes)):
+                climb = altitudes[idx] - altitudes[idx - 1]
+                if climb > 0:
+                    elevation_gain_m += climb
+
+        regen_ratio_pct = None
+        if drive.get("regen_energy_kwh") is not None and drive.get("energy_used_kwh") is not None:
+            try:
+                used_val = float(drive["energy_used_kwh"])
+                regen_val = float(drive["regen_energy_kwh"])
+                if used_val > 0:
+                    regen_ratio_pct = (regen_val / used_val) * 100.0
+            except (TypeError, ValueError):
+                regen_ratio_pct = None
+
         drive_summary = {
             "miles_driven": summary_miles_driven,
             "duration_sec": summary_duration_sec,
             "energy_used_kwh": drive.get("energy_used_kwh"),
             "avg_mi_per_kwh": summary_avg_mi_per_kwh,
+            "wh_per_mile": wh_per_mile,
             "kwh_remaining": summary_kwh_remaining,
+            "battery_temp_avg_c": battery_temp_avg_c,
+            "battery_temp_min_c": battery_temp_min_c,
+            "battery_temp_max_c": battery_temp_max_c,
+            "outside_temp_avg_c": outside_temp_avg_c,
+            "elevation_delta_m": elevation_delta_m,
+            "elevation_gain_m": elevation_gain_m,
+            "regen_ratio_pct": regen_ratio_pct,
         }
 
         return render_template(
