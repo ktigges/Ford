@@ -28,8 +28,24 @@
       <div class="drive-kpi-value">{% if drive_summary.avg_mi_per_kwh is not none %}{{ drive_summary.avg_mi_per_kwh|round(2) }}{% else %}–{% endif %}</div>
     </div>
     <div class="drive-kpi">
+      <div class="drive-kpi-label">Wh per Mile</div>
+      <div class="drive-kpi-value">{% if drive_summary.wh_per_mile is not none %}{{ drive_summary.wh_per_mile|round(0)|int }} Wh/mi{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
       <div class="drive-kpi-label">kWh Remaining</div>
       <div class="drive-kpi-value">{% if drive_summary.kwh_remaining is not none %}{{ drive_summary.kwh_remaining|round(2) }} kWh{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Battery Temp</div>
+      <div class="drive-kpi-value">{% if drive_summary.battery_temp_avg_c is not none %}{{ convert(drive_summary.battery_temp_avg_c, 'battery_temp_c')|round(1) }} {{ ulabel('temperature') }}{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Outside Temp</div>
+      <div class="drive-kpi-value">{% if drive_summary.outside_temp_avg_c is not none %}{{ convert(drive_summary.outside_temp_avg_c, 'outside_temp_c')|round(1) }} {{ ulabel('temperature') }}{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Elevation Gain</div>
+      <div class="drive-kpi-value">{% if drive_summary.elevation_gain_m is not none %}{{ convert(drive_summary.elevation_gain_m, 'altitude_m')|round(0)|int }} {{ ulabel('altitude') }}{% else %}–{% endif %}</div>
     </div>
   </div>
 </div>
@@ -81,11 +97,18 @@
 
 <div class="card">
   <h2>Drive Analytics</h2>
-  <p class="muted" style="margin-top:-0.5rem;">Simple 3-series view using {{ drive_chart_point_count }} plotted samples from {{ drive_total_point_count }} recorded points.</p>
+  <p class="muted" style="margin-top:-0.5rem;">Single chart view using {{ drive_chart_point_count }} plotted samples from {{ drive_total_point_count }} recorded points.</p>
   {% if drive_chart_data and drive_chart_data.labels and drive_chart_data.labels|length > 0 %}
-  <div id="driveSpeedPlot" style="height:220px;"></div>
-  <div id="driveSocPlot" style="height:220px; margin-top:0.75rem;"></div>
-  <div id="driveEnergyPlot" style="height:220px; margin-top:0.75rem;"></div>
+  <div style="display:flex; align-items:center; gap:0.75rem; margin:0.75rem 0 0.5rem; flex-wrap:wrap;">
+    <label for="drive-series-select" class="muted" style="font-weight:600;">Series</label>
+    <select id="drive-series-select" class="btn btn-sm" style="min-width:220px;">
+      <option value="speed">Speed</option>
+      <option value="soc">SOC %</option>
+      <option value="energy">Energy Remaining</option>
+      <option value="battery_temp">Battery Temp</option>
+    </select>
+  </div>
+  <div id="driveSeriesPlot" style="height:340px;"></div>
   {% else %}
   <p class="no-data">No drive analytics points available.</p>
   {% endif %}
@@ -140,11 +163,16 @@
       <tr><th>SOC End</th><td>{{ "%.1f"|format(drive.end_soc_percent) if drive.end_soc_percent is not none else '…' }}%</td></tr>
       <tr><th>Energy Start</th><td>{{ "%.2f"|format(drive.start_energy_kwh) if drive.start_energy_kwh is not none else '–' }} kWh</td></tr>
       <tr><th>Energy End</th><td>{{ "%.2f"|format(drive.end_energy_kwh) if drive.end_energy_kwh is not none else '–' }} kWh</td></tr>
+      <tr><th>Battery Temp Range</th><td>
+        {% if drive_summary.battery_temp_min_c is not none and drive_summary.battery_temp_max_c is not none %}
+          {{ convert(drive_summary.battery_temp_min_c, 'battery_temp_c')|round(1) }} to {{ convert(drive_summary.battery_temp_max_c, 'battery_temp_c')|round(1) }} {{ ulabel('temperature') }}
+        {% else %}–{% endif %}
+      </td></tr>
     </table>
   </div>
 
   <div class="card">
-    <h2>Location</h2>
+    <h2>Location / Conditions</h2>
     <table>
       <tr><th>Start</th><td>
         {% if drive.start_lat is not none %}{{ "%.6f"|format(drive.start_lat) }}, {{ "%.6f"|format(drive.start_lon) }}{% else %}–{% endif %}
@@ -154,6 +182,8 @@
         {% if drive.end_lat is not none %}{{ "%.6f"|format(drive.end_lat) }}, {{ "%.6f"|format(drive.end_lon) }}{% else %}–{% endif %}
         {% if drive.end_compass %} ({{ drive.end_compass }}, {{ "%.0f"|format(drive.end_heading_deg) if drive.end_heading_deg is not none else '–' }}°){% endif %}
       </td></tr>
+      <tr><th>Net Elevation</th><td>{% if drive_summary.elevation_delta_m is not none %}{{ convert(drive_summary.elevation_delta_m, 'altitude_m')|round(0)|int }} {{ ulabel('altitude') }}{% else %}–{% endif %}</td></tr>
+      <tr><th>Regen Ratio</th><td>{% if drive_summary.regen_ratio_pct is not none %}{{ drive_summary.regen_ratio_pct|round(0)|int }}% of used energy{% else %}–{% endif %}</td></tr>
     </table>
   </div>
 </div>
@@ -240,9 +270,12 @@
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script id="drive-chart-data" type="application/json">{{ drive_chart_data|tojson }}</script>
 <span id="drive-speed-label" data-speed-label="{{ speed_label|default('mph') }}" style="display:none;"></span>
+<span id="drive-temp-label" data-temp-label="{{ ulabel('temperature') }}" style="display:none;"></span>
 <script>
 const driveChartData = JSON.parse(document.getElementById("drive-chart-data").textContent || "{}");
 const speedLabel = document.getElementById("drive-speed-label").dataset.speedLabel || "mph";
+const tempLabel = document.getElementById("drive-temp-label").dataset.tempLabel || "°F";
+const seriesSelect = document.getElementById('drive-series-select');
 const numericValues = (arr) => (arr || []).filter((v) => Number.isFinite(v));
 const paddedMax = (arr, fallback = 10) => {
   const vals = numericValues(arr);
@@ -255,65 +288,82 @@ const minValue = (arr, fallback = 0) => {
   if (!vals.length) return fallback;
   return Math.floor(Math.min(...vals));
 };
-if (driveChartData.labels && driveChartData.labels.length > 0) {
-  const speedMax = paddedMax(driveChartData.speed, 15);
-  const socMin = Math.max(0, minValue(driveChartData.soc, 0) - 1);
-  const socMax = Math.min(100, paddedMax(driveChartData.soc, 100));
-  const energyMin = Math.max(0, minValue(driveChartData.energy, 0) - 1);
-  const energyMax = paddedMax(driveChartData.energy, 10);
-  const commonLayout = {
+const plotSeries = {
+  speed: {
+    label: `Speed (${speedLabel})`,
+    values: driveChartData.speed || [],
+    color: 'rgba(45, 95, 154, 0.95)',
+    fill: true,
+    range: () => [0, Math.max(paddedMax(driveChartData.speed, 15), 15)]
+  },
+  soc: {
+    label: 'SOC %',
+    values: driveChartData.soc || [],
+    color: 'rgba(42, 157, 143, 0.95)',
+    fill: false,
+    range: () => {
+      const min = Math.max(0, minValue(driveChartData.soc, 0) - 1);
+      const max = Math.max(Math.min(100, paddedMax(driveChartData.soc, 100)), min + 4);
+      return [min, max];
+    }
+  },
+  energy: {
+    label: 'Energy Remaining (kWh)',
+    values: driveChartData.energy || [],
+    color: 'rgba(230, 111, 81, 0.95)',
+    fill: false,
+    range: () => {
+      const min = Math.max(0, minValue(driveChartData.energy, 0) - 1);
+      const max = Math.max(paddedMax(driveChartData.energy, 10), min + 4);
+      return [min, max];
+    }
+  },
+  battery_temp: {
+    label: `Battery Temp (${tempLabel})`,
+    values: driveChartData.battery_temp || [],
+    color: 'rgba(143, 76, 183, 0.95)',
+    fill: false,
+    range: () => {
+      const min = minValue(driveChartData.battery_temp, 0) - 1;
+      const max = Math.max(paddedMax(driveChartData.battery_temp, 10), min + 4);
+      return [min, max];
+    }
+  }
+};
+
+const renderDriveSeries = (seriesKey) => {
+  const selected = plotSeries[seriesKey] || plotSeries.speed;
+  const yRange = selected.range();
+  Plotly.newPlot('driveSeriesPlot', [{
+    x: driveChartData.labels,
+    y: selected.values,
+    type: 'scatter',
+    mode: 'lines+markers',
+    name: selected.label,
+    line: { color: selected.color, width: 3 },
+    marker: { size: 6, color: selected.color },
+    fill: selected.fill ? 'tozeroy' : 'none',
+    fillcolor: selected.fill ? selected.color.replace('0.95', '0.15') : undefined,
+    hovertemplate: '%{x}<br>%{y}<extra></extra>'
+  }], {
     margin: { t: 16, r: 24, b: 48, l: 56 },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(255,255,255,0.02)',
     xaxis: { title: { text: 'Time' }, tickangle: -25, automargin: true },
+    yaxis: { title: { text: selected.label }, range: yRange, automargin: true },
     legend: { orientation: 'h', y: -0.22 }
-  };
-  const commonConfig = {
+  }, {
     responsive: true,
     displaylogo: false,
     modeBarButtonsToRemove: ['lasso2d']
-  };
+  });
+};
 
-  Plotly.newPlot('driveSpeedPlot', [{
-    x: driveChartData.labels,
-    y: driveChartData.speed,
-    type: 'scatter',
-    mode: 'lines+markers',
-    name: `Speed (${speedLabel})`,
-    line: { color: 'rgba(45, 95, 154, 0.95)', width: 3 },
-    marker: { size: 6, color: 'rgba(45, 95, 154, 0.95)' },
-    fill: 'tozeroy',
-    fillcolor: 'rgba(45, 95, 154, 0.15)'
-  }], {
-    ...commonLayout,
-    yaxis: { title: { text: `Speed (${speedLabel})` }, range: [0, Math.max(speedMax, 15)], automargin: true }
-  }, commonConfig);
-
-  Plotly.newPlot('driveSocPlot', [{
-    x: driveChartData.labels,
-    y: driveChartData.soc,
-    type: 'scatter',
-    mode: 'lines+markers',
-    name: 'SOC %',
-    line: { color: 'rgba(42, 157, 143, 0.95)', width: 3 },
-    marker: { size: 6, color: 'rgba(42, 157, 143, 0.95)' }
-  }], {
-    ...commonLayout,
-    yaxis: { title: { text: 'SOC %' }, range: [socMin, Math.max(socMax, socMin + 4)], automargin: true }
-  }, commonConfig);
-
-  Plotly.newPlot('driveEnergyPlot', [{
-    x: driveChartData.labels,
-    y: driveChartData.energy,
-    type: 'scatter',
-    mode: 'lines+markers',
-    name: 'Energy Remaining (kWh)',
-    line: { color: 'rgba(230, 111, 81, 0.95)', width: 3 },
-    marker: { size: 6, color: 'rgba(230, 111, 81, 0.95)' }
-  }], {
-    ...commonLayout,
-    yaxis: { title: { text: 'Energy Remaining (kWh)' }, range: [energyMin, Math.max(energyMax, energyMin + 4)], automargin: true }
-  }, commonConfig);
+if (driveChartData.labels && driveChartData.labels.length > 0 && seriesSelect) {
+  renderDriveSeries(seriesSelect.value || 'speed');
+  seriesSelect.addEventListener('change', (event) => {
+    renderDriveSeries(event.target.value);
+  });
 }
 </script>
 {% endblock %}
