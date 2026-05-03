@@ -94,22 +94,13 @@
     const pad = (p90 - p10) * 0.2;
     return { min: Math.floor(p10 - pad), max: Math.ceil(p90 + pad) };
   };
-  const plotLayout = (yTitle, yRange = null, overlay = null) => ({
+  const baseLayout = {
     margin: { t: 20, r: 56, b: 48, l: 56 },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(255,255,255,0.02)',
-    xaxis: { title: 'Time', tickangle: -25, automargin: true },
-    yaxis: {
-      title: yTitle,
-      rangemode: yRange ? undefined : 'tozero',
-      range: yRange || undefined,
-      automargin: true,
-      zeroline: true,
-      zerolinecolor: 'rgba(255,255,255,0.2)'
-    },
-    yaxis2: overlay || undefined,
+    xaxis: { title: { text: 'Time' }, tickangle: -25, automargin: true },
     legend: { orientation: 'h', y: -0.25 },
-  });
+  };
   const plotConfig = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d'] };
 
   if (chartData.labels && chartData.labels.length) {
@@ -125,7 +116,14 @@
         type: 'bar',
         name: `Distance (${distanceLabel})`,
         marker: { color: 'rgba(45, 95, 154, 0.78)', line: { color: 'rgba(45, 95, 154, 1)', width: 1 } }
-      }], plotLayout(`Distance (${distanceLabel})`, [0, distanceYMax]), plotConfig);
+      }], {
+        ...baseLayout,
+        yaxis: {
+          title: { text: `Distance (${distanceLabel})` },
+          range: [0, distanceYMax],
+          automargin: true,
+        }
+      }, plotConfig);
     }
 
     const energyEl = document.getElementById('energyPlot');
@@ -136,7 +134,14 @@
         type: 'bar',
         name: 'Energy Used (kWh)',
         marker: { color: 'rgba(230, 111, 81, 0.78)', line: { color: 'rgba(230, 111, 81, 1)', width: 1 } }
-      }], plotLayout('Energy Used (kWh)', [0, energyYMax]), plotConfig);
+      }], {
+        ...baseLayout,
+        yaxis: {
+          title: { text: 'Energy Used (kWh)' },
+          range: [0, energyYMax],
+          automargin: true,
+        }
+      }, plotConfig);
     }
 
     const efficiencyEl = document.getElementById('efficiencyPlot');
@@ -151,7 +156,14 @@
         marker: { size: 5, color: 'rgba(69, 123, 157, 1)' },
         fill: 'tozeroy',
         fillcolor: 'rgba(69, 123, 157, 0.18)'
-      }], plotLayout(efficiencyLabel, [Math.max(0, effRange.min), Math.max(20, effRange.max)]), plotConfig);
+      }], {
+        ...baseLayout,
+        yaxis: {
+          title: { text: efficiencyLabel },
+          range: [Math.max(0, effRange.min), Math.max(20, effRange.max)],
+          automargin: true,
+        }
+      }, plotConfig);
     }
   }
 
@@ -195,18 +207,23 @@
           marker: { size: 5, color: 'rgba(255, 159, 64, 0.95)' },
           yaxis: 'y2'
         }
-      ], plotLayout(
-        'Charge %',
-        [0, 100],
-        {
-          title: `Voltage (V) - ${y1LabelSuffix}`,
+      ], {
+        ...baseLayout,
+        yaxis: {
+          title: { text: 'Charge %' },
+          range: [0, 100],
+          automargin: true,
+        },
+        yaxis2: {
+          title: { text: `Voltage (V) - ${y1LabelSuffix}` },
           range: [y1Min, y1Max],
           overlaying: 'y',
           side: 'right',
           showgrid: false,
-          automargin: true
+          automargin: true,
+          anchor: 'x'
         }
-      ), plotConfig);
+      }, plotConfig);
     }
   }
 
