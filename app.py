@@ -952,7 +952,14 @@ def create_app() -> Flask:
         speed_series = []
         soc_series = []
         energy_series = []
+        energy_used_series = []
         battery_temp_series = []
+        elevation_series = []
+
+        # Calculate starting energy for cumulative energy used calculation
+        starting_energy_kwh = None
+        if points and points[0].get("energy_remaining_kwh") is not None:
+            starting_energy_kwh = float(points[0]["energy_remaining_kwh"])
 
         for row in points:
             labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
@@ -971,15 +978,26 @@ def create_app() -> Flask:
             if energy_val is not None and energy_val < 0:
                 energy_val = None
 
+            energy_used_val = None
+            if starting_energy_kwh is not None and energy_val is not None:
+                energy_used_val = round(max(0, starting_energy_kwh - energy_val), 2)
+
             battery_temp_val = (
                 round(units.convert_for_display(row["battery_temp_c"], "battery_temp_c", system), 1)
                 if row.get("battery_temp_c") is not None else None
             )
 
+            elevation_val = (
+                round(units.convert_for_display(row["altitude_m"], "altitude_m", system), 1)
+                if row.get("altitude_m") is not None else None
+            )
+
             speed_series.append(speed_val)
             soc_series.append(soc_val)
             energy_series.append(energy_val)
+            energy_used_series.append(energy_used_val)
             battery_temp_series.append(battery_temp_val)
+            elevation_series.append(elevation_val)
 
         max_chart_points = 24
         point_count = len(labels)
@@ -992,14 +1010,18 @@ def create_app() -> Flask:
             speed_series = [speed_series[idx] for idx in sampled_indices]
             soc_series = [soc_series[idx] for idx in sampled_indices]
             energy_series = [energy_series[idx] for idx in sampled_indices]
+            energy_used_series = [energy_used_series[idx] for idx in sampled_indices]
             battery_temp_series = [battery_temp_series[idx] for idx in sampled_indices]
+            elevation_series = [elevation_series[idx] for idx in sampled_indices]
 
         drive_chart_data = {
             "labels": labels,
             "speed": speed_series,
             "soc": soc_series,
             "energy": energy_series,
+            "energy_used": energy_used_series,
             "battery_temp": battery_temp_series,
+            "elevation": elevation_series,
         }
 
         summary_duration_sec = drive.get("duration_sec")
@@ -1084,6 +1106,17 @@ def create_app() -> Flask:
             "regen_ratio_pct": regen_ratio_pct,
         }
 
+        map_points = [
+            {
+                "lat": p.get("latitude"),
+                "lon": p.get("longitude"),
+                "speed": round(units.convert_for_display(p["speed_kmh"], "speed_kmh", system), 1) if p.get("speed_kmh") is not None else None,
+                "time": _format_local_datetime(p.get("recorded_at"), "%H:%M:%S"),
+            }
+            for p in points
+            if p.get("latitude") is not None and p.get("longitude") is not None
+        ]
+
         return render_template(
             "drive_detail.html",
             drive=drive,
@@ -1093,6 +1126,7 @@ def create_app() -> Flask:
             drive_chart_point_count=len(drive_chart_data["labels"]),
             drive_total_point_count=len(points),
             speed_label=units.unit_label("speed", system),
+            map_points=map_points,
         )
 
     @app.route("/oauth", methods=["GET", "POST"])

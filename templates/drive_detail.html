@@ -105,7 +105,9 @@
       <option value="speed">Speed</option>
       <option value="soc">SOC %</option>
       <option value="energy">Energy Remaining</option>
+      <option value="energy_used">Energy Used</option>
       <option value="battery_temp">Battery Temp</option>
+      <option value="elevation">Elevation</option>
     </select>
   </div>
   <div id="driveSeriesPlot" style="height:340px;"></div>
@@ -113,6 +115,14 @@
   <p class="no-data">No drive analytics points available.</p>
   {% endif %}
 </div>
+
+{% if map_points and map_points|length > 1 %}
+<div class="card">
+  <h2>Drive Route</h2>
+  <p class="muted" style="margin-bottom:0.75rem;">GPS route from {{ map_points|length }} recorded points.</p>
+  <div id="driveRouteMap" class="drive-map" style="height:420px; border-radius:6px;"></div>
+</div>
+{% endif %}
 
 <div class="card-grid">
   <div class="card">
@@ -267,8 +277,22 @@
 <div class="btn-group" style="margin-top:1rem;">
   <a href="{{ url_for('drives_list') }}" class="btn">← Back to Drives</a>
 </div>
+
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin=""
+/>
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin=""
+></script>
+
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script id="drive-chart-data" type="application/json">{{ drive_chart_data|tojson }}</script>
+<script id="drive-map-data" type="application/json">{{ map_points|tojson }}</script>
 <span id="drive-speed-label" data-speed-label="{{ speed_label|default('mph') }}" style="display:none;"></span>
 <span id="drive-temp-label" data-temp-label="{{ ulabel('temperature') }}" style="display:none;"></span>
 <script>
@@ -318,6 +342,17 @@ const plotSeries = {
       return [min, max];
     }
   },
+  energy_used: {
+    label: 'Energy Used (kWh)',
+    values: driveChartData.energy_used || [],
+    color: 'rgba(220, 53, 69, 0.95)',
+    fill: true,
+    range: () => {
+      const min = 0;
+      const max = Math.max(paddedMax(driveChartData.energy_used, 10), min + 1);
+      return [min, max];
+    }
+  },
   battery_temp: {
     label: `Battery Temp (${tempLabel})`,
     values: driveChartData.battery_temp || [],
@@ -326,6 +361,17 @@ const plotSeries = {
     range: () => {
       const min = minValue(driveChartData.battery_temp, 0) - 1;
       const max = Math.max(paddedMax(driveChartData.battery_temp, 10), min + 4);
+      return [min, max];
+    }
+  },
+  elevation: {
+    label: 'Elevation (ft)',
+    values: driveChartData.elevation || [],
+    color: 'rgba(138, 97, 48, 0.95)',
+    fill: false,
+    range: () => {
+      const min = minValue(driveChartData.elevation, 0) - 50;
+      const max = Math.max(paddedMax(driveChartData.elevation, 100), min + 100);
       return [min, max];
     }
   }
@@ -364,6 +410,79 @@ if (driveChartData.labels && driveChartData.labels.length > 0 && seriesSelect) {
   seriesSelect.addEventListener('change', (event) => {
     renderDriveSeries(event.target.value);
   });
+}
+
+// Map rendering
+const mapPoints = JSON.parse(document.getElementById('drive-map-data')?.textContent || '[]');
+if (mapPoints && mapPoints.length > 1) {
+  setTimeout(() => {
+    const latLngs = mapPoints.map((p) => [p.lat, p.lon]);
+    const map = L.map('driveRouteMap', { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const drawRawRoute = () => L.polyline(latLngs, {
+      color: '#2d5f9a',
+      weight: 3,
+      opacity: 0.85
+    }).addTo(map);
+
+    const drawMatchedRoute = async () => {
+      const coordText = mapPoints.map((p) => `${p.lon},${p.lat}`).join(';');
+      const url = `https://router.project-osrm.org/route/v1/driving/${coordText}?overview=full&geometries=geojson`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`OSRM HTTP ${resp.status}`);
+      const payload = await resp.json();
+      const routeCoords = payload?.routes?.[0]?.geometry?.coordinates;
+      if (!routeCoords || !routeCoords.length) throw new Error('No matched geometry');
+      const matchedLatLngs = routeCoords.map(([lon, lat]) => [lat, lon]);
+      return L.polyline(matchedLatLngs, {
+        color: '#2d5f9a',
+        weight: 3,
+        opacity: 0.9
+      }).addTo(map);
+    };
+
+    // Plot all recorded points
+    mapPoints.forEach((p, idx) => {
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius: 3,
+        color: '#8ecae6',
+        fillColor: '#8ecae6',
+        fillOpacity: 0.75,
+        weight: 1,
+        opacity: 0.8
+      }).addTo(map);
+      marker.bindTooltip(`#${idx + 1} ${p.time}${p.speed !== null ? ` • ${p.speed}` : ''}`, { sticky: true });
+    });
+
+    // Start marker
+    L.circleMarker(latLngs[0], {
+      radius: 8,
+      color: '#1f7a4f',
+      fillColor: '#1f7a4f',
+      fillOpacity: 0.9,
+      weight: 2
+    }).addTo(map).bindPopup('Start', { autoClose: false });
+
+    // End marker
+    L.circleMarker(latLngs[latLngs.length - 1], {
+      radius: 8,
+      color: '#b42318',
+      fillColor: '#b42318',
+      fillOpacity: 0.9,
+      weight: 2
+    }).addTo(map).bindPopup('End', { autoClose: false });
+
+    drawMatchedRoute()
+      .catch(() => drawRawRoute())
+      .then((routeLayer) => {
+        const bounds = routeLayer.getBounds();
+        map.fitBounds(bounds, { padding: [50, 50] });
+      });
+  }, 100);
 }
 </script>
 {% endblock %}
