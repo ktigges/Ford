@@ -188,6 +188,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
     app.config["APP_VERSION"] = "0.4.0"
+    app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # ── Settings helper (reads from app_config table) ──────────────
 
@@ -867,7 +868,7 @@ def create_app() -> Flask:
     def drives_list():
         """Show all drives with summary counters and status."""
         vin = _active_vin()
-        drives = db.fetch_all(
+        raw_drives = db.fetch_all(
             """SELECT d.*,
                       (SELECT count(*) FROM drive_points WHERE drive_id = d.id) AS point_count
                FROM drives d
@@ -875,6 +876,37 @@ def create_app() -> Flask:
                ORDER BY d.started_at DESC LIMIT 200""",
             (vin,),
         ) if vin else []
+
+        drives = []
+        for d in raw_drives:
+            row = dict(d)
+
+            duration_sec = row.get("duration_sec")
+            if duration_sec is None and row.get("started_at") and row.get("ended_at"):
+                duration_sec = int((row["ended_at"] - row["started_at"]).total_seconds())
+            row["summary_duration_sec"] = duration_sec
+
+            distance_km = row.get("distance_km")
+            energy_kwh = row.get("energy_used_kwh")
+            miles_driven = None
+            avg_mi_per_kwh = None
+            if distance_km is not None:
+                try:
+                    miles_driven = float(distance_km) * 0.621371
+                except (TypeError, ValueError):
+                    miles_driven = None
+            if miles_driven is not None and energy_kwh is not None:
+                try:
+                    energy_val = float(energy_kwh)
+                    if energy_val > 0:
+                        avg_mi_per_kwh = miles_driven / energy_val
+                except (TypeError, ValueError):
+                    avg_mi_per_kwh = None
+
+            row["summary_miles_driven"] = miles_driven
+            row["summary_avg_mi_per_kwh"] = avg_mi_per_kwh
+            row["summary_kwh_remaining"] = row.get("end_energy_kwh")
+            drives.append(row)
 
         total_count = len(drives)
         completed_count = sum(1 for d in drives if not d.get("in_progress"))
@@ -945,11 +977,48 @@ def create_app() -> Flask:
             "energy": energy_series,
         }
 
+        summary_duration_sec = drive.get("duration_sec")
+        if summary_duration_sec is None and drive.get("started_at") and drive.get("ended_at"):
+            summary_duration_sec = int((drive["ended_at"] - drive["started_at"]).total_seconds())
+
+        summary_miles_driven = None
+        if drive.get("distance_km") is not None:
+            try:
+                summary_miles_driven = float(drive["distance_km"]) * 0.621371
+            except (TypeError, ValueError):
+                summary_miles_driven = None
+
+        summary_avg_mi_per_kwh = None
+        if summary_miles_driven is not None and drive.get("energy_used_kwh") is not None:
+            try:
+                energy_val = float(drive["energy_used_kwh"])
+                if energy_val > 0:
+                    summary_avg_mi_per_kwh = summary_miles_driven / energy_val
+            except (TypeError, ValueError):
+                summary_avg_mi_per_kwh = None
+
+        summary_kwh_remaining = drive.get("end_energy_kwh")
+        if summary_kwh_remaining is None and points:
+            # Fallback for in-progress drives where end_energy_kwh may not be finalized yet.
+            for p in reversed(points):
+                if p.get("energy_remaining_kwh") is not None:
+                    summary_kwh_remaining = p.get("energy_remaining_kwh")
+                    break
+
+        drive_summary = {
+            "miles_driven": summary_miles_driven,
+            "duration_sec": summary_duration_sec,
+            "energy_used_kwh": drive.get("energy_used_kwh"),
+            "avg_mi_per_kwh": summary_avg_mi_per_kwh,
+            "kwh_remaining": summary_kwh_remaining,
+        }
+
         return render_template(
             "drive_detail.html",
             drive=drive,
             points=points,
             drive_chart_data=drive_chart_data,
+            drive_summary=drive_summary,
             speed_label=units.unit_label("speed", system),
         )
 

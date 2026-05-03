@@ -4,6 +4,36 @@
 <h1>Drive {{ drive.drive_uuid }}</h1>
 <p class="muted">Times are shown in {{ display_timezone }}.</p>
 
+<div class="card" style="margin-bottom:1rem;">
+  <h2>Drive Summary</h2>
+  <div class="drive-kpi-grid">
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Miles Driven</div>
+      <div class="drive-kpi-value">{% if drive_summary.miles_driven is not none %}{{ drive_summary.miles_driven|round(1) }} mi{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Time Driven</div>
+      <div class="drive-kpi-value">
+        {% if drive_summary.duration_sec is not none %}
+          {{ "%d"|format(drive_summary.duration_sec // 60) }}m {{ "%d"|format(drive_summary.duration_sec % 60) }}s
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Energy Used</div>
+      <div class="drive-kpi-value">{% if drive_summary.energy_used_kwh is not none %}{{ "%.2f"|format(drive_summary.energy_used_kwh) }} kWh{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Miles/kWh</div>
+      <div class="drive-kpi-value">{% if drive_summary.avg_mi_per_kwh is not none %}{{ drive_summary.avg_mi_per_kwh|round(2) }}{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">kWh Remaining</div>
+      <div class="drive-kpi-value">{% if drive_summary.kwh_remaining is not none %}{{ drive_summary.kwh_remaining|round(2) }} kWh{% else %}–{% endif %}</div>
+    </div>
+  </div>
+</div>
+
 <div class="card drive-kpi-card">
   <div class="drive-kpi-grid">
     <div class="drive-kpi">
