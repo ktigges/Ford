@@ -955,6 +955,7 @@ def create_app() -> Flask:
         energy_used_series = []
         efficiency_series = []
         battery_temp_series = []
+        outside_temp_series = []
         elevation_series = []
 
         # Calculate starting energy and odometer for cumulative calculations
@@ -1015,7 +1016,8 @@ def create_app() -> Flask:
             energy_series.append(energy_val)
             energy_used_series.append(energy_used_val)
             efficiency_series.append(efficiency_val)
-            battery_temp_series.append(battery_temp_val)
+            outside_temp_series.append(outside_temp_val)
+            elevation_series.append(elevation_val)
             elevation_series.append(elevation_val)
 
         max_chart_points = 24
@@ -1032,6 +1034,7 @@ def create_app() -> Flask:
             energy_used_series = [energy_used_series[idx] for idx in sampled_indices]
             efficiency_series = [efficiency_series[idx] for idx in sampled_indices]
             battery_temp_series = [battery_temp_series[idx] for idx in sampled_indices]
+            outside_temp_series = [outside_temp_series[idx] for idx in sampled_indices]
             elevation_series = [elevation_series[idx] for idx in sampled_indices]
 
         drive_chart_data = {
@@ -1043,6 +1046,7 @@ def create_app() -> Flask:
             "efficiency": efficiency_series,
             "battery_temp": battery_temp_series,
             "elevation": elevation_series,
+                    "outside_temp": outside_temp_series,
         }
 
         summary_duration_sec = drive.get("duration_sec")
