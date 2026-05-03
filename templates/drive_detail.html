@@ -97,21 +97,9 @@
 
 <div class="card">
   <h2>Drive Analytics</h2>
-  <p class="muted" style="margin-top:-0.5rem;">Single chart view using {{ drive_chart_point_count }} plotted samples from {{ drive_total_point_count }} recorded points.</p>
+  <p class="muted" style="margin-top:-0.5rem;">All series with legend toggles. Click legend items to show/hide series. Using {{ drive_chart_point_count }} plotted samples from {{ drive_total_point_count }} recorded points.</p>
   {% if drive_chart_data and drive_chart_data.labels and drive_chart_data.labels|length > 0 %}
-  <div style="display:flex; align-items:center; gap:0.75rem; margin:0.75rem 0 0.5rem; flex-wrap:wrap;">
-    <label for="drive-series-select" class="muted" style="font-weight:600;">Series</label>
-    <select id="drive-series-select" class="btn btn-sm" style="min-width:220px;">
-      <option value="speed">Speed</option>
-      <option value="soc">SOC %</option>
-      <option value="energy">Energy Remaining</option>
-      <option value="energy_used">Energy Used</option>
-      <option value="efficiency">Consumption Rate (mi/kWh)</option>
-      <option value="battery_temp">Battery Temp</option>
-      <option value="elevation">Elevation</option>
-    </select>
-  </div>
-  <div id="driveSeriesPlot" style="height:340px;"></div>
+  <div id="driveEChartsPlot" style="height:520px; width:100%;"></div>
   {% else %}
   <p class="no-data">No drive analytics points available.</p>
   {% endif %}
@@ -291,7 +279,7 @@
   crossorigin=""
 ></script>
 
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script id="drive-chart-data" type="application/json">{{ drive_chart_data|tojson }}</script>
 <script id="drive-map-data" type="application/json">{{ map_points|tojson }}</script>
 <span id="drive-speed-label" data-speed-label="{{ speed_label|default('mph') }}" style="display:none;"></span>
@@ -300,128 +288,118 @@
 const driveChartData = JSON.parse(document.getElementById("drive-chart-data").textContent || "{}");
 const speedLabel = document.getElementById("drive-speed-label").dataset.speedLabel || "mph";
 const tempLabel = document.getElementById("drive-temp-label").dataset.tempLabel || "°F";
-const seriesSelect = document.getElementById('drive-series-select');
-const numericValues = (arr) => (arr || []).filter((v) => Number.isFinite(v));
-const paddedMax = (arr, fallback = 10) => {
-  const vals = numericValues(arr);
-  if (!vals.length) return fallback;
-  const max = Math.max(...vals);
-  return max <= 0 ? fallback : Math.ceil(max * 1.15);
-};
-const minValue = (arr, fallback = 0) => {
-  const vals = numericValues(arr);
-  if (!vals.length) return fallback;
-  return Math.floor(Math.min(...vals));
-};
-const plotSeries = {
-  speed: {
-    label: `Speed (${speedLabel})`,
-    values: driveChartData.speed || [],
-    color: 'rgba(45, 95, 154, 0.95)',
-    fill: true,
-    range: () => [0, Math.max(paddedMax(driveChartData.speed, 15), 15)]
-  },
-  soc: {
-    label: 'SOC %',
-    values: driveChartData.soc || [],
-    color: 'rgba(42, 157, 143, 0.95)',
-    fill: false,
-    range: () => {
-      const min = Math.max(0, minValue(driveChartData.soc, 0) - 1);
-      const max = Math.max(Math.min(100, paddedMax(driveChartData.soc, 100)), min + 4);
-      return [min, max];
-    }
-  },
-  energy: {
-    label: 'Energy Remaining (kWh)',
-    values: driveChartData.energy || [],
-    color: 'rgba(230, 111, 81, 0.95)',
-    fill: false,
-    range: () => {
-      const min = Math.max(0, minValue(driveChartData.energy, 0) - 1);
-      const max = Math.max(paddedMax(driveChartData.energy, 10), min + 4);
-      return [min, max];
-    }
-  },
-  energy_used: {
-    label: 'Energy Used (kWh)',
-    values: driveChartData.energy_used || [],
-    color: 'rgba(220, 53, 69, 0.95)',
-    fill: true,
-    range: () => {
-      const min = 0;
-      const max = Math.max(paddedMax(driveChartData.energy_used, 10), min + 1);
-      return [min, max];
-    }
-  },
-  efficiency: {
-    label: 'Consumption Rate (mi/kWh)',
-    values: driveChartData.efficiency || [],
-    color: 'rgba(76, 175, 80, 0.95)',
-    fill: false,
-    range: () => {
-      const min = 0;
-      const max = Math.max(paddedMax(driveChartData.efficiency, 4), min + 1);
-      return [min, max];
-    }
-  },
-  battery_temp: {
-    label: `Battery Temp (${tempLabel})`,
-    values: driveChartData.battery_temp || [],
-    color: 'rgba(143, 76, 183, 0.95)',
-    fill: false,
-    range: () => {
-      const min = minValue(driveChartData.battery_temp, 0) - 1;
-      const max = Math.max(paddedMax(driveChartData.battery_temp, 10), min + 4);
-      return [min, max];
-    }
-  },
-  elevation: {
-    label: 'Elevation (ft)',
-    values: driveChartData.elevation || [],
-    color: 'rgba(138, 97, 48, 0.95)',
-    fill: false,
-    range: () => {
-      const min = minValue(driveChartData.elevation, 0) - 50;
-      const max = Math.max(paddedMax(driveChartData.elevation, 100), min + 100);
-      return [min, max];
-    }
-  }
-};
 
-const renderDriveSeries = (seriesKey) => {
-  const selected = plotSeries[seriesKey] || plotSeries.speed;
-  const yRange = selected.range();
-  Plotly.newPlot('driveSeriesPlot', [{
-    x: driveChartData.labels,
-    y: selected.values,
-    type: 'scatter',
-    mode: 'lines+markers',
-    name: selected.label,
-    line: { color: selected.color, width: 3 },
-    marker: { size: 6, color: selected.color },
-    fill: selected.fill ? 'tozeroy' : 'none',
-    fillcolor: selected.fill ? selected.color.replace('0.95', '0.15') : undefined,
-    hovertemplate: '%{x}<br>%{y}<extra></extra>'
-  }], {
-    margin: { t: 16, r: 24, b: 48, l: 56 },
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(255,255,255,0.02)',
-    xaxis: { title: { text: 'Time' }, tickangle: -25, automargin: true },
-    yaxis: { title: { text: selected.label }, range: yRange, automargin: true },
-    legend: { orientation: 'h', y: -0.22 }
-  }, {
-    responsive: true,
-    displaylogo: false,
-    modeBarButtonsToRemove: ['lasso2d']
-  });
-};
+if (driveChartData.labels && driveChartData.labels.length > 0) {
+  const chartDom = document.getElementById('driveEChartsPlot');
+  const chart = echarts.init(chartDom, null, { renderer: 'canvas' });
 
-if (driveChartData.labels && driveChartData.labels.length > 0 && seriesSelect) {
-  renderDriveSeries(seriesSelect.value || 'speed');
-  seriesSelect.addEventListener('change', (event) => {
-    renderDriveSeries(event.target.value);
-  });
+  const seriesConfig = [
+    { key: 'speed', name: `Speed (${speedLabel})`, color: '#2d5f9a', yAxisIndex: 0 },
+    { key: 'soc', name: 'SOC %', color: '#2a9d8f', yAxisIndex: 1 },
+    { key: 'energy', name: 'Energy Remaining (kWh)', color: '#e66f51', yAxisIndex: 1 },
+    { key: 'energy_used', name: 'Energy Used (kWh)', color: '#dc3545', yAxisIndex: 2 },
+    { key: 'efficiency', name: 'Consumption Rate (mi/kWh)', color: '#4caf50', yAxisIndex: 3 },
+    { key: 'battery_temp', name: `Battery Temp (${tempLabel})`, color: '#8f4cb7', yAxisIndex: 1 },
+    { key: 'elevation', name: 'Elevation (ft)', color: '#8a6130', yAxisIndex: 4 }
+  ];
+
+  const series = seriesConfig.map(cfg => ({
+    name: cfg.name,
+    type: 'line',
+    data: driveChartData[cfg.key] || [],
+    yAxisIndex: cfg.yAxisIndex,
+    smooth: true,
+    lineStyle: { width: 2 },
+    itemStyle: { color: cfg.color },
+    areaStyle: cfg.key === 'speed' || cfg.key === 'energy_used' ? { color: cfg.color, opacity: 0.25 } : null,
+    symbol: 'circle',
+    symbolSize: 4,
+    tooltip: { valueFormatter: (v) => (v === null ? '–' : v.toFixed(2)) }
+  }));
+
+  const option = {
+    color: seriesConfig.map(c => c.color),
+    backgroundColor: 'transparent',
+    textStyle: { color: '#333' },
+    grid: { left: '8%', right: '8%', top: 40, bottom: 60, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(0, 0, 0, 0.8)',
+      borderColor: '#555',
+      textStyle: { color: '#fff' },
+      formatter: (params) => {
+        if (!Array.isArray(params) || !params.length) return '';
+        const time = params[0].name;
+        const lines = params
+          .filter(p => p.value !== null && p.value !== undefined)
+          .map(p => `<span style="color:${p.color}">●</span> ${p.seriesName}: <strong>${p.value.toFixed(2)}</strong>`)
+          .join('<br>');
+        return `<div style="font-weight:600;">${time}</div>${lines}`;
+      }
+    },
+    legend: {
+      type: 'scroll',
+      orient: 'horizontal',
+      left: 'center',
+      bottom: -5,
+      textStyle: { color: '#555' },
+      data: seriesConfig.map(c => c.name),
+      inactiveColor: '#ccc'
+    },
+    xAxis: {
+      type: 'category',
+      data: driveChartData.labels,
+      axisLine: { lineStyle: { color: '#ddd' } },
+      axisLabel: { color: '#666', interval: Math.max(0, Math.floor(driveChartData.labels.length / 8)) },
+      splitLine: { show: false }
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: `Speed (${speedLabel})`,
+        nameTextStyle: { color: '#2d5f9a' },
+        axisLine: { lineStyle: { color: '#2d5f9a' } },
+        axisLabel: { color: '#2d5f9a' },
+        splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
+      },
+      {
+        type: 'value',
+        name: 'SOC % / Energy / Temp',
+        nameTextStyle: { color: '#2a9d8f' },
+        axisLine: { lineStyle: { color: '#2a9d8f' } },
+        axisLabel: { color: '#2a9d8f' },
+        splitLine: { show: false }
+      },
+      {
+        type: 'value',
+        name: 'Energy Used (kWh)',
+        nameTextStyle: { color: '#dc3545' },
+        axisLine: { lineStyle: { color: '#dc3545' } },
+        axisLabel: { color: '#dc3545' },
+        splitLine: { show: false }
+      },
+      {
+        type: 'value',
+        name: 'Efficiency (mi/kWh)',
+        nameTextStyle: { color: '#4caf50' },
+        axisLine: { lineStyle: { color: '#4caf50' } },
+        axisLabel: { color: '#4caf50' },
+        splitLine: { show: false }
+      },
+      {
+        type: 'value',
+        name: 'Elevation (ft)',
+        nameTextStyle: { color: '#8a6130' },
+        axisLine: { lineStyle: { color: '#8a6130' } },
+        axisLabel: { color: '#8a6130' },
+        splitLine: { show: false }
+      }
+    ],
+    series: series
+  };
+
+  chart.setOption(option);
+  window.addEventListener('resize', () => chart.resize());
 }
 
 // Map rendering
