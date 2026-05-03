@@ -99,13 +99,13 @@
   <h2>Charging Chart (Voltage and Charge %)</h2>
   <p class="muted" style="margin-top:-0.5rem;">Voltage profile: {{ charging_axis.label }}</p>
   {% if charging_chart_data.labels and charging_chart_data.labels|length > 0 %}
-  <canvas id="chargingHistoryChart" height="120"></canvas>
+  <div id="chargingHistoryPlot" style="height:340px;"></div>
   {% else %}
   <p class="no-data">No charging chart data yet.</p>
   {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script id="charging-chart-data" type="application/json">{{ charging_chart_data|tojson }}</script>
 <script id="charging-axis-data" type="application/json">{{ charging_axis|tojson }}</script>
 <script>
@@ -127,29 +127,50 @@ if (voltageValues.length) {
 }
 
 if (cdata.labels && cdata.labels.length > 0) {
-  new Chart(document.getElementById('chargingHistoryChart'), {
-    type: 'line',
-    data: {
-      labels: cdata.labels,
-      datasets: [
-        { label: 'Charge %', data: cdata.soc, borderColor: 'rgba(42, 157, 143, 0.95)', backgroundColor: 'rgba(42, 157, 143, 0.2)', tension: 0.3, yAxisID: 'y' },
-        { label: 'Input Voltage (V)', data: cdata.voltage, borderColor: 'rgba(255, 159, 64, 0.95)', backgroundColor: 'rgba(255, 159, 64, 0.2)', tension: 0.3, yAxisID: 'y1' }
-      ]
+  Plotly.newPlot('chargingHistoryPlot', [
+    {
+      x: cdata.labels,
+      y: cdata.soc,
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Charge %',
+      line: { color: 'rgba(42, 157, 143, 0.95)', width: 3 },
+      marker: { size: 5, color: 'rgba(42, 157, 143, 0.95)' },
+      yaxis: 'y'
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { position: 'left', min: 0, max: 100, title: { display: true, text: 'Charge %' } },
-        y1: {
-          position: 'right',
-          min: y1Min,
-          max: y1Max,
-          grid: { drawOnChartArea: false },
-          title: { display: true, text: `Voltage (V) - ${y1LabelSuffix}` }
-        }
-      }
+    {
+      x: cdata.labels,
+      y: cdata.voltage,
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Input Voltage (V)',
+      line: { color: 'rgba(255, 159, 64, 0.95)', width: 3 },
+      marker: { size: 5, color: 'rgba(255, 159, 64, 0.95)' },
+      yaxis: 'y2'
     }
+  ], {
+    margin: { t: 20, r: 56, b: 48, l: 56 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(255,255,255,0.02)',
+    xaxis: { title: 'Time', tickangle: -25, automargin: true },
+    yaxis: {
+      title: 'Charge %',
+      range: [0, 100],
+      automargin: true
+    },
+    yaxis2: {
+      title: `Voltage (V) - ${y1LabelSuffix}`,
+      range: [y1Min, y1Max],
+      overlaying: 'y',
+      side: 'right',
+      showgrid: false,
+      automargin: true
+    },
+    legend: { orientation: 'h', y: -0.25 }
+  }, {
+    responsive: true,
+    displaylogo: false,
+    modeBarButtonsToRemove: ['lasso2d']
   });
 }
 </script>

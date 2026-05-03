@@ -8,15 +8,15 @@
 <div class="card-grid analytics-grid">
   <div class="card">
     <h2>Distance per Drive</h2>
-    <canvas id="distanceChart" height="120"></canvas>
+    <div id="distancePlot" style="height:320px;"></div>
   </div>
   <div class="card">
     <h2>Energy Used per Drive</h2>
-    <canvas id="energyChart" height="120"></canvas>
+    <div id="energyPlot" style="height:320px;"></div>
   </div>
   <div class="card">
     <h2>Efficiency Trend</h2>
-    <canvas id="efficiencyChart" height="120"></canvas>
+    <div id="efficiencyPlot" style="height:320px;"></div>
   </div>
 </div>
 {% else %}
@@ -29,7 +29,7 @@
 <div class="card">
   <h2>Charging History</h2>
   <p class="muted" style="margin-top:-0.5rem;">Voltage profile: {{ charging_axis.label }}</p>
-  <canvas id="chargingChart" height="120"></canvas>
+  <div id="chargingPlot" style="height:340px;"></div>
 </div>
 {% endif %}
 
@@ -52,7 +52,7 @@
   {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <link
   rel="stylesheet"
   href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -94,118 +94,65 @@
     const pad = (p90 - p10) * 0.2;
     return { min: Math.floor(p10 - pad), max: Math.ceil(p90 + pad) };
   };
-  const minMax = (arr, fallbackMin = 0, fallbackMax = 100) => {
-    const vals = numericValues(arr);
-    if (!vals.length) return { min: fallbackMin, max: fallbackMax };
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
-    if (max <= min) return { min: fallbackMin, max: fallbackMax };
-    const pad = (max - min) * 0.1;
-    return { min: Math.floor(min - pad), max: Math.ceil(max + pad) };
-  };
+  const plotLayout = (yTitle, yRange = null, overlay = null) => ({
+    margin: { t: 20, r: 56, b: 48, l: 56 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(255,255,255,0.02)',
+    xaxis: { title: 'Time', tickangle: -25, automargin: true },
+    yaxis: {
+      title: yTitle,
+      rangemode: yRange ? undefined : 'tozero',
+      range: yRange || undefined,
+      automargin: true,
+      zeroline: true,
+      zerolinecolor: 'rgba(255,255,255,0.2)'
+    },
+    yaxis2: overlay || undefined,
+    legend: { orientation: 'h', y: -0.25 },
+  });
+  const plotConfig = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d'] };
 
   if (chartData.labels && chartData.labels.length) {
     const distanceYMax = paddedMax(chartData.distance, 10);
     const energyYMax = paddedMax(chartData.energy, 10);
     const effRange = robustRange(chartData.efficiency, 0, 60);
 
-    // Distance chart
-    const distanceEl = document.getElementById('distanceChart');
-    if (distanceEl) new Chart(distanceEl, {
-      type: 'bar',
-      data: {
-        labels: chartData.labels,
-        datasets: [
-          {
-            label: `Distance (${distanceLabel})`,
-            data: chartData.distance,
-            backgroundColor: 'rgba(45, 95, 154, 0.6)',
-            borderColor: 'rgba(45, 95, 154, 1)',
-            borderWidth: 1
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { position: 'bottom' } },
-        scales: {
-          x: { ticks: { maxTicksLimit: 8 } },
-          y: {
-            beginAtZero: true,
-            suggestedMax: distanceYMax,
-            ticks: { maxTicksLimit: 6 }
-          }
-        }
-      }
-    });
+    const distanceEl = document.getElementById('distancePlot');
+    if (distanceEl) {
+      Plotly.newPlot(distanceEl, [{
+        x: chartData.labels,
+        y: chartData.distance,
+        type: 'bar',
+        name: `Distance (${distanceLabel})`,
+        marker: { color: 'rgba(45, 95, 154, 0.78)', line: { color: 'rgba(45, 95, 154, 1)', width: 1 } }
+      }], plotLayout(`Distance (${distanceLabel})`, [0, distanceYMax]), plotConfig);
+    }
 
-    // Energy chart
-    const energyEl = document.getElementById('energyChart');
-    if (energyEl) new Chart(energyEl, {
-      type: 'bar',
-      data: {
-        labels: chartData.labels,
-        datasets: [
-          {
-            label: 'Energy Used (kWh)',
-            data: chartData.energy,
-            backgroundColor: 'rgba(230, 111, 81, 0.6)',
-            borderColor: 'rgba(230, 111, 81, 1)',
-            borderWidth: 1
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { position: 'bottom' } },
-        scales: {
-          x: { ticks: { maxTicksLimit: 8 } },
-          y: {
-            beginAtZero: true,
-            suggestedMax: energyYMax,
-            ticks: { maxTicksLimit: 6 }
-          }
-        }
-      }
-    });
+    const energyEl = document.getElementById('energyPlot');
+    if (energyEl) {
+      Plotly.newPlot(energyEl, [{
+        x: chartData.labels,
+        y: chartData.energy,
+        type: 'bar',
+        name: 'Energy Used (kWh)',
+        marker: { color: 'rgba(230, 111, 81, 0.78)', line: { color: 'rgba(230, 111, 81, 1)', width: 1 } }
+      }], plotLayout('Energy Used (kWh)', [0, energyYMax]), plotConfig);
+    }
 
-    // Efficiency chart
-    const efficiencyEl = document.getElementById('efficiencyChart');
-    if (efficiencyEl) new Chart(efficiencyEl, {
-      type: 'line',
-      data: {
-        labels: chartData.labels,
-        datasets: [
-          {
-            label: efficiencyLabel,
-            data: chartData.efficiency,
-            borderColor: 'rgba(69, 123, 157, 1)',
-            backgroundColor: 'rgba(69, 123, 157, 0.2)',
-            tension: 0.3,
-            fill: true
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { position: 'bottom' } },
-        scales: {
-          x: { ticks: { maxTicksLimit: 8 } },
-          y: {
-            min: Math.max(0, effRange.min),
-            max: Math.max(20, effRange.max),
-            ticks: { maxTicksLimit: 6 },
-            title: { display: true, text: efficiencyLabel }
-          }
-        }
-      }
-    });
+    const efficiencyEl = document.getElementById('efficiencyPlot');
+    if (efficiencyEl) {
+      Plotly.newPlot(efficiencyEl, [{
+        x: chartData.labels,
+        y: chartData.efficiency,
+        type: 'scatter',
+        mode: 'lines+markers',
+        name: efficiencyLabel,
+        line: { color: 'rgba(69, 123, 157, 1)', width: 3, shape: 'linear' },
+        marker: { size: 5, color: 'rgba(69, 123, 157, 1)' },
+        fill: 'tozeroy',
+        fillcolor: 'rgba(69, 123, 157, 0.18)'
+      }], plotLayout(efficiencyLabel, [Math.max(0, effRange.min), Math.max(20, effRange.max)]), plotConfig);
+    }
   }
 
   // Charging chart
@@ -225,55 +172,42 @@
       }
     }
 
-    const chargingEl = document.getElementById('chargingChart');
-    if (chargingEl) new Chart(chargingEl, {
-      type: 'line',
-      data: {
-        labels: chargingData.labels,
-        datasets: [
-          {
-            type: 'line',
-            label: 'Charge %',
-            data: chargingData.soc,
-            borderColor: 'rgba(42, 157, 143, 0.95)',
-            backgroundColor: 'rgba(42, 157, 143, 0.2)',
-            tension: 0.3,
-            yAxisID: 'y'
-          },
-          {
-            type: 'line',
-            label: 'Input Voltage (V)',
-            data: chargingData.voltage,
-            borderColor: 'rgba(255, 159, 64, 0.95)',
-            backgroundColor: 'rgba(255, 159, 64, 0.2)',
-            tension: 0.3,
-            yAxisID: 'y1'
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { position: 'bottom' } },
-        scales: {
-          x: { ticks: { maxTicksLimit: 8 } },
-          y: {
-            position: 'left',
-            min: 0,
-            max: 100,
-            title: { display: true, text: 'Charge %' }
-          },
-          y1: {
-            position: 'right',
-            min: y1Min,
-            max: y1Max,
-            grid: { drawOnChartArea: false },
-            title: { display: true, text: `Voltage (V) - ${y1LabelSuffix}` }
-          }
+    const chargingEl = document.getElementById('chargingPlot');
+    if (chargingEl) {
+      Plotly.newPlot(chargingEl, [
+        {
+          x: chargingData.labels,
+          y: chargingData.soc,
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: 'Charge %',
+          line: { color: 'rgba(42, 157, 143, 0.95)', width: 3 },
+          marker: { size: 5, color: 'rgba(42, 157, 143, 0.95)' },
+          yaxis: 'y'
+        },
+        {
+          x: chargingData.labels,
+          y: chargingData.voltage,
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: 'Input Voltage (V)',
+          line: { color: 'rgba(255, 159, 64, 0.95)', width: 3 },
+          marker: { size: 5, color: 'rgba(255, 159, 64, 0.95)' },
+          yaxis: 'y2'
         }
-      }
-    });
+      ], plotLayout(
+        'Charge %',
+        [0, 100],
+        {
+          title: `Voltage (V) - ${y1LabelSuffix}`,
+          range: [y1Min, y1Max],
+          overlaying: 'y',
+          side: 'right',
+          showgrid: false,
+          automargin: true
+        }
+      ), plotConfig);
+    }
   }
 
   // Map initialization
@@ -287,13 +221,42 @@
       }).addTo(map);
 
       const latLngs = points.map((p) => [p.lat, p.lon]);
-      
-      // Draw the route polyline
-      const route = L.polyline(latLngs, {
+
+      const drawRawRoute = () => L.polyline(latLngs, {
         color: '#2d5f9a',
         weight: 3,
         opacity: 0.85
       }).addTo(map);
+
+      const drawMatchedRoute = async () => {
+        // Use OSRM to snap sparse telemetry points to roads for a realistic path.
+        const coordText = points.map((p) => `${p.lon},${p.lat}`).join(';');
+        const url = `https://router.project-osrm.org/route/v1/driving/${coordText}?overview=full&geometries=geojson`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`OSRM HTTP ${resp.status}`);
+        const payload = await resp.json();
+        const routeCoords = payload?.routes?.[0]?.geometry?.coordinates;
+        if (!routeCoords || !routeCoords.length) throw new Error('No matched geometry');
+        const matchedLatLngs = routeCoords.map(([lon, lat]) => [lat, lon]);
+        return L.polyline(matchedLatLngs, {
+          color: '#2d5f9a',
+          weight: 3,
+          opacity: 0.9
+        }).addTo(map);
+      };
+
+      // Plot every recorded point so the route shape is visible point-by-point.
+      points.forEach((p, idx) => {
+        const marker = L.circleMarker([p.lat, p.lon], {
+          radius: 3,
+          color: '#8ecae6',
+          fillColor: '#8ecae6',
+          fillOpacity: 0.75,
+          weight: 1,
+          opacity: 0.8
+        }).addTo(map);
+        marker.bindTooltip(`#${idx + 1} ${p.time}${p.speed !== null ? ` • ${p.speed}` : ''}`, { sticky: true });
+      });
 
       // Add start marker
       L.circleMarker(latLngs[0], {
@@ -313,9 +276,12 @@
         weight: 2
       }).addTo(map).bindPopup('End', { autoClose: false });
 
-      // Fit map to route bounds
-      const bounds = route.getBounds();
-      map.fitBounds(bounds, { padding: [50, 50] });
+      drawMatchedRoute()
+        .catch(() => drawRawRoute())
+        .then((routeLayer) => {
+          const bounds = routeLayer.getBounds();
+          map.fitBounds(bounds, { padding: [50, 50] });
+        });
     }, 100);
   }
 </script>
