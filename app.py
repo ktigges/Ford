@@ -1011,13 +1011,16 @@ def create_app() -> Flask:
                 if row.get("altitude_m") is not None else None
             )
 
+            outside_temp_val = (
+                round(units.convert_for_display(row["outside_temp_c"], "outside_temp_c", system), 1)
+                if row.get("outside_temp_c") is not None else None
+            )
             speed_series.append(speed_val)
             soc_series.append(soc_val)
             energy_series.append(energy_val)
             energy_used_series.append(energy_used_val)
             efficiency_series.append(efficiency_val)
             outside_temp_series.append(outside_temp_val)
-            elevation_series.append(elevation_val)
             elevation_series.append(elevation_val)
 
         max_chart_points = 24

@@ -302,8 +302,8 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
     { key: 'energy_used', name: 'Energy Used (kWh)', color: '#dc3545', yAxisIndex: 2 },
     { key: 'efficiency', name: 'Consumption Rate (mi/kWh)', color: '#4caf50', yAxisIndex: 3 },
     { key: 'battery_temp', name: `Battery Temp (${tempLabel})`, color: '#8f4cb7', yAxisIndex: 1 },
-    { key: 'elevation', name: 'Elevation (ft)', color: '#8a6130', yAxisIndex: 4 }
-    { key: 'outside_temp', name: `Outside Temp (${tempLabel})`, color: '#ff6b35', yAxisIndex: 1 },
+    { key: 'elevation', name: 'Elevation (ft)', color: '#8a6130', yAxisIndex: 4 },
+    { key: 'outside_temp', name: `Outside Temp (${tempLabel})`, color: '#ff6b35', yAxisIndex: 1 }
   ];
 
   const series = seriesConfig.map(cfg => ({
@@ -318,22 +318,22 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
     symbol: 'circle',
     symbolSize: 4,
     tooltip: { valueFormatter: (v) => (v === null ? '–' : v.toFixed(2)) }
-    }));
+  }));
 
     // Build custom legend below chart
     if (legendDom) {
       legendDom.innerHTML = seriesConfig.map(cfg => `
-        <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; user-select:none; padding:0.25rem 0.5rem; border-radius:4px; transition:background 0.2s;" class="legend-item" data-series="${cfg.name}">
+        <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; user-select:none; padding:0.25rem 0.5rem; border-radius:4px; transition:background 0.2s;" class="legend-item" data-series="\${cfg.name}">
           <input type="checkbox" checked style="width:16px; height:16px; cursor:pointer;" />
-          <span style="color:${cfg.color}; font-weight:600; display:inline-block; width:10px; height:10px; background:${cfg.color}; border-radius:2px; margin-right:0.25rem;"></span>
-          <span>${cfg.name}</span>
+          <span style="color:\${cfg.color}; font-weight:600; display:inline-block; width:10px; height:10px; background:\${cfg.color}; border-radius:2px; margin-right:0.25rem;"></span>
+          <span>\${cfg.name}</span>
         </label>
       `).join('');
 
       legendDom.querySelectorAll('.legend-item').forEach((item, idx) => {
         const input = item.querySelector('input');
         input.addEventListener('change', () => {
-          const newOption = JSON.parse(JSON.stringify(option));
+          const newOption = JSON.parse(JSON.stringify(currentOption));
           newOption.series[idx].show = input.checked;
           chart.setOption(newOption);
           item.style.background = input.checked ? 'transparent' : '#f0f0f0';
@@ -341,10 +341,8 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
       });
     }
 
-    const option = {
-  }));
 
-  const option = {
+  const currentOption = {
     color: seriesConfig.map(c => c.color),
     backgroundColor: 'transparent',
     textStyle: { color: '#333' },
@@ -367,14 +365,6 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
     legend: {
     show: false
   },
-      type: 'scroll',
-      orient: 'horizontal',
-      left: 'center',
-      bottom: -5,
-      textStyle: { color: '#555' },
-      data: seriesConfig.map(c => c.name),
-      inactiveColor: '#ccc'
-    },
     xAxis: {
       type: 'category',
       data: driveChartData.labels,
@@ -427,11 +417,10 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
     series: series
   };
 
-  chart.setOption(option);
+  chart.setOption(currentOption);
   window.addEventListener('resize', () => chart.resize());
 }
 
-// Map rendering
 const mapPoints = JSON.parse(document.getElementById('drive-map-data')?.textContent || '[]');
 if (mapPoints && mapPoints.length > 1) {
   setTimeout(() => {
