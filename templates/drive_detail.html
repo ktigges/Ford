@@ -106,6 +106,7 @@
       <option value="soc">SOC %</option>
       <option value="energy">Energy Remaining</option>
       <option value="energy_used">Energy Used</option>
+      <option value="efficiency">Consumption Rate (mi/kWh)</option>
       <option value="battery_temp">Battery Temp</option>
       <option value="elevation">Elevation</option>
     </select>
@@ -350,6 +351,17 @@ const plotSeries = {
     range: () => {
       const min = 0;
       const max = Math.max(paddedMax(driveChartData.energy_used, 10), min + 1);
+      return [min, max];
+    }
+  },
+  efficiency: {
+    label: 'Consumption Rate (mi/kWh)',
+    values: driveChartData.efficiency || [],
+    color: 'rgba(76, 175, 80, 0.95)',
+    fill: false,
+    range: () => {
+      const min = 0;
+      const max = Math.max(paddedMax(driveChartData.efficiency, 4), min + 1);
       return [min, max];
     }
   },

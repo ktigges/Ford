@@ -953,13 +953,18 @@ def create_app() -> Flask:
         soc_series = []
         energy_series = []
         energy_used_series = []
+        efficiency_series = []
         battery_temp_series = []
         elevation_series = []
 
-        # Calculate starting energy for cumulative energy used calculation
+        # Calculate starting energy and odometer for cumulative calculations
         starting_energy_kwh = None
-        if points and points[0].get("energy_remaining_kwh") is not None:
-            starting_energy_kwh = float(points[0]["energy_remaining_kwh"])
+        starting_odometer_km = None
+        if points:
+            if points[0].get("energy_remaining_kwh") is not None:
+                starting_energy_kwh = float(points[0]["energy_remaining_kwh"])
+            if points[0].get("odometer_km") is not None:
+                starting_odometer_km = float(points[0]["odometer_km"])
 
         for row in points:
             labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
@@ -982,6 +987,19 @@ def create_app() -> Flask:
             if starting_energy_kwh is not None and energy_val is not None:
                 energy_used_val = round(max(0, starting_energy_kwh - energy_val), 2)
 
+            efficiency_val = None
+            if (starting_odometer_km is not None and 
+                row.get("odometer_km") is not None and 
+                energy_used_val is not None and 
+                energy_used_val > 0):
+                try:
+                    distance_km = float(row["odometer_km"]) - starting_odometer_km
+                    distance_miles = distance_km * 0.621371
+                    if distance_miles > 0:
+                        efficiency_val = round(distance_miles / energy_used_val, 2)
+                except (TypeError, ValueError):
+                    efficiency_val = None
+
             battery_temp_val = (
                 round(units.convert_for_display(row["battery_temp_c"], "battery_temp_c", system), 1)
                 if row.get("battery_temp_c") is not None else None
@@ -996,6 +1014,7 @@ def create_app() -> Flask:
             soc_series.append(soc_val)
             energy_series.append(energy_val)
             energy_used_series.append(energy_used_val)
+            efficiency_series.append(efficiency_val)
             battery_temp_series.append(battery_temp_val)
             elevation_series.append(elevation_val)
 
@@ -1011,6 +1030,7 @@ def create_app() -> Flask:
             soc_series = [soc_series[idx] for idx in sampled_indices]
             energy_series = [energy_series[idx] for idx in sampled_indices]
             energy_used_series = [energy_used_series[idx] for idx in sampled_indices]
+            efficiency_series = [efficiency_series[idx] for idx in sampled_indices]
             battery_temp_series = [battery_temp_series[idx] for idx in sampled_indices]
             elevation_series = [elevation_series[idx] for idx in sampled_indices]
 
@@ -1020,6 +1040,7 @@ def create_app() -> Flask:
             "soc": soc_series,
             "energy": energy_series,
             "energy_used": energy_used_series,
+            "efficiency": efficiency_series,
             "battery_temp": battery_temp_series,
             "elevation": elevation_series,
         }
