@@ -47,6 +47,8 @@
     — {{ map_points|length }} points recorded
   </p>
   <div id="drive-map" class="drive-map"></div>
+  <div id="drive-points-meta" class="muted" style="margin-top:0.75rem;"></div>
+  <div id="drive-points-plot" style="height:260px; margin-top:0.5rem;"></div>
   {% else %}
   <p>No route points available for the latest drive yet.</p>
   {% endif %}
@@ -70,6 +72,7 @@
   const chargingData = {{ charging_data|tojson }};
   const chargingAxis = {{ charging_axis|tojson }};
   const distanceLabel = {{ distance_label|tojson }};
+  const speedLabel = {{ speed_label|tojson }};
   const efficiencyLabel = {{ efficiency_label|tojson }};
 
   const numericValues = (arr) => (arr || []).filter((v) => Number.isFinite(v));
@@ -229,6 +232,60 @@
 
   // Map initialization
   const points = {{ map_points|tojson }};
+
+  // Simple per-point graph for the latest drive (speed by sample index).
+  if (points && points.length) {
+    const pointMetaEl = document.getElementById('drive-points-meta');
+    const pointPlotEl = document.getElementById('drive-points-plot');
+    if (pointMetaEl && pointPlotEl) {
+      const indices = points.map((_, i) => i + 1);
+      const speeds = points.map((p) => Number.isFinite(p.speed) ? p.speed : null);
+      const uniqueCoordCount = new Set(points.map((p) => `${p.lat},${p.lon}`)).size;
+
+      const movedFlags = points.map((p, i) => {
+        if (i === 0) return 1;
+        const prev = points[i - 1];
+        return (p.lat !== prev.lat || p.lon !== prev.lon) ? 1 : 0;
+      });
+
+      pointMetaEl.textContent = `GPS updates: ${uniqueCoordCount} unique coordinates across ${points.length} samples.`;
+
+      Plotly.newPlot(pointPlotEl, [
+        {
+          x: indices,
+          y: speeds,
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: 'Speed',
+          line: { color: 'rgba(38, 70, 83, 0.95)', width: 2 },
+          marker: { size: 5, color: 'rgba(38, 70, 83, 0.95)' },
+          customdata: points.map((p) => p.time),
+          hovertemplate: 'Sample %{x}<br>Speed %{y}<br>%{customdata}<extra></extra>'
+        },
+        {
+          x: indices,
+          y: movedFlags.map((v) => v ? 0 : null),
+          type: 'scatter',
+          mode: 'markers',
+          name: 'GPS Position Change',
+          marker: { size: 8, color: 'rgba(230, 111, 81, 0.95)', symbol: 'diamond' },
+          hovertemplate: 'Sample %{x}<br>GPS coordinate changed<extra></extra>'
+        }
+      ], {
+        margin: { t: 16, r: 20, b: 44, l: 56 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(255,255,255,0.02)',
+        xaxis: { title: { text: 'Sample # (poll point)' }, automargin: true },
+        yaxis: { title: { text: `Speed (${speedLabel})` }, rangemode: 'tozero', automargin: true },
+        legend: { orientation: 'h', y: -0.24 },
+      }, {
+        responsive: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ['lasso2d']
+      });
+    }
+  }
+
   if (points && points.length > 1) {
     setTimeout(() => {
       const map = L.map('drive-map', { scrollWheelZoom: false });
