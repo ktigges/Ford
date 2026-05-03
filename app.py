@@ -12,7 +12,7 @@ Date:        2026-04-28
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file
@@ -337,6 +337,27 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             return False
 
+    def _latest_charging_session(rows_desc: list[dict], max_gap_minutes: int = 45) -> list[dict]:
+        """Return the most recent contiguous charging session from DESC history rows."""
+        session_rows_desc = []
+        last_polled_at = None
+        max_gap = timedelta(minutes=max_gap_minutes)
+
+        for row in rows_desc:
+            if not _charging_sample_meaningful(row):
+                if session_rows_desc:
+                    break
+                continue
+
+            polled_at = row.get("polled_at")
+            if last_polled_at and polled_at and (last_polled_at - polled_at) > max_gap:
+                break
+
+            session_rows_desc.append(row)
+            last_polled_at = polled_at
+
+        return list(reversed(session_rows_desc))
+
     def _display_timezone() -> tuple[timezone | ZoneInfo, str]:
         """Resolve configured display timezone, with safe UTC fallback."""
         if db.is_available():
@@ -633,6 +654,7 @@ def create_app() -> Flask:
     def charging_overview():
         """Show current charging state plus recent charging history samples."""
         vin = _active_vin()
+        system = _get_setting("units") if db.is_available() else "imperial"
         charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
         charging_display = dict(charging) if charging else None
         if charging_display and _plug_status_idle(charging_display.get("plug_status")):
@@ -644,38 +666,117 @@ def create_app() -> Flask:
         environment = db.fetch_one("SELECT * FROM environment_state WHERE vin = %s", (vin,)) if vin else None
 
         history = []
+        history_rows = []
         if vin and _table_exists("charging_history"):
-            history = db.fetch_all(
-                "SELECT * FROM charging_history WHERE vin = %s ORDER BY polled_at DESC LIMIT 100",
+            history_rows = db.fetch_all(
+                "SELECT * FROM charging_history WHERE vin = %s ORDER BY polled_at DESC LIMIT 400",
                 (vin,),
             )
+            history = history_rows[:100]
 
-        # Build charging history chart data
-        charging_chart_data = {"labels": [], "soc": [], "voltage": []}
-        if history:
-            for row in reversed(history):
-                if not _charging_sample_meaningful(row):
-                    continue
+        latest_session = _latest_charging_session(history_rows) if history_rows else []
 
-                soc_raw = row.get("soc_percent")
-                voltage_raw = row.get("charger_voltage")
+        charging_chart_data = {
+            "labels": [],
+            "soc": [],
+            "actual_soc": [],
+            "energy_remaining": [],
+            "charge_power": [],
+            "voltage": [],
+            "current": [],
+            "dc_current": [],
+            "time_to_full": [],
+            "battery_temp": [],
+            "outside_temp": [],
+            "ambient_temp": [],
+        }
+        if latest_session:
+            for row in latest_session:
                 try:
-                    soc_val = round(float(soc_raw), 1) if soc_raw is not None else None
+                    soc_val = round(float(row["soc_percent"]), 1) if row.get("soc_percent") is not None else None
                 except (TypeError, ValueError):
                     soc_val = None
                 try:
-                    voltage_val = int(float(voltage_raw)) if voltage_raw is not None else None
+                    actual_soc_val = round(float(row["actual_soc_percent"]), 1) if row.get("actual_soc_percent") is not None else None
+                except (TypeError, ValueError):
+                    actual_soc_val = None
+                try:
+                    energy_remaining_val = round(float(row["energy_remaining_kwh"]), 2) if row.get("energy_remaining_kwh") is not None else None
+                except (TypeError, ValueError):
+                    energy_remaining_val = None
+                try:
+                    charge_power_val = round(float(row["charge_power_kw"]), 2) if row.get("charge_power_kw") is not None else None
+                except (TypeError, ValueError):
+                    charge_power_val = None
+                try:
+                    voltage_val = int(float(row["charger_voltage"])) if row.get("charger_voltage") is not None else None
                 except (TypeError, ValueError):
                     voltage_val = None
+                try:
+                    current_val = round(float(row["charger_current"]), 1) if row.get("charger_current") is not None else None
+                except (TypeError, ValueError):
+                    current_val = None
+                try:
+                    dc_current_val = round(float(row["evse_dc_current"]), 1) if row.get("evse_dc_current") is not None else None
+                except (TypeError, ValueError):
+                    dc_current_val = None
+                try:
+                    time_to_full_val = round(float(row["time_to_full_min"]), 0) if row.get("time_to_full_min") is not None else None
+                except (TypeError, ValueError):
+                    time_to_full_val = None
 
                 if soc_val is not None and not (0 <= soc_val <= 100):
                     soc_val = None
-                if voltage_val is not None and not (80 <= voltage_val <= 500):
+                if actual_soc_val is not None and not (0 <= actual_soc_val <= 100):
+                    actual_soc_val = None
+                if energy_remaining_val is not None and energy_remaining_val < 0:
+                    energy_remaining_val = None
+                if charge_power_val is not None and not (0 <= charge_power_val <= 500):
+                    charge_power_val = None
+                if voltage_val is not None and not (80 <= voltage_val <= 520):
                     voltage_val = None
+                if current_val is not None and not (0 <= current_val <= 1000):
+                    current_val = None
+                if dc_current_val is not None and not (0 <= dc_current_val <= 1000):
+                    dc_current_val = None
+                if time_to_full_val is not None and time_to_full_val < 0:
+                    time_to_full_val = None
+
+                battery_temp_val = (
+                    round(units.convert_for_display(row["battery_temp_c"], "battery_temp_c", system), 1)
+                    if row.get("battery_temp_c") is not None else None
+                )
+                outside_temp_val = (
+                    round(units.convert_for_display(row["outside_temp_c"], "outside_temp_c", system), 1)
+                    if row.get("outside_temp_c") is not None else None
+                )
+                ambient_temp_val = (
+                    round(units.convert_for_display(row["ambient_temp_c"], "ambient_temp_c", system), 1)
+                    if row.get("ambient_temp_c") is not None else None
+                )
 
                 charging_chart_data["labels"].append(_format_local_datetime(row.get("polled_at"), "%m-%d %H:%M"))
                 charging_chart_data["soc"].append(soc_val)
+                charging_chart_data["actual_soc"].append(actual_soc_val)
+                charging_chart_data["energy_remaining"].append(energy_remaining_val)
+                charging_chart_data["charge_power"].append(charge_power_val)
                 charging_chart_data["voltage"].append(voltage_val)
+                charging_chart_data["current"].append(current_val)
+                charging_chart_data["dc_current"].append(dc_current_val)
+                charging_chart_data["time_to_full"].append(time_to_full_val)
+                charging_chart_data["battery_temp"].append(battery_temp_val)
+                charging_chart_data["outside_temp"].append(outside_temp_val)
+                charging_chart_data["ambient_temp"].append(ambient_temp_val)
+
+        max_chart_points = 48
+        point_count = len(charging_chart_data["labels"])
+        if point_count > max_chart_points:
+            step = max(1, point_count // max_chart_points)
+            sampled_indices = list(range(0, point_count, step))
+            if sampled_indices[-1] != point_count - 1:
+                sampled_indices.append(point_count - 1)
+            for key, series in charging_chart_data.items():
+                charging_chart_data[key] = [series[idx] for idx in sampled_indices]
 
         charging_axis = _charging_axis_for_mode(
             _charging_mode_from_data(charging, charging_chart_data["voltage"])
@@ -700,6 +801,7 @@ def create_app() -> Flask:
             history_available=_table_exists("charging_history"),
             charging_chart_data=charging_chart_data,
             charging_axis=charging_axis,
+            latest_session=latest_session,
             refresh_interval=refresh_interval,
             display_timezone=_display_timezone()[1],
         )

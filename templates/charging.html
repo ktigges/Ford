@@ -96,82 +96,222 @@
 </div>
 
 <div class="card">
-  <h2>Charging Chart (Voltage and Charge %)</h2>
-  <p class="muted" style="margin-top:-0.5rem;">Voltage profile: {{ charging_axis.label }}</p>
+  <h2>Last Charging Session Charts</h2>
+  <p class="muted" style="margin-top:-0.5rem;">
+    Voltage profile: {{ charging_axis.label }}.
+    {% if latest_session %}
+    Showing {{ charging_chart_data.labels|length }} plotted samples from {{ format_local_dt((latest_session|first).polled_at, '%Y-%m-%d %H:%M:%S') }} to {{ format_local_dt((latest_session|last).polled_at, '%Y-%m-%d %H:%M:%S') }}.
+    {% endif %}
+  </p>
   {% if charging_chart_data.labels and charging_chart_data.labels|length > 0 %}
-  <div id="chargingHistoryPlot" style="height:340px;"></div>
+  <div style="display:grid; gap:1rem;">
+    <div>
+      <h3 style="margin:0 0 0.5rem;">Session Progress</h3>
+      <div id="chargingSessionOverviewPlot" style="height:320px; width:100%;"></div>
+    </div>
+    <div>
+      <h3 style="margin:0 0 0.5rem;">Charge Delivery</h3>
+      <div id="chargingSessionElectricalPlot" style="height:320px; width:100%;"></div>
+    </div>
+    <div>
+      <h3 style="margin:0 0 0.5rem;">Temperature</h3>
+      <div id="chargingSessionTempPlot" style="height:280px; width:100%;"></div>
+    </div>
+  </div>
   {% else %}
   <p class="no-data">No charging chart data yet.</p>
   {% endif %}
 </div>
 
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script id="charging-chart-data" type="application/json">{{ charging_chart_data|tojson }}</script>
 <script id="charging-axis-data" type="application/json">{{ charging_axis|tojson }}</script>
+<span id="charging-temp-label" data-temp-label="{{ ulabel('temperature') }}" style="display:none;"></span>
 <script>
 const cdata = JSON.parse(document.getElementById('charging-chart-data').textContent || '{}');
 const axis = JSON.parse(document.getElementById('charging-axis-data').textContent || '{}');
+const tempLabel = document.getElementById('charging-temp-label').dataset.tempLabel || '°F';
+
 const voltageValues = (cdata.voltage || []).filter((v) => Number.isFinite(v));
-let y1Min = Number.isFinite(axis.min) ? axis.min : 80;
-let y1Max = Number.isFinite(axis.max) ? axis.max : 300;
-let y1LabelSuffix = axis.label || 'AC / L1-L2';
+let voltageMin = Number.isFinite(axis.min) ? axis.min : 80;
+let voltageMax = Number.isFinite(axis.max) ? axis.max : 300;
+let voltageLabelSuffix = axis.label || 'AC / L1-L2';
 if (voltageValues.length) {
-  const outOfRange = voltageValues.filter((v) => v < y1Min || v > y1Max).length;
+  const outOfRange = voltageValues.filter((v) => v < voltageMin || v > voltageMax).length;
   if ((outOfRange / voltageValues.length) > 0.2) {
     const observedMin = Math.min(...voltageValues);
     const observedMax = Math.max(...voltageValues);
-    y1Min = Math.floor(observedMin - 5);
-    y1Max = Math.ceil(observedMax + 5);
-    y1LabelSuffix = `${y1LabelSuffix} (auto-range)`;
+    voltageMin = Math.floor(observedMin - 5);
+    voltageMax = Math.ceil(observedMax + 5);
+    voltageLabelSuffix = `${voltageLabelSuffix} (auto-range)`;
   }
 }
 
+const hasSeriesData = (key) => (cdata[key] || []).some((v) => v !== null && v !== undefined);
+const charts = [];
+const baseXAxis = {
+  type: 'category',
+  data: cdata.labels || [],
+  axisLine: { lineStyle: { color: '#ddd' } },
+  axisLabel: { color: '#666', interval: Math.max(0, Math.floor((cdata.labels || []).length / 8)) },
+  splitLine: { show: false }
+};
+const baseTooltip = {
+  trigger: 'axis',
+  backgroundColor: 'rgba(0, 0, 0, 0.8)',
+  borderColor: '#555',
+  textStyle: { color: '#fff' },
+  formatter: (params) => {
+    if (!Array.isArray(params) || !params.length) return '';
+    const time = params[0].name;
+    const lines = params
+      .filter((p) => p.value !== null && p.value !== undefined)
+      .map((p) => `<span style="color:${p.color}">●</span> ${p.seriesName}: <strong>${typeof p.value === 'number' ? p.value.toFixed(2) : p.value}</strong>`)
+      .join('<br>');
+    return `<div style="font-weight:600;">${time}</div>${lines}`;
+  }
+};
+
+function addChart(elementId, option) {
+  const dom = document.getElementById(elementId);
+  if (!dom) return;
+  const chart = echarts.init(dom, null, { renderer: 'canvas' });
+  chart.setOption(option);
+  charts.push(chart);
+}
+
 if (cdata.labels && cdata.labels.length > 0) {
-  Plotly.newPlot('chargingHistoryPlot', [
-    {
-      x: cdata.labels,
-      y: cdata.soc,
-      type: 'scatter',
-      mode: 'lines+markers',
-      name: 'Charge %',
-      line: { color: 'rgba(42, 157, 143, 0.95)', width: 3 },
-      marker: { size: 5, color: 'rgba(42, 157, 143, 0.95)' },
-      yaxis: 'y'
-    },
-    {
-      x: cdata.labels,
-      y: cdata.voltage,
-      type: 'scatter',
-      mode: 'lines+markers',
-      name: 'Input Voltage (V)',
-      line: { color: 'rgba(255, 159, 64, 0.95)', width: 3 },
-      marker: { size: 5, color: 'rgba(255, 159, 64, 0.95)' },
-      yaxis: 'y2'
-    }
-  ], {
-    margin: { t: 20, r: 56, b: 48, l: 56 },
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(255,255,255,0.02)',
-    xaxis: { title: 'Time', tickangle: -25, automargin: true },
-    yaxis: {
-      title: 'Charge %',
-      range: [0, 100],
-      automargin: true
-    },
-    yaxis2: {
-      title: `Voltage (V) - ${y1LabelSuffix}`,
-      range: [y1Min, y1Max],
-      overlaying: 'y',
-      side: 'right',
-      showgrid: false,
-      automargin: true
-    },
-    legend: { orientation: 'h', y: -0.25 }
-  }, {
-    responsive: true,
-    displaylogo: false,
-    modeBarButtonsToRemove: ['lasso2d']
-  });
+  const overviewSeries = [];
+  if (hasSeriesData('soc')) {
+    overviewSeries.push({ name: 'SOC %', type: 'line', data: cdata.soc, yAxisIndex: 0, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#2a9d8f' }, itemStyle: { color: '#2a9d8f' } });
+  }
+  if (hasSeriesData('actual_soc')) {
+    overviewSeries.push({ name: 'Actual SOC %', type: 'line', data: cdata.actual_soc, yAxisIndex: 0, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#264653', type: 'dashed' }, itemStyle: { color: '#264653' } });
+  }
+  if (hasSeriesData('energy_remaining')) {
+    overviewSeries.push({ name: 'Energy Remaining (kWh)', type: 'line', data: cdata.energy_remaining, yAxisIndex: 1, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#e76f51' }, itemStyle: { color: '#e76f51' } });
+  }
+  if (hasSeriesData('time_to_full')) {
+    overviewSeries.push({ name: 'Time to Full (min)', type: 'line', data: cdata.time_to_full, yAxisIndex: 2, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#6c757d' }, itemStyle: { color: '#6c757d' } });
+  }
+
+  if (overviewSeries.length) {
+    addChart('chargingSessionOverviewPlot', {
+      color: ['#2a9d8f', '#264653', '#e76f51', '#6c757d'],
+      backgroundColor: 'transparent',
+      textStyle: { color: '#333' },
+      grid: { left: 90, right: 180, top: 40, bottom: 45, containLabel: false },
+      tooltip: baseTooltip,
+      legend: { top: 0, textStyle: { color: '#555' } },
+      xAxis: baseXAxis,
+      yAxis: [
+        {
+          type: 'value', position: 'left', offset: 0, min: 0, max: 100,
+          name: 'Charge %', nameLocation: 'middle', nameRotate: 90, nameGap: 55,
+          nameTextStyle: { color: '#2a9d8f' }, axisLine: { lineStyle: { color: '#2a9d8f' } },
+          axisLabel: { color: '#2a9d8f' }, splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
+        },
+        {
+          type: 'value', position: 'right', offset: 0,
+          name: 'Energy (kWh)', nameLocation: 'middle', nameRotate: -90, nameGap: 52,
+          nameTextStyle: { color: '#e76f51' }, axisLine: { lineStyle: { color: '#e76f51' } },
+          axisLabel: { color: '#e76f51' }, splitLine: { show: false }
+        },
+        {
+          type: 'value', position: 'right', offset: 68,
+          name: 'Time to Full (min)', nameLocation: 'middle', nameRotate: -90, nameGap: 52,
+          nameTextStyle: { color: '#6c757d' }, axisLine: { lineStyle: { color: '#6c757d' } },
+          axisLabel: { color: '#6c757d' }, splitLine: { show: false }
+        }
+      ],
+      series: overviewSeries
+    });
+  }
+
+  const electricalSeries = [];
+  if (hasSeriesData('charge_power')) {
+    electricalSeries.push({ name: 'Charge Power (kW)', type: 'line', data: cdata.charge_power, yAxisIndex: 0, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#dc3545' }, itemStyle: { color: '#dc3545' }, areaStyle: { color: '#dc3545', opacity: 0.15 } });
+  }
+  if (hasSeriesData('voltage')) {
+    electricalSeries.push({ name: 'Voltage (V)', type: 'line', data: cdata.voltage, yAxisIndex: 1, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#ff9f40' }, itemStyle: { color: '#ff9f40' } });
+  }
+  if (hasSeriesData('current')) {
+    electricalSeries.push({ name: 'AC Current (A)', type: 'line', data: cdata.current, yAxisIndex: 2, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#3a86ff' }, itemStyle: { color: '#3a86ff' } });
+  }
+  if (hasSeriesData('dc_current')) {
+    electricalSeries.push({ name: 'DC Current (A)', type: 'line', data: cdata.dc_current, yAxisIndex: 2, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#8338ec', type: 'dashed' }, itemStyle: { color: '#8338ec' } });
+  }
+
+  if (electricalSeries.length) {
+    addChart('chargingSessionElectricalPlot', {
+      color: ['#dc3545', '#ff9f40', '#3a86ff', '#8338ec'],
+      backgroundColor: 'transparent',
+      textStyle: { color: '#333' },
+      grid: { left: 90, right: 180, top: 40, bottom: 45, containLabel: false },
+      tooltip: baseTooltip,
+      legend: { top: 0, textStyle: { color: '#555' } },
+      xAxis: baseXAxis,
+      yAxis: [
+        {
+          type: 'value', position: 'left', offset: 0,
+          name: 'Power (kW)', nameLocation: 'middle', nameRotate: 90, nameGap: 55,
+          nameTextStyle: { color: '#dc3545' }, axisLine: { lineStyle: { color: '#dc3545' } },
+          axisLabel: { color: '#dc3545' }, splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
+        },
+        {
+          type: 'value', position: 'right', offset: 0, min: voltageMin, max: voltageMax,
+          name: `Voltage (V) - ${voltageLabelSuffix}`, nameLocation: 'middle', nameRotate: -90, nameGap: 52,
+          nameTextStyle: { color: '#ff9f40' }, axisLine: { lineStyle: { color: '#ff9f40' } },
+          axisLabel: { color: '#ff9f40' }, splitLine: { show: false }
+        },
+        {
+          type: 'value', position: 'right', offset: 70,
+          name: 'Current (A)', nameLocation: 'middle', nameRotate: -90, nameGap: 52,
+          nameTextStyle: { color: '#3a86ff' }, axisLine: { lineStyle: { color: '#3a86ff' } },
+          axisLabel: { color: '#3a86ff' }, splitLine: { show: false }
+        }
+      ],
+      series: electricalSeries
+    });
+  }
+
+  const tempSeries = [];
+  if (hasSeriesData('battery_temp')) {
+    tempSeries.push({ name: `Battery Temp (${tempLabel})`, type: 'line', data: cdata.battery_temp, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#8f4cb7' }, itemStyle: { color: '#8f4cb7' } });
+  }
+  if (hasSeriesData('outside_temp')) {
+    tempSeries.push({ name: `Outside Temp (${tempLabel})`, type: 'line', data: cdata.outside_temp, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#ff6b35' }, itemStyle: { color: '#ff6b35' } });
+  }
+  if (hasSeriesData('ambient_temp')) {
+    tempSeries.push({ name: `Ambient Temp (${tempLabel})`, type: 'line', data: cdata.ambient_temp, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, color: '#198754', type: 'dashed' }, itemStyle: { color: '#198754' } });
+  }
+
+  if (tempSeries.length) {
+    addChart('chargingSessionTempPlot', {
+      color: ['#8f4cb7', '#ff6b35', '#198754'],
+      backgroundColor: 'transparent',
+      textStyle: { color: '#333' },
+      grid: { left: 90, right: 40, top: 40, bottom: 45, containLabel: false },
+      tooltip: baseTooltip,
+      legend: { top: 0, textStyle: { color: '#555' } },
+      xAxis: baseXAxis,
+      yAxis: {
+        type: 'value',
+        position: 'left',
+        name: `Temperature (${tempLabel})`,
+        nameLocation: 'middle',
+        nameRotate: 90,
+        nameGap: 55,
+        nameTextStyle: { color: '#8f4cb7' },
+        axisLine: { lineStyle: { color: '#8f4cb7' } },
+        axisLabel: { color: '#8f4cb7' },
+        splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
+      },
+      series: tempSeries
+    });
+  }
+
+  window.addEventListener('resize', () => charts.forEach((chart) => chart.resize()));
 }
 </script>
 {% if refresh_interval and refresh_interval > 0 %}
