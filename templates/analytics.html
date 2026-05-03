@@ -8,14 +8,17 @@
 <div class="card-grid analytics-grid">
   <div class="card">
     <h2>Distance per Drive</h2>
+    <p class="muted" style="margin-top:-0.5rem;">Simplified view: last 3 drives</p>
     <div id="distancePlot" style="height:320px;"></div>
   </div>
   <div class="card">
     <h2>Energy Used per Drive</h2>
+    <p class="muted" style="margin-top:-0.5rem;">Simplified view: last 3 drives</p>
     <div id="energyPlot" style="height:320px;"></div>
   </div>
   <div class="card">
     <h2>Efficiency Trend</h2>
+    <p class="muted" style="margin-top:-0.5rem;">Simplified view: last 3 drives</p>
     <div id="efficiencyPlot" style="height:320px;"></div>
   </div>
 </div>
@@ -107,18 +110,26 @@
   const plotConfig = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d'] };
 
   if (chartData.labels && chartData.labels.length) {
-    const distanceYMax = paddedMax(chartData.distance, 10);
-    const energyYMax = paddedMax(chartData.energy, 10);
-    const effRange = robustRange(chartData.efficiency, 0, 60);
+    const recentCount = 3;
+    const recentLabels = chartData.labels.slice(-recentCount);
+    const recentDistance = (chartData.distance || []).slice(-recentCount);
+    const recentEnergy = (chartData.energy || []).slice(-recentCount);
+    const recentEfficiency = (chartData.efficiency || []).slice(-recentCount);
+
+    const distanceYMax = paddedMax(recentDistance, 10);
+    const energyYMax = paddedMax(recentEnergy, 10);
+    const effRange = robustRange(recentEfficiency, 0, 60);
 
     const distanceEl = document.getElementById('distancePlot');
     if (distanceEl) {
       Plotly.newPlot(distanceEl, [{
-        x: chartData.labels,
-        y: chartData.distance,
-        type: 'bar',
+        x: recentLabels,
+        y: recentDistance,
+        type: 'scatter',
+        mode: 'lines+markers',
         name: `Distance (${distanceLabel})`,
-        marker: { color: 'rgba(45, 95, 154, 0.78)', line: { color: 'rgba(45, 95, 154, 1)', width: 1 } }
+        line: { color: 'rgba(45, 95, 154, 1)', width: 3 },
+        marker: { size: 9, color: 'rgba(45, 95, 154, 1)' }
       }], {
         ...baseLayout,
         yaxis: {
@@ -132,11 +143,13 @@
     const energyEl = document.getElementById('energyPlot');
     if (energyEl) {
       Plotly.newPlot(energyEl, [{
-        x: chartData.labels,
-        y: chartData.energy,
-        type: 'bar',
+        x: recentLabels,
+        y: recentEnergy,
+        type: 'scatter',
+        mode: 'lines+markers',
         name: 'Energy Used (kWh)',
-        marker: { color: 'rgba(230, 111, 81, 0.78)', line: { color: 'rgba(230, 111, 81, 1)', width: 1 } }
+        line: { color: 'rgba(230, 111, 81, 1)', width: 3 },
+        marker: { size: 9, color: 'rgba(230, 111, 81, 1)' }
       }], {
         ...baseLayout,
         yaxis: {
@@ -150,8 +163,8 @@
     const efficiencyEl = document.getElementById('efficiencyPlot');
     if (efficiencyEl) {
       Plotly.newPlot(efficiencyEl, [{
-        x: chartData.labels,
-        y: chartData.efficiency,
+        x: recentLabels,
+        y: recentEfficiency,
         type: 'scatter',
         mode: 'lines+markers',
         name: efficiencyLabel,

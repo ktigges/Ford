@@ -67,6 +67,7 @@
       <th>Drive ID</th>
       <th>Started ({{ display_timezone }})</th>
       <th>Ended ({{ display_timezone }})</th>
+      <th>Drive Summary</th>
       <th>Duration</th>
       <th>Distance ({{ ulabel('distance') }})</th>
       <th>Energy Used</th>
@@ -82,6 +83,24 @@
       <td><a href="{{ url_for('drive_detail', drive_id=d.id) }}" title="{{ d.drive_uuid }}">{{ d.drive_uuid|string|truncate(8, True, '') }}</a></td>
       <td>{{ format_local_dt(d.started_at, '%Y-%m-%d %H:%M') if d.started_at else '–' }}</td>
       <td>{{ format_local_dt(d.ended_at, '%Y-%m-%d %H:%M') if d.ended_at else '–' }}</td>
+      <td>
+        <div style="display:grid; grid-template-columns:auto auto; gap:0.15rem 0.5rem; font-size:0.85rem;">
+          <span class="muted">Miles</span>
+          <span>{% if d.summary_miles_driven is not none %}{{ d.summary_miles_driven|round(1) }} mi{% else %}–{% endif %}</span>
+          <span class="muted">Time</span>
+          <span>
+            {% if d.summary_duration_sec is not none %}
+              {{ "%d"|format(d.summary_duration_sec // 60) }}m {{ "%d"|format(d.summary_duration_sec % 60) }}s
+            {% else %}–{% endif %}
+          </span>
+          <span class="muted">Energy</span>
+          <span>{% if d.energy_used_kwh is not none %}{{ "%.2f"|format(d.energy_used_kwh) }} kWh{% else %}–{% endif %}</span>
+          <span class="muted">Avg mi/kWh</span>
+          <span>{% if d.summary_avg_mi_per_kwh is not none %}{{ d.summary_avg_mi_per_kwh|round(2) }}{% else %}–{% endif %}</span>
+          <span class="muted">kWh Left</span>
+          <span>{% if d.summary_kwh_remaining is not none %}{{ d.summary_kwh_remaining|round(2) }} kWh{% else %}–{% endif %}</span>
+        </div>
+      </td>
       <td>
         {% if d.duration_sec is not none %}
           {{ "%d"|format(d.duration_sec // 60) }}m {{ "%d"|format(d.duration_sec % 60) }}s
