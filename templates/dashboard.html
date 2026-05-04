@@ -26,15 +26,28 @@
   {% if refresh_interval %}<span class="muted" style="margin-left:0.5rem;">Enabled: {{ refresh_interval }}s</span>{% endif %}
 </div>
 
-{% if charging_active %}
-<div class="charging-alert card">
-  <div>
-    <div class="charging-alert-label">Charging</div>
-    <div class="charging-alert-main">
-      {{ charging_power_kw|round(1) if charging_power_kw is not none else '–' }} kW
+{% if plug_connected %}
+{% set soc = battery.soc_percent|default(0, true)|float if battery else 0 %}
+{% set soc_display = soc|round(0)|int %}
+{% set soc_width = 0 if soc < 0 else (100 if soc > 100 else soc) %}
+<div class="charging-alert card {{ 'is-active' if charging_active else 'is-idle' }}">
+  <div class="charging-alert-content">
+    <div class="charging-alert-label">{{ 'Charging' if charging_active else 'Plugged In' }}</div>
+    <div class="charging-alert-main-row">
+      <div class="charging-alert-main">{{ charging_power_kw|round(1) if charging_active and charging_power_kw is not none else ('Standby' if not charging_active else '–') }}</div>
       <span class="charging-alert-meta">
+        {% if charging_active %}
         {{ charging.charger_voltage|round(0)|int if charging and charging.charger_voltage else '–' }}V / {{ charging.charger_current|round(1) if charging and charging.charger_current else '–' }}A
+        {% else %}
+        Connected with no active power draw
+        {% endif %}
       </span>
+    </div>
+    <div class="charging-alert-progress-wrap">
+      <div class="charging-alert-progress-track">
+        <div class="charging-alert-progress-fill {{ 'is-animated' if charging_active else '' }}" data-progress="{{ soc_width }}"></div>
+        <span class="charging-alert-progress-text">{{ soc_display }}% charged</span>
+      </div>
     </div>
   </div>
   <div class="charging-alert-side">
@@ -45,6 +58,14 @@
   </div>
 </div>
 {% endif %}
+
+<script>
+document.querySelectorAll('.charging-alert-progress-fill[data-progress]').forEach((element) => {
+  const progress = Number.parseFloat(element.dataset.progress || '0');
+  const bounded = Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0;
+  element.style.width = `${bounded}%`;
+});
+</script>
 
 {# ── Hero section: vehicle image + charge ring + key stats ─── #}
 <div class="dash-hero">

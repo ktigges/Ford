@@ -295,13 +295,38 @@ def create_app() -> Flask:
         plug_status = (charging.get("plug_status") or "").lower()
         if _plug_status_idle(plug_status):
             return False
+        power_kw = _charging_power_kw_from_row(charging)
+        if power_kw is not None:
+            try:
+                if float(power_kw) > 0.2:
+                    return True
+            except (TypeError, ValueError):
+                pass
+
+        charger_voltage = charging.get("charger_voltage")
+        charger_current = charging.get("charger_current")
+        evse_dc_current = charging.get("evse_dc_current")
+        try:
+            if (
+                charger_voltage is not None and float(charger_voltage) > 20 and
+                charger_current is not None and float(charger_current) > 0.2
+            ):
+                return True
+        except (TypeError, ValueError):
+            pass
+        try:
+            if evse_dc_current is not None and float(evse_dc_current) > 0.2:
+                return True
+        except (TypeError, ValueError):
+            pass
+
         time_to_full = charging.get("time_to_full_min")
         if time_to_full is None:
-            return True
+            return "charging" in plug_status
         try:
-            return float(time_to_full) > 0
+            return float(time_to_full) > 0 and "charging" in plug_status
         except (TypeError, ValueError):
-            return True
+            return "charging" in plug_status
 
     def _charging_mode_from_data(charging: dict | None, voltage_series: list[int | None]) -> str:
         """Infer charging profile from power-type hints and observed voltage samples."""
