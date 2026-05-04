@@ -293,12 +293,20 @@ def create_app() -> Flask:
         if not charging:
             return False
         plug_status = (charging.get("plug_status") or "").lower()
+        communication_status = (charging.get("communication_status") or "").lower()
         if _plug_status_idle(plug_status):
             return False
+
+        idle_status_tokens = ("station_ready", "ready", "waiting", "scheduled", "paused", "standby")
+        active_status_tokens = ("charging", "in_progress", "active", "powering")
+
+        if any(token in communication_status for token in idle_status_tokens):
+            return False
+
         power_kw = _charging_power_kw_from_row(charging)
         if power_kw is not None:
             try:
-                if float(power_kw) > 0.2:
+                if float(power_kw) > 0.5:
                     return True
             except (TypeError, ValueError):
                 pass
@@ -309,24 +317,27 @@ def create_app() -> Flask:
         try:
             if (
                 charger_voltage is not None and float(charger_voltage) > 20 and
-                charger_current is not None and float(charger_current) > 0.2
+                charger_current is not None and float(charger_current) > 0.5
             ):
                 return True
         except (TypeError, ValueError):
             pass
         try:
-            if evse_dc_current is not None and float(evse_dc_current) > 0.2:
+            if evse_dc_current is not None and float(evse_dc_current) > 0.5:
                 return True
         except (TypeError, ValueError):
             pass
 
+        if any(token in communication_status for token in active_status_tokens):
+            return True
+
         time_to_full = charging.get("time_to_full_min")
         if time_to_full is None:
-            return "charging" in plug_status
+            return False
         try:
-            return float(time_to_full) > 0 and "charging" in plug_status
+            return float(time_to_full) > 0 and "charging" in plug_status and any(token in communication_status for token in active_status_tokens)
         except (TypeError, ValueError):
-            return "charging" in plug_status
+            return False
 
     def _charging_mode_from_data(charging: dict | None, voltage_series: list[int | None]) -> str:
         """Infer charging profile from power-type hints and observed voltage samples."""
