@@ -69,6 +69,18 @@
   </div>
 
   <div class="form-group">
+    <label for="autostart_poller">
+      <input type="checkbox" name="autostart_poller" id="autostart_poller" value="on"
+             {% if settings.autostart_poller == 'on' %}checked{% endif %}
+             style="width:auto; margin-right:0.5rem;">
+      Auto-start Poller On App Start
+    </label>
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      When enabled, the poller starts automatically when the Flask app boots.
+    </p>
+  </div>
+
+  <div class="form-group">
     <label for="poll_interval_off">Ignition Off</label>
     <input type="number" name="poll_interval_off" id="poll_interval_off"
            value="{{ settings.poll_interval_off }}" min="60" max="3600">

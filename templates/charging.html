@@ -16,6 +16,7 @@
   <a class="btn btn-sm" href="{{ url_for('charging_overview', refresh=15) }}">15s</a>
   <a class="btn btn-sm" href="{{ url_for('charging_overview', refresh=30) }}">30s</a>
   <a class="btn btn-sm" href="{{ url_for('charging_overview', refresh=60) }}">60s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view') }}" style="margin-left:0.5rem;">Session Graph View</a>
   {% if refresh_interval %}<span class="muted" style="margin-left:0.5rem;">Enabled: {{ refresh_interval }}s</span>{% endif %}
 </div>
 
