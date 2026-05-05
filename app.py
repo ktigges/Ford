@@ -187,7 +187,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.5.0"
+    app.config["APP_VERSION"] = "0.5.1"
     app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # ── Settings helper (reads from app_config table) ──────────────
