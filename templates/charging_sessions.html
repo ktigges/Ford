@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Charging Sessions – Lightning{% endblock %}
+{% block content %}
+<div class="dash-header">
+  <h1>Charging Session View</h1>
+  {% if charging_active %}
+    <span class="badge badge-charging">CHARGING</span>
+  {% elif charging %}
+    <span class="badge off">Not Charging</span>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+  <strong>Auto Refresh:</strong>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view') }}">Off</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=15) }}">15s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=30) }}">30s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=60) }}">60s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_overview') }}" style="margin-left:0.5rem;">Back to Charging</a>
+  {% if refresh_interval %}<span class="muted" style="margin-left:0.5rem;">Enabled: {{ refresh_interval }}s</span>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Latest Charging Session</h2>
+  {% if latest_session %}
+  <p class="muted" style="margin-top:-0.5rem;">
+    {{ chart_data.labels|length }} plotted points from {{ format_local_dt((latest_session|first).polled_at, '%Y-%m-%d %H:%M:%S') }}
+    to {{ format_local_dt((latest_session|last).polled_at, '%Y-%m-%d %H:%M:%S') }} ({{ display_timezone }}).
+  </p>
+  <div id="chargingSessionFocusPlot" style="height:460px; width:100%;"></div>
+  {% else %}
+  <p class="no-data">No charging session data available yet.</p>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script id="charging-session-chart-data" type="application/json">{{ chart_data|tojson }}</script>
+<span id="charging-session-temp-label" data-temp-label="{{ ulabel('temperature') }}" style="display:none;"></span>
+<script>
+const sdata = JSON.parse(document.getElementById('charging-session-chart-data').textContent || '{}');
+const tempLabel = document.getElementById('charging-session-temp-label').dataset.tempLabel || '°F';
+
+if (sdata.labels && sdata.labels.length > 0) {
+  const chartDom = document.getElementById('chargingSessionFocusPlot');
+  const chart = echarts.init(chartDom, null, { renderer: 'canvas' });
+
+  const option = {
+    color: ['#2a9d8f', '#dc3545', '#8f4cb7', '#ff6b35'],
+    backgroundColor: 'transparent',
+    textStyle: { color: '#333' },
+    grid: { left: 95, right: 170, top: 40, bottom: 45, containLabel: false },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(0,0,0,0.8)',
+      borderColor: '#555',
+      textStyle: { color: '#fff' },
+      formatter: (params) => {
+        if (!Array.isArray(params) || !params.length) return '';
+        const lines = params
+          .filter((p) => p.value !== null && p.value !== undefined)
+          .map((p) => `<span style="color:${p.color}">●</span> ${p.seriesName}: <strong>${Number.isFinite(p.value) ? p.value.toFixed(2) : p.value}</strong>`)
+          .join('<br>');
+        return `<div style="font-weight:600;">${params[0].name}</div>${lines}`;
+      }
+    },
+    legend: { top: 0, textStyle: { color: '#555' } },
+    xAxis: {
+      type: 'category',
+      data: sdata.labels,
+      axisLine: { lineStyle: { color: '#ddd' } },
+      axisLabel: { color: '#666', interval: Math.max(0, Math.floor(sdata.labels.length / 8)) },
+      splitLine: { show: false }
+    },
+    yAxis: [
+      {
+        type: 'value',
+        position: 'left',
+        min: 0,
+        max: 100,
+        name: 'SOC %',
+        nameLocation: 'middle',
+        nameRotate: 90,
+        nameGap: 58,
+        nameTextStyle: { color: '#2a9d8f' },
+        axisLine: { lineStyle: { color: '#2a9d8f' } },
+        axisLabel: { color: '#2a9d8f' },
+        splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
+      },
+      {
+        type: 'value',
+        position: 'right',
+        offset: 0,
+        name: 'Charge Rate (kW)',
+        nameLocation: 'middle',
+        nameRotate: -90,
+        nameGap: 52,
+        nameTextStyle: { color: '#dc3545' },
+        axisLine: { lineStyle: { color: '#dc3545' } },
+        axisLabel: { color: '#dc3545' },
+        splitLine: { show: false }
+      },
+      {
+        type: 'value',
+        position: 'right',
+        offset: 70,
+        name: `Temp (${tempLabel})`,
+        nameLocation: 'middle',
+        nameRotate: -90,
+        nameGap: 52,
+        nameTextStyle: { color: '#8f4cb7' },
+        axisLine: { lineStyle: { color: '#8f4cb7' } },
+        axisLabel: { color: '#8f4cb7' },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      { name: 'SOC %', type: 'line', data: sdata.soc || [], yAxisIndex: 0, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2 }, itemStyle: { color: '#2a9d8f' } },
+      { name: 'Charge Rate (kW)', type: 'line', data: sdata.charge_power || [], yAxisIndex: 1, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2 }, itemStyle: { color: '#dc3545' }, areaStyle: { color: '#dc3545', opacity: 0.15 } },
+      { name: `Battery Temp (${tempLabel})`, type: 'line', data: sdata.battery_temp || [], yAxisIndex: 2, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2 }, itemStyle: { color: '#8f4cb7' } },
+      { name: `Outside Temp (${tempLabel})`, type: 'line', data: sdata.outside_temp || [], yAxisIndex: 2, smooth: true, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, type: 'dashed' }, itemStyle: { color: '#ff6b35' } }
+    ]
+  };
+
+  chart.setOption(option);
+  window.addEventListener('resize', () => chart.resize());
+}
+</script>
+{% if refresh_interval and refresh_interval > 0 %}
+<meta http-equiv="refresh" content="{{ refresh_interval }}">
+{% endif %}
+{% endblock %}
