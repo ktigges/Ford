@@ -54,6 +54,12 @@
     {% if charging and charging.time_to_full_min is not none %}
       <span>{{ charging.time_to_full_min|round(0)|int }} min to full</span>
     {% endif %}
+      {% if vehicle_summary.climate_active and not charging_active %}
+      <span>
+        Climate Draw:
+        {{ vehicle_summary.climate_energy_kw|round(2) if vehicle_summary.climate_energy_kw is not none else '–' }} kW
+      </span>
+      {% endif %}
     <a class="btn btn-sm" href="{{ url_for('charging_overview') }}">View Charging</a>
   </div>
 </div>
@@ -200,7 +206,47 @@ document.querySelectorAll('.charging-alert-progress-fill[data-progress]').forEac
       <tr><th>Speed</th><td>{{ convert(vehicle.speed_mph, 'speed_mph') or '0' }} {{ ulabel('speed') }}</td></tr>
       <tr><th>Odometer</th><td>{{ convert(vehicle.odometer_miles, 'odometer_miles') or '–' }} {{ ulabel('distance') }}</td></tr>
       <tr><th>Gear</th><td>{{ vehicle.gear_position or '–' }}</td></tr>
+      <tr>
+        <th>Climate</th>
+        <td>
+          {% if vehicle_summary.climate_active %}
+            <span class="badge ok">On</span>
+            ({{ vehicle_summary.remote_start_countdown|round(0)|int if vehicle_summary.remote_start_countdown is not none else '–' }}s)
+          {% else %}
+            <span class="badge off">Off</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Current Draw</th>
+        <td>
+          {% if vehicle_summary.battery_draw_kw is not none %}
+            {{ vehicle_summary.battery_draw_kw|round(2) }} kW
+          {% else %}
+            –
+          {% endif %}
+        </td>
+      </tr>
+      {% if vehicle_summary.climate_active and not charging_active %}
+      <tr>
+        <th>Climate Energy</th>
+        <td>{{ vehicle_summary.climate_energy_kw|round(2) if vehicle_summary.climate_energy_kw is not none else '–' }} kW</td>
+      </tr>
+      {% endif %}
+      <tr>
+        <th>Cabin Outside</th>
+        <td>{{ convert(vehicle_summary.outside_temp, 'outside_temp_c') if vehicle_summary.outside_temp is not none else '–' }} {{ ulabel('temperature') }}</td>
+      </tr>
+      <tr>
+        <th>Battery Temp</th>
+        <td>{{ convert(vehicle_summary.battery_temp, 'battery_temp_c') if vehicle_summary.battery_temp is not none else '–' }} {{ ulabel('temperature') }}</td>
+      </tr>
+      <tr><th>Doors</th><td>{{ vehicle_summary.door_open_count }} open / {{ vehicle_summary.door_unlocked_count }} unlocked</td></tr>
+      <tr><th>Windows</th><td>{{ vehicle_summary.window_open_count }} open</td></tr>
     </table>
+    <div class="btn-group">
+      <a class="btn btn-sm" href="{{ url_for('vehicle_state') }}">Detailed Vehicle State</a>
+    </div>
     {% else %}
     <p class="no-data">No vehicle state data.</p>
     {% endif %}
