@@ -696,6 +696,120 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
    Vehicle State / Telemetry – overflow fixes
    ══════════════════════════════════════════════════════════════ */
 
+.vehicle-summary-visual {
+  display: grid;
+  grid-template-columns: minmax(280px, 460px) 1fr;
+  gap: 1.1rem;
+  align-items: stretch;
+}
+
+.vehicle-summary-media {
+  position: relative;
+  border-radius: var(--radius);
+  background: linear-gradient(145deg, #f4f8fd 0%, #ffffff 70%);
+  border: 1px solid #dce7f2;
+  min-height: 240px;
+  overflow: hidden;
+}
+
+.vehicle-summary-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 0.5rem;
+}
+
+.vehicle-pin {
+  position: absolute;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  backdrop-filter: blur(1px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.vehicle-pin-charge { top: 10px; left: 10px; }
+.vehicle-pin-climate { top: 10px; right: 10px; }
+.vehicle-pin-doors { bottom: 10px; left: 10px; }
+.vehicle-pin-windows { bottom: 10px; right: 10px; }
+
+.vehicle-pin.is-active {
+  background: #d6ecff;
+  color: #0f4e85;
+  border-color: #9dc4ee;
+}
+
+.vehicle-pin.is-warning {
+  background: #fff3cd;
+  color: #8a5a00;
+  border-color: #f0d88f;
+}
+
+.vehicle-pin.is-danger {
+  background: #f8d7da;
+  color: #9a1e2b;
+  border-color: #e5a9b0;
+}
+
+.vehicle-pin.is-ok {
+  background: #d1e7dd;
+  color: #1d6844;
+  border-color: #9dc8b4;
+}
+
+.vehicle-pin.is-off {
+  background: #e9ecef;
+  color: #5c6670;
+  border-color: #cdd5dc;
+}
+
+.vehicle-summary-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.vehicle-summary-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #34536f;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vehicle-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.6rem;
+}
+
+.summary-chip {
+  border: 1px solid #dbe5ef;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 0.55rem 0.65rem;
+}
+
+.summary-chip-label {
+  display: block;
+  color: #56718a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 0.2rem;
+}
+
+.summary-chip-value {
+  display: block;
+  color: #1f2f3f;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
 /* Vehicle State uses a 2-column grid for readability */
 .state-grid {
   display: grid;
@@ -704,6 +818,14 @@ details summary { cursor: pointer; color: var(--accent); font-size: 0.9rem; }
 }
 
 @media (max-width: 520px) {
+  .vehicle-summary-visual {
+    grid-template-columns: 1fr;
+  }
+
+  .vehicle-summary-media {
+    min-height: 210px;
+  }
+
   .state-grid {
     grid-template-columns: 1fr;
   }

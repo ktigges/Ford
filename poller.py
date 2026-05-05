@@ -1167,13 +1167,15 @@ def _charging_power_kw(metrics: dict) -> float | None:
 
 
 def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
-    """Persist a charging history sample when the vehicle is plugged in or charging."""
+    """Persist a charging history sample only when charging is actively occurring."""
     plug_status = _v(metrics, "xevPlugChargerStatus", "value")
     time_to_full = _v(metrics, "xevBatteryTimeToFullCharge", "value")
     charger_current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
     charger_voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
     dc_current = _v(metrics, "xevEvseBatteryDcCurrentOutput", "value")
     power_kw = _charging_power_kw(metrics)
+    charge_display = (_v(metrics, "xevBatteryChargeDisplayStatus", "value") or "").strip().lower()
+    communication_status = (_v(metrics, "xevChargeStationCommunicationStatus", "value") or "").strip().lower()
 
     plug_connected = bool(plug_status and str(plug_status).lower() not in _PLUG_IDLE)
 
@@ -1186,8 +1188,34 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
         dc_current = None
         power_kw = None
 
-    # Store only while plugged/charging; skip unplugged idle snapshots.
-    should_store = plug_connected or (power_kw is not None and power_kw > 0.1)
+    # Record only true charging activity; skip plugged-but-idle/scheduled polls.
+    has_power_flow = False
+    try:
+        has_power_flow = power_kw is not None and float(power_kw) > 0.5
+    except (TypeError, ValueError):
+        has_power_flow = False
+
+    has_current_flow = False
+    try:
+        has_current_flow = (
+            charger_voltage is not None and float(charger_voltage) > 20 and
+            charger_current is not None and float(charger_current) > 0.5
+        )
+    except (TypeError, ValueError):
+        has_current_flow = False
+
+    has_dc_flow = False
+    try:
+        has_dc_flow = dc_current is not None and float(dc_current) > 0.5
+    except (TypeError, ValueError):
+        has_dc_flow = False
+
+    active_tokens = ("charging", "active", "in_progress", "powering")
+    idle_tokens = ("not_detected", "station_ready", "ready", "waiting", "scheduled", "charge_scheduling", "not_ready", "complete", "completed")
+    explicitly_idle = any(token in communication_status for token in idle_tokens) or any(token in charge_display for token in idle_tokens)
+    explicitly_active = any(token in communication_status for token in active_tokens) or any(token in charge_display for token in active_tokens)
+
+    should_store = plug_connected and (has_power_flow or has_current_flow or has_dc_flow or explicitly_active) and not explicitly_idle
 
     if not should_store:
         return
