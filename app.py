@@ -653,6 +653,7 @@ def create_app() -> Flask:
     def vehicle_state():
         """Detailed view of all state tables for the active VIN."""
         vin = _active_vin()
+        unit_system = _get_setting("units") if db.is_available() else "imperial"
         states = {}
         tables = [
             "vehicle_state", "battery_state", "charging_state", "location_state",
@@ -666,7 +667,69 @@ def create_app() -> Flask:
         states["door_state"] = db.fetch_all("SELECT * FROM door_state WHERE vin = %s", (vin,)) if vin else []
         states["window_state"] = db.fetch_all("SELECT * FROM window_state WHERE vin = %s", (vin,)) if vin else []
 
-        return render_template("vehicle_state.html", vin=vin, states=states)
+        vehicle = states.get("vehicle_state") or {}
+        battery = states.get("battery_state") or {}
+        charging = states.get("charging_state") or {}
+        environment = states.get("environment_state") or {}
+        security = states.get("security_state") or {}
+        doors = states.get("door_state") or []
+        windows = states.get("window_state") or []
+
+        charging_active = _charging_is_active(charging if charging else None)
+        plug_connected = _plug_status_connected(charging.get("plug_status") if charging else None)
+
+        door_open_count = 0
+        door_unlocked_count = 0
+        for row in doors:
+            status_val = (row.get("status") or "").strip().lower()
+            lock_val = (row.get("lock_status") or "").strip().lower()
+            if status_val and status_val not in ("closed", "close", "shut"):
+                door_open_count += 1
+            if "unlock" in lock_val:
+                door_unlocked_count += 1
+
+        window_open_count = 0
+        for row in windows:
+            try:
+                upper = float(row.get("upper_bound")) if row.get("upper_bound") is not None else 0.0
+                lower = float(row.get("lower_bound")) if row.get("lower_bound") is not None else 0.0
+                if max(abs(upper), abs(lower)) > 0.5:
+                    window_open_count += 1
+            except (TypeError, ValueError):
+                continue
+
+        climate_active = False
+        try:
+            climate_active = float(security.get("remote_start_countdown") or 0) > 0
+        except (TypeError, ValueError):
+            climate_active = False
+
+        vehicle_summary = {
+            "ignition": vehicle.get("ignition_status"),
+            "gear": vehicle.get("gear_position"),
+            "speed": vehicle.get("speed_mph"),
+            "soc": battery.get("soc_percent"),
+            "range": battery.get("range_miles"),
+            "outside_temp": environment.get("outside_temp_c"),
+            "ambient_temp": environment.get("ambient_temp_c"),
+            "battery_temp": battery.get("temperature_c"),
+            "plug_connected": plug_connected,
+            "charging_active": charging_active,
+            "charge_power_kw": _charging_power_kw_from_row(charging if charging else None),
+            "door_open_count": door_open_count,
+            "door_unlocked_count": door_unlocked_count,
+            "window_open_count": window_open_count,
+            "climate_active": climate_active,
+            "remote_start_countdown": security.get("remote_start_countdown"),
+        }
+
+        return render_template(
+            "vehicle_state.html",
+            vin=vin,
+            states=states,
+            unit_system=unit_system,
+            vehicle_summary=vehicle_summary,
+        )
 
     @app.route("/telemetry")
     def telemetry_overview():

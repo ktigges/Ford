@@ -4,6 +4,80 @@
 <h1>Vehicle State</h1>
 <p>Current state for VIN: <strong>{{ vin }}</strong> &nbsp;·&nbsp; Units: <strong>{{ unit_system | title }}</strong></p>
 
+<div class="card vehicle-summary-visual">
+  <div class="vehicle-summary-media">
+    <img src="{{ url_for('static', filename='vehicle.png') }}" alt="Vehicle summary" class="vehicle-summary-image" onerror="this.style.display='none'">
+    <div class="vehicle-pin vehicle-pin-charge {{ 'is-active' if vehicle_summary.charging_active else ('is-warning' if vehicle_summary.plug_connected else 'is-off') }}">
+      ⚡ {{ 'Charging' if vehicle_summary.charging_active else ('Plugged' if vehicle_summary.plug_connected else 'Unplugged') }}
+    </div>
+    <div class="vehicle-pin vehicle-pin-climate {{ 'is-active' if vehicle_summary.climate_active else 'is-off' }}">
+      ❄ {{ 'Climate On' if vehicle_summary.climate_active else 'Climate Off' }}
+    </div>
+    <div class="vehicle-pin vehicle-pin-doors {{ 'is-danger' if vehicle_summary.door_open_count > 0 else 'is-ok' }}">
+      🚪 {{ vehicle_summary.door_open_count }} Open
+    </div>
+    <div class="vehicle-pin vehicle-pin-windows {{ 'is-danger' if vehicle_summary.window_open_count > 0 else 'is-ok' }}">
+      🪟 {{ vehicle_summary.window_open_count }} Open
+    </div>
+  </div>
+
+  <div class="vehicle-summary-stats">
+    <div class="vehicle-summary-title">Quick Summary</div>
+    <div class="vehicle-summary-grid">
+      <div class="summary-chip">
+        <span class="summary-chip-label">Status</span>
+        <span class="summary-chip-value">{{ vehicle_summary.ignition or 'Unknown' }}{% if vehicle_summary.gear %} / {{ vehicle_summary.gear }}{% endif %}</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Charge</span>
+        <span class="summary-chip-value">
+          {% if vehicle_summary.charging_active %}
+            {{ vehicle_summary.charge_power_kw|round(1) if vehicle_summary.charge_power_kw is not none else '–' }} kW
+          {% elif vehicle_summary.plug_connected %}
+            Plugged Idle
+          {% else %}
+            Not Plugged
+          {% endif %}
+        </span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">SOC</span>
+        <span class="summary-chip-value">{{ vehicle_summary.soc|round(1) if vehicle_summary.soc is not none else '–' }}%</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Range</span>
+        <span class="summary-chip-value">{{ convert(vehicle_summary.range, 'range_miles') if vehicle_summary.range is not none else '–' }} {{ ulabel('distance') }}</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Doors</span>
+        <span class="summary-chip-value">{{ vehicle_summary.door_open_count }} open · {{ vehicle_summary.door_unlocked_count }} unlocked</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Windows</span>
+        <span class="summary-chip-value">{{ vehicle_summary.window_open_count }} open</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Outside Temp</span>
+        <span class="summary-chip-value">{{ convert(vehicle_summary.outside_temp, 'outside_temp_c') if vehicle_summary.outside_temp is not none else '–' }} {{ ulabel('temperature') }}</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Battery Temp</span>
+        <span class="summary-chip-value">{{ convert(vehicle_summary.battery_temp, 'battery_temp_c') if vehicle_summary.battery_temp is not none else '–' }} {{ ulabel('temperature') }}</span>
+      </div>
+      <div class="summary-chip">
+        <span class="summary-chip-label">Climate Signal</span>
+        <span class="summary-chip-value">
+          {% if vehicle_summary.climate_active %}
+            Remote Start Active ({{ vehicle_summary.remote_start_countdown|round(0)|int if vehicle_summary.remote_start_countdown is not none else '–' }}s)
+          {% else %}
+            Remote Start Off
+          {% endif %}
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% macro humanize(name) %}{{ name.replace('_', ' ').title() }}{% endmacro %}
 
 {% macro state_table(title, row, skip_cols=["vin"]) %}
