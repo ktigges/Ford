@@ -90,6 +90,7 @@ CREATE TABLE charging_history (
     id BIGSERIAL PRIMARY KEY,
     vin TEXT NOT NULL REFERENCES garage(vin) ON DELETE CASCADE,
     polled_at TIMESTAMPTZ NOT NULL,
+    charging_session_uuid UUID,
 
     plug_status TEXT,
     charger_power_type TEXT,
@@ -416,3 +417,4 @@ CREATE INDEX idx_drives_uuid ON drives (drive_uuid);
 CREATE INDEX idx_drives_in_progress ON drives (vin) WHERE in_progress = TRUE;
 CREATE INDEX idx_drive_points_drive_time ON drive_points (drive_id, recorded_at);
 CREATE INDEX idx_charging_history_vin_time ON charging_history (vin, polled_at DESC);
+CREATE INDEX idx_charging_history_session_uuid ON charging_history (charging_session_uuid);

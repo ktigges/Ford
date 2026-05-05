@@ -62,6 +62,7 @@
     <table>
       <thead>
         <tr>
+          <th>Session</th>
           <th>Time</th>
           <th>State</th>
           <th>Rate</th>
@@ -76,6 +77,7 @@
       <tbody>
         {% for row in history %}
         <tr>
+          <td>{{ row.charging_session_uuid|string|truncate(8, True, '') if row.charging_session_uuid is not none else '–' }}</td>
           <td>{{ format_local_dt(row.polled_at, '%Y-%m-%d %H:%M:%S') if row.polled_at else '–' }}</td>
           <td>{{ row.plug_status or '–' }}</td>
           <td>{{ row.charge_power_kw|round(1) if row.charge_power_kw is not none else '–' }} kW</td>

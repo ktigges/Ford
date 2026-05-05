@@ -16,6 +16,7 @@ import logging
 import random
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -36,6 +37,8 @@ _stop_event = threading.Event()
 _CONSERVATIVE_IDLE_INTERVAL_SEC = 3600  # 60 minutes
 _last_idle_write: datetime | None = None
 _last_metrics_hash: str | None = None
+_charging_history_has_session_uuid: bool | None = None
+_charging_session_by_vin: dict[str, dict[str, datetime | str]] = {}
 
 
 # ── Public control API ─────────────────────────────────────────────
@@ -1166,6 +1169,25 @@ def _charging_power_kw(metrics: dict) -> float | None:
         return None
 
 
+def _charging_history_supports_session_uuid() -> bool:
+    """Return True when charging_history has charging_session_uuid column."""
+    global _charging_history_has_session_uuid
+    if _charging_history_has_session_uuid is not None:
+        return _charging_history_has_session_uuid
+
+    row = db.fetch_one(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'charging_history'
+          AND column_name = 'charging_session_uuid'
+        """
+    )
+    _charging_history_has_session_uuid = row is not None
+    return _charging_history_has_session_uuid
+
+
 def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     """Persist a charging history sample only when charging is actively occurring."""
     plug_status = _v(metrics, "xevPlugChargerStatus", "value")
@@ -1220,35 +1242,80 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     if not should_store:
         return
 
-    db.execute(
-        """
-        INSERT INTO charging_history (
-            vin, polled_at, plug_status, charger_power_type, communication_status,
-            time_to_full_min, charger_current, charger_voltage, evse_dc_current,
-            charge_power_kw, soc_percent, actual_soc_percent, energy_remaining_kwh,
-            battery_temp_c, outside_temp_c, ambient_temp_c
+    # Track a stable UUID per contiguous active charging session.
+    session_gap = timedelta(minutes=45)
+    session_state = _charging_session_by_vin.get(vin)
+    if (
+        session_state is None
+        or not isinstance(session_state.get("last_ts"), datetime)
+        or (ts - session_state["last_ts"]) > session_gap
+    ):
+        charging_session_uuid = str(uuid.uuid4())
+    else:
+        charging_session_uuid = str(session_state["session_uuid"])
+    _charging_session_by_vin[vin] = {"session_uuid": charging_session_uuid, "last_ts": ts}
+
+    if _charging_history_supports_session_uuid():
+        db.execute(
+            """
+            INSERT INTO charging_history (
+                vin, polled_at, charging_session_uuid, plug_status, charger_power_type, communication_status,
+                time_to_full_min, charger_current, charger_voltage, evse_dc_current,
+                charge_power_kw, soc_percent, actual_soc_percent, energy_remaining_kwh,
+                battery_temp_c, outside_temp_c, ambient_temp_c
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                vin,
+                ts,
+                charging_session_uuid,
+                plug_status,
+                _v(metrics, "xevChargeStationPowerType", "value"),
+                _v(metrics, "xevChargeStationCommunicationStatus", "value"),
+                time_to_full,
+                charger_current,
+                charger_voltage,
+                dc_current,
+                power_kw,
+                _v(metrics, "xevBatteryStateOfCharge", "value"),
+                _v(metrics, "xevBatteryActualStateOfCharge", "value"),
+                _v(metrics, "xevBatteryEnergyRemaining", "value"),
+                _v(metrics, "xevBatteryTemperature", "value"),
+                _v(metrics, "outsideTemperature", "value"),
+                _v(metrics, "ambientTemp", "value"),
+            ),
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            vin,
-            ts,
-            plug_status,
-            _v(metrics, "xevChargeStationPowerType", "value"),
-            _v(metrics, "xevChargeStationCommunicationStatus", "value"),
-            time_to_full,
-            charger_current,
-            charger_voltage,
-            dc_current,
-            power_kw,
-            _v(metrics, "xevBatteryStateOfCharge", "value"),
-            _v(metrics, "xevBatteryActualStateOfCharge", "value"),
-            _v(metrics, "xevBatteryEnergyRemaining", "value"),
-            _v(metrics, "xevBatteryTemperature", "value"),
-            _v(metrics, "outsideTemperature", "value"),
-            _v(metrics, "ambientTemp", "value"),
-        ),
-    )
+    else:
+        db.execute(
+            """
+            INSERT INTO charging_history (
+                vin, polled_at, plug_status, charger_power_type, communication_status,
+                time_to_full_min, charger_current, charger_voltage, evse_dc_current,
+                charge_power_kw, soc_percent, actual_soc_percent, energy_remaining_kwh,
+                battery_temp_c, outside_temp_c, ambient_temp_c
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                vin,
+                ts,
+                plug_status,
+                _v(metrics, "xevChargeStationPowerType", "value"),
+                _v(metrics, "xevChargeStationCommunicationStatus", "value"),
+                time_to_full,
+                charger_current,
+                charger_voltage,
+                dc_current,
+                power_kw,
+                _v(metrics, "xevBatteryStateOfCharge", "value"),
+                _v(metrics, "xevBatteryActualStateOfCharge", "value"),
+                _v(metrics, "xevBatteryEnergyRemaining", "value"),
+                _v(metrics, "xevBatteryTemperature", "value"),
+                _v(metrics, "outsideTemperature", "value"),
+                _v(metrics, "ambientTemp", "value"),
+            ),
+        )
 
 
 def _upsert_location_state(vin: str, ts: datetime, m: dict) -> None:
