@@ -302,12 +302,13 @@ def create_app() -> Flask:
         idle_status_tokens = ("station_ready", "ready", "waiting", "scheduled", "paused", "standby")
         active_status_tokens = ("charging", "in_progress", "active", "powering")
 
+        # Ford sometimes leaves communication status in standby while display status
+        # has already switched to IN_PROGRESS; prefer explicit charge display active.
+        if any(token in charge_display_status for token in active_status_tokens):
+            return True
+
         if any(token in communication_status for token in idle_status_tokens):
             return False
-
-        # Check if charge display explicitly shows IN_PROGRESS
-        if "in_progress" in charge_display_status:
-            return True
 
         power_kw = _charging_power_kw_from_row(charging)
         if power_kw is not None:
