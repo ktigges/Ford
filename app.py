@@ -429,6 +429,10 @@ def create_app() -> Flask:
             pass
         try:
             if evse_dc_current is not None and float(evse_dc_current) > 0.5:
+                # Stale DC current data can contradict fresh status indicators.
+                # If comm + display both say idle/stopped, don't trust high DC current alone.
+                if idle_comm and idle_display:
+                    return False
                 return True
         except (TypeError, ValueError):
             pass
