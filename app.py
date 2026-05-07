@@ -295,6 +295,7 @@ def create_app() -> Flask:
             return False
         plug_status = (charging.get("plug_status") or "").lower()
         communication_status = (charging.get("communication_status") or "").lower()
+        charge_display_status = (charging.get("charge_display_status") or "").lower()
         if _plug_status_idle(plug_status):
             return False
 
@@ -303,6 +304,10 @@ def create_app() -> Flask:
 
         if any(token in communication_status for token in idle_status_tokens):
             return False
+
+        # Check if charge display explicitly shows IN_PROGRESS
+        if "in_progress" in charge_display_status:
+            return True
 
         power_kw = _charging_power_kw_from_row(charging)
         if power_kw is not None:
