@@ -410,9 +410,15 @@ def create_app() -> Flask:
         """Get index statistics and usage info."""
         rows = db.fetch_all(
             """
-            SELECT schemaname, tablename, indexname, idx_scan as scans, idx_tup_read as tuples_read, idx_tup_fetch as tuples_fetched
+            SELECT
+                schemaname,
+                relname AS tablename,
+                indexrelname AS indexname,
+                idx_scan AS scans,
+                idx_tup_read AS tuples_read,
+                idx_tup_fetch AS tuples_fetched
             FROM pg_stat_user_indexes
-            ORDER BY idx_scan DESC, tablename
+            ORDER BY idx_scan DESC, relname
             """
         )
         return [dict(r) for r in rows] if rows else []
@@ -498,6 +504,7 @@ def create_app() -> Flask:
         idle_status_tokens = (
             "station_ready", "ready", "waiting", "scheduled", "paused", "standby",
             "not_detected", "complete", "completed", "not_ready", "charge_scheduling",
+            "stopped", "stop",
         )
         active_status_tokens = ("charging", "in_progress", "active", "powering")
 
@@ -592,7 +599,10 @@ def create_app() -> Flask:
         """Return True when a history row likely represents a real charging sample."""
         comm = (row.get("communication_status") or "").strip().lower()
         active_tokens = ("charging", "active", "in_progress", "powering")
-        idle_tokens = ("not_detected", "station_ready", "ready", "waiting", "scheduled", "complete", "completed")
+        idle_tokens = (
+            "not_detected", "station_ready", "ready", "waiting", "scheduled",
+            "complete", "completed", "stopped", "stop",
+        )
 
         # Prefer physical electrical flow over status tokens.
         try:
