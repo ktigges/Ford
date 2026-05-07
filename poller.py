@@ -38,6 +38,7 @@ _CONSERVATIVE_IDLE_INTERVAL_SEC = 3600  # 60 minutes
 _last_idle_write: datetime | None = None
 _last_metrics_hash: str | None = None
 _charging_history_has_session_uuid: bool | None = None
+_charging_sessions_table_present: bool | None = None
 _charging_session_by_vin: dict[str, dict[str, datetime | str]] = {}
 
 
@@ -178,6 +179,8 @@ def _do_poll(provider: str, vin: str) -> None:
         state_changed = (_last_metrics_hash is not None and metrics_hash != _last_metrics_hash)
 
         if _last_idle_write and not state_changed and time_since_last < _CONSERVATIVE_IDLE_INTERVAL_SEC:
+            _charging_session_by_vin.pop(vin, None)
+            _close_open_charging_session(vin, now)
             # Update collector_status so the UI knows we're still polling, but skip the DB write
             db.execute(
                 """
@@ -1191,6 +1194,113 @@ def _charging_history_supports_session_uuid() -> bool:
     return _charging_history_has_session_uuid
 
 
+def _charging_sessions_table_exists() -> bool:
+    """Return True when charging_sessions table exists."""
+    global _charging_sessions_table_present
+    if _charging_sessions_table_present is not None:
+        return _charging_sessions_table_present
+
+    row = db.fetch_one(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'charging_sessions'
+        """
+    )
+    _charging_sessions_table_present = row is not None
+    return _charging_sessions_table_present
+
+
+def _open_charging_session_uuid(vin: str) -> str | None:
+    """Return the currently-open charging session UUID for a VIN, if any."""
+    if not _charging_sessions_table_exists():
+        return None
+    row = db.fetch_one(
+        """
+        SELECT session_uuid
+        FROM charging_sessions
+        WHERE vin = %s
+          AND in_progress = TRUE
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (vin,),
+    )
+    if not row or not row.get("session_uuid"):
+        return None
+    return str(row["session_uuid"])
+
+
+def _close_open_charging_session(vin: str, ts: datetime) -> None:
+    """Close any in-progress charging session for VIN."""
+    if not _charging_sessions_table_exists():
+        return
+    db.execute(
+        """
+        UPDATE charging_sessions
+        SET in_progress = FALSE,
+            ended_at = COALESCE(ended_at, %s),
+            last_update = %s,
+            updated_at = now()
+        WHERE vin = %s
+          AND in_progress = TRUE
+        """,
+        (ts, ts, vin),
+    )
+
+
+def _upsert_charging_session(vin: str, session_uuid: str, ts: datetime, metrics: dict, power_kw: float | None) -> None:
+    """Persist aggregated charging session state similar to drive sessions."""
+    if not _charging_sessions_table_exists():
+        return
+
+    soc = _v(metrics, "xevBatteryStateOfCharge", "value")
+    energy_remaining = _v(metrics, "xevBatteryEnergyRemaining", "value")
+    charger_power_type = _v(metrics, "xevChargeStationPowerType", "value")
+
+    db.execute(
+        """
+        INSERT INTO charging_sessions (
+            session_uuid, vin, started_at, last_update, ended_at, in_progress,
+            charger_power_type,
+            start_soc_percent, end_soc_percent,
+            start_energy_remaining_kwh, end_energy_remaining_kwh,
+            max_power_kw, sample_count, created_at, updated_at
+        )
+        VALUES (
+            %s, %s, %s, %s, NULL, TRUE,
+            %s,
+            %s, %s,
+            %s, %s,
+            %s, 1, now(), now()
+        )
+        ON CONFLICT (session_uuid) DO UPDATE SET
+            last_update = EXCLUDED.last_update,
+            ended_at = NULL,
+            in_progress = TRUE,
+            charger_power_type = COALESCE(EXCLUDED.charger_power_type, charging_sessions.charger_power_type),
+            end_soc_percent = COALESCE(EXCLUDED.end_soc_percent, charging_sessions.end_soc_percent),
+            end_energy_remaining_kwh = COALESCE(EXCLUDED.end_energy_remaining_kwh, charging_sessions.end_energy_remaining_kwh),
+            max_power_kw = GREATEST(COALESCE(charging_sessions.max_power_kw, 0), COALESCE(EXCLUDED.max_power_kw, 0)),
+            sample_count = charging_sessions.sample_count + 1,
+            updated_at = now()
+        """,
+        (
+            session_uuid,
+            vin,
+            ts,
+            ts,
+            charger_power_type,
+            soc,
+            soc,
+            energy_remaining,
+            energy_remaining,
+            power_kw,
+        ),
+    )
+
+
 def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     """Persist a charging history sample only when charging is actively occurring."""
     plug_status = _v(metrics, "xevPlugChargerStatus", "value")
@@ -1247,6 +1357,8 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     should_store = plug_connected and (flow_detected or status_active)
 
     if not should_store:
+        _charging_session_by_vin.pop(vin, None)
+        _close_open_charging_session(vin, ts)
         return
 
     # Track a stable UUID per contiguous active charging session.
@@ -1257,10 +1369,12 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
         or not isinstance(session_state.get("last_ts"), datetime)
         or (ts - session_state["last_ts"]) > session_gap
     ):
-        charging_session_uuid = str(uuid.uuid4())
+        charging_session_uuid = _open_charging_session_uuid(vin) or str(uuid.uuid4())
     else:
         charging_session_uuid = str(session_state["session_uuid"])
     _charging_session_by_vin[vin] = {"session_uuid": charging_session_uuid, "last_ts": ts}
+
+    _upsert_charging_session(vin, charging_session_uuid, ts, metrics, power_kw)
 
     if _charging_history_supports_session_uuid():
         db.execute(

@@ -187,8 +187,9 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.5.1"
+    app.config["APP_VERSION"] = "0.5.2"
     app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    app.config["STARTUP_DB_NOTICE"] = None
 
     # ── Settings helper (reads from app_config table) ──────────────
 
@@ -254,6 +255,80 @@ def create_app() -> Flask:
             (table_name,),
         )
         return row is not None
+
+    def _column_exists(table_name: str, column_name: str) -> bool:
+        """Return True when a column exists on a table in public schema."""
+        row = db.fetch_one(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+              AND column_name = %s
+            """,
+            (table_name, column_name),
+        )
+        return row is not None
+
+    def _run_startup_migrations() -> list[str]:
+        """Apply lightweight schema migrations at startup and return applied change labels."""
+        if not db.is_available():
+            return []
+
+        applied: list[str] = []
+
+        if _table_exists("charging_state") and not _column_exists("charging_state", "charge_display_status"):
+            db.execute("ALTER TABLE charging_state ADD COLUMN IF NOT EXISTS charge_display_status TEXT")
+            applied.append("Added charging_state.charge_display_status")
+
+        if not _table_exists("charging_sessions"):
+            db.execute(
+                """
+                CREATE TABLE charging_sessions (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_uuid UUID NOT NULL UNIQUE,
+                    vin TEXT NOT NULL REFERENCES garage(vin) ON DELETE CASCADE,
+                    started_at TIMESTAMPTZ NOT NULL,
+                    last_update TIMESTAMPTZ NOT NULL,
+                    ended_at TIMESTAMPTZ,
+                    in_progress BOOLEAN NOT NULL DEFAULT TRUE,
+                    charger_power_type TEXT,
+                    start_soc_percent REAL CHECK (start_soc_percent BETWEEN 0 AND 100),
+                    end_soc_percent REAL CHECK (end_soc_percent BETWEEN 0 AND 100),
+                    start_energy_remaining_kwh REAL CHECK (start_energy_remaining_kwh >= 0),
+                    end_energy_remaining_kwh REAL CHECK (end_energy_remaining_kwh >= 0),
+                    max_power_kw REAL CHECK (max_power_kw >= 0),
+                    sample_count INTEGER NOT NULL DEFAULT 1 CHECK (sample_count >= 1),
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            applied.append("Created charging_sessions table")
+
+        if _table_exists("charging_sessions"):
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_charging_sessions_vin_start ON charging_sessions (vin, started_at DESC)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_charging_sessions_open ON charging_sessions (vin) WHERE in_progress = TRUE"
+            )
+
+        if _table_exists("app_config") and applied:
+            db.execute(
+                """
+                INSERT INTO app_config (key, value, description, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (
+                    "last_startup_migration",
+                    "; ".join(applied),
+                    "Most recent automatic startup schema migration summary",
+                ),
+            )
+
+        return applied
 
     def _charging_power_kw_from_row(charging: dict | None) -> float | None:
         """Compute kW from the latest charging_state row when possible."""
@@ -793,6 +868,19 @@ def create_app() -> Flask:
         )
         return creds is None
 
+    # Run startup DB migrations once the table helpers are available.
+    if db.is_available():
+        try:
+            migrated_items = _run_startup_migrations()
+            if migrated_items:
+                app.config["STARTUP_DB_NOTICE"] = (
+                    "Database schema auto-updated for this app version: "
+                    + ", ".join(migrated_items)
+                )
+                log.info("Startup DB migration applied: %s", ", ".join(migrated_items))
+        except Exception as exc:
+            log.error("Startup DB migration failed: %s", exc)
+
     # ── Request hook: force HTTPS when SSL is active ─────────────
 
     @app.before_request
@@ -815,6 +903,12 @@ def create_app() -> Flask:
 
     @app.before_request
     def _check_setup():
+        # Show one-time startup DB migration notice.
+        startup_notice = app.config.get("STARTUP_DB_NOTICE")
+        if startup_notice:
+            flash(startup_notice, "success")
+            app.config["STARTUP_DB_NOTICE"] = None
+
         # If DB is not connected, only allow the database setup pages
         if not db.is_available():
             if request.endpoint not in ("db_setup", "db_setup_test",
@@ -1137,7 +1231,56 @@ def create_app() -> Flask:
         meaningful_rows = [row for row in history_rows if _charging_sample_meaningful(row)]
         latest_session = _latest_charging_session(meaningful_rows) if meaningful_rows else []
         chart_data = _build_charging_chart_data(latest_session, system)
-        sessions_summary = _charging_sessions_summary(meaningful_rows, limit=25)
+        sessions_summary = []
+        if vin and _table_exists("charging_sessions"):
+            session_rows = db.fetch_all(
+                """
+                SELECT session_uuid, started_at, ended_at, in_progress,
+                       start_soc_percent, end_soc_percent,
+                       start_energy_remaining_kwh, end_energy_remaining_kwh,
+                       max_power_kw, sample_count
+                FROM charging_sessions
+                WHERE vin = %s
+                ORDER BY started_at DESC
+                LIMIT 25
+                """,
+                (vin,),
+            )
+            for row in session_rows:
+                start_soc = row.get("start_soc_percent")
+                end_soc = row.get("end_soc_percent")
+                try:
+                    soc_delta = (float(end_soc) - float(start_soc)) if start_soc is not None and end_soc is not None else None
+                except (TypeError, ValueError):
+                    soc_delta = None
+
+                started_at = row.get("started_at")
+                ended_at = row.get("ended_at")
+                duration_min = None
+                if started_at and ended_at:
+                    try:
+                        duration_min = max(0.0, (ended_at - started_at).total_seconds() / 60.0)
+                    except Exception:
+                        duration_min = None
+
+                session_uuid = str(row.get("session_uuid")) if row.get("session_uuid") else None
+                sessions_summary.append(
+                    {
+                        "session_label": (session_uuid[:8] if session_uuid else "session"),
+                        "session_uuid": session_uuid,
+                        "started_at": started_at,
+                        "ended_at": ended_at,
+                        "in_progress": bool(row.get("in_progress")),
+                        "duration_min": duration_min,
+                        "start_soc": start_soc,
+                        "end_soc": end_soc,
+                        "soc_delta": soc_delta,
+                        "max_power_kw": row.get("max_power_kw"),
+                        "samples": row.get("sample_count") or 0,
+                    }
+                )
+        else:
+            sessions_summary = _charging_sessions_summary(meaningful_rows, limit=25)
 
         return render_template(
             "charging_sessions.html",
