@@ -368,19 +368,50 @@ def create_app() -> Flask:
         """Return True when the latest charging row indicates active charging."""
         if not charging:
             return False
+
+        # Guard against stale charging_state rows showing old active values.
+        last_update = charging.get("last_update")
+        if isinstance(last_update, datetime):
+            lu = last_update if last_update.tzinfo else last_update.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - lu) > timedelta(minutes=10):
+                return False
+
         plug_status = (charging.get("plug_status") or "").lower()
         communication_status = (charging.get("communication_status") or "").lower()
         charge_display_status = (charging.get("charge_display_status") or "").lower()
         if _plug_status_idle(plug_status):
             return False
 
-        idle_status_tokens = ("station_ready", "ready", "waiting", "scheduled", "paused", "standby")
+        idle_status_tokens = (
+            "station_ready", "ready", "waiting", "scheduled", "paused", "standby",
+            "not_detected", "complete", "completed", "not_ready", "charge_scheduling",
+        )
         active_status_tokens = ("charging", "in_progress", "active", "powering")
+
+        idle_display = any(token in charge_display_status for token in idle_status_tokens)
+        idle_comm = any(token in communication_status for token in idle_status_tokens)
+        active_display = any(token in charge_display_status for token in active_status_tokens)
+        active_comm = any(token in communication_status for token in active_status_tokens)
+
+        # Explicitly idle from both status channels means not charging.
+        if idle_display and idle_comm:
+            return False
 
         power_kw = _charging_power_kw_from_row(charging)
         if power_kw is not None:
             try:
                 if float(power_kw) > 0.5:
+                    # If communication is explicitly idle and only display appears active,
+                    # do not trust stale electrical values by themselves.
+                    if idle_comm and active_display and not active_comm:
+                        break_flow = True
+                        time_to_full = charging.get("time_to_full_min")
+                        try:
+                            break_flow = not (time_to_full is not None and float(time_to_full) > 0)
+                        except (TypeError, ValueError):
+                            break_flow = True
+                        if break_flow:
+                            return False
                     return True
             except (TypeError, ValueError):
                 pass
@@ -405,11 +436,8 @@ def create_app() -> Flask:
         # If there is no measurable electrical flow, require corroborating
         # active signals (status + time-to-full) to avoid stale "IN_PROGRESS"
         # causing false positives.
-        if any(token in communication_status for token in idle_status_tokens):
+        if idle_comm and not active_display:
             return False
-
-        active_display = any(token in charge_display_status for token in active_status_tokens)
-        active_comm = any(token in communication_status for token in active_status_tokens)
 
         time_to_full = charging.get("time_to_full_min")
         ttf_positive = False
