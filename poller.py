@@ -1080,6 +1080,42 @@ def _v(raw: dict, *keys, default=None):
     return node
 
 
+def _v_if_fresh(metrics: dict, metric_key: str, now_ts: datetime, max_stale_minutes: int = 60) -> None | float | str | int:
+    """Get metric value only if its updateTime is recent; skip stale readings from Ford API."""
+    metric = metrics.get(metric_key)
+    if not isinstance(metric, dict):
+        return None
+    
+    value = metric.get("value")
+    if value is None:
+        return None
+    
+    update_time_str = metric.get("updateTime")
+    if not update_time_str:
+        return value  # No timestamp, assume fresh
+    
+    try:
+        # Parse ISO 8601 timestamp (e.g., "2026-04-20T07:43:44Z")
+        if isinstance(update_time_str, str):
+            update_time = datetime.fromisoformat(update_time_str.replace("Z", "+00:00"))
+        else:
+            return value
+        
+        # Make both times timezone-aware for comparison
+        now_aware = now_ts if now_ts.tzinfo else now_ts.replace(tzinfo=timezone.utc)
+        update_aware = update_time if update_time.tzinfo else update_time.replace(tzinfo=timezone.utc)
+        
+        age = now_aware - update_aware
+        if age > timedelta(minutes=max_stale_minutes):
+            # Stale; skip this value
+            return None
+        
+        return value
+    except (ValueError, AttributeError, TypeError):
+        # If parsing fails, assume fresh and return value
+        return value
+
+
 def _upsert_vehicle_state(vin: str, ts: datetime, m: dict) -> None:
     """Map Ford metrics to vehicle_state. All values stored in raw metric units."""
     db.execute(
@@ -1155,18 +1191,25 @@ def _upsert_charging_state(vin: str, ts: datetime, m: dict) -> None:
          _v(m, "xevPlugChargerStatus", "value"),
          _v(m, "xevChargeStationPowerType", "value"),
          _v(m, "xevChargeStationCommunicationStatus", "value"),
-                 _v(m, "xevBatteryChargeDisplayStatus", "value"),
+         _v(m, "xevBatteryChargeDisplayStatus", "value"),
          _v(m, "xevBatteryTimeToFullCharge", "value"),
-         _v(m, "xevBatteryChargerCurrentOutput", "value"),
-         _v(m, "xevBatteryChargerVoltageOutput", "value"),
-         _v(m, "xevEvseBatteryDcCurrentOutput", "value")),
+         _v_if_fresh(m, "xevBatteryChargerCurrentOutput", ts, max_stale_minutes=60),
+         _v_if_fresh(m, "xevBatteryChargerVoltageOutput", ts, max_stale_minutes=60),
+         _v_if_fresh(m, "xevEvseBatteryDcCurrentOutput", ts, max_stale_minutes=60)),
     )
 
 
-def _charging_power_kw(metrics: dict) -> float | None:
+def _charging_power_kw(metrics: dict, ts: datetime | None = None) -> float | None:
     """Return instantaneous charging power in kW when voltage/current are available."""
-    voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
-    current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
+    if ts:
+        # Use fresh-check to avoid stale Ford API readings
+        voltage = _v_if_fresh(metrics, "xevBatteryChargerVoltageOutput", ts, max_stale_minutes=60)
+        current = _v_if_fresh(metrics, "xevBatteryChargerCurrentOutput", ts, max_stale_minutes=60)
+    else:
+        # Fallback when timestamp not available
+        voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
+        current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
+    
     if voltage is None or current is None:
         return None
     try:
@@ -1305,10 +1348,13 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     """Persist a charging history sample only when charging is actively occurring."""
     plug_status = _v(metrics, "xevPlugChargerStatus", "value")
     time_to_full = _v(metrics, "xevBatteryTimeToFullCharge", "value")
-    charger_current = _v(metrics, "xevBatteryChargerCurrentOutput", "value")
-    charger_voltage = _v(metrics, "xevBatteryChargerVoltageOutput", "value")
-    dc_current = _v(metrics, "xevEvseBatteryDcCurrentOutput", "value")
-    power_kw = _charging_power_kw(metrics)
+    
+    # Use fresh-check for electrical measurements; Ford API may return very stale readings
+    charger_current = _v_if_fresh(metrics, "xevBatteryChargerCurrentOutput", ts, max_stale_minutes=60)
+    charger_voltage = _v_if_fresh(metrics, "xevBatteryChargerVoltageOutput", ts, max_stale_minutes=60)
+    dc_current = _v_if_fresh(metrics, "xevEvseBatteryDcCurrentOutput", ts, max_stale_minutes=60)
+    
+    power_kw = _charging_power_kw(metrics, ts)
     charge_display = (_v(metrics, "xevBatteryChargeDisplayStatus", "value") or "").strip().lower()
     communication_status = (_v(metrics, "xevChargeStationCommunicationStatus", "value") or "").strip().lower()
 

@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Database Maintenance – Lightning{% endblock %}
+{% block content %}
+<h1>Database Maintenance</h1>
+
+<div class="card">
+  <h2>Database Overview</h2>
+  <div class="stat-grid">
+    <div class="stat-item">
+      <label>Total Database Size</label>
+      <span class="stat-value">{{ total_size }}</span>
+    </div>
+    <div class="stat-item">
+      <label>Total Tables</label>
+      <span class="stat-value">{{ table_stats|length }}</span>
+    </div>
+    <div class="stat-item">
+      <label>Indexes</label>
+      <span class="stat-value">{{ index_stats|length }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Maintenance Operations</h2>
+  <div class="maintenance-ops">
+    <div class="op-group">
+      <h3>Cleanup & Optimize</h3>
+      <p class="help-text">VACUUM removes dead rows and optimizes table layout for faster queries.</p>
+      <form method="post" action="{{ url_for('db_maintenance_vacuum') }}" class="inline-form">
+        <button type="submit" class="btn btn-primary" onclick="return confirm('Run VACUUM ANALYZE? This may take a moment.');">
+          Run VACUUM ANALYZE
+        </button>
+      </form>
+    </div>
+
+    <div class="op-group">
+      <h3>Reindex</h3>
+      <p class="help-text">REINDEX rebuilds all indexes for better query performance and reclaims unused index space.</p>
+      <form method="post" action="{{ url_for('db_maintenance_reindex') }}" class="inline-form">
+        <button type="submit" class="btn btn-primary" onclick="return confirm('Rebuild all indexes? This may take a moment.');">
+          Run REINDEX
+        </button>
+      </form>
+    </div>
+
+    <div class="op-group">
+      <h3>Cleanup Old Charging Records</h3>
+      <p class="help-text">Delete charging history records older than 90 days to free up space.</p>
+      <form method="post" action="{{ url_for('db_maintenance_cleanup_charging') }}" class="inline-form">
+        <button type="submit" class="btn btn-danger" onclick="return confirm('Delete charging records older than 90 days? This cannot be undone.');">
+          Delete Old Charging Records
+        </button>
+      </form>
+      {% if stale_data.get('old_charging_records') %}
+      <span class="stat-note">{{ stale_data['old_charging_records'][0] }} {{ stale_data['old_charging_records'][1] }}</span>
+      {% endif %}
+    </div>
+
+    <div class="op-group">
+      <h3>Cleanup Old Drive Records</h3>
+      <p class="help-text">Delete drive records older than 180 days to free up space.</p>
+      <form method="post" action="{{ url_for('db_maintenance_cleanup_drives') }}" class="inline-form">
+        <button type="submit" class="btn btn-danger" onclick="return confirm('Delete drive records older than 180 days? This cannot be undone.');">
+          Delete Old Drive Records
+        </button>
+      </form>
+      {% if stale_data.get('old_drive_records') %}
+      <span class="stat-note">{{ stale_data['old_drive_records'][0] }} {{ stale_data['old_drive_records'][1] }}</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Table Statistics</h2>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:auto">Table</th>
+        <th style="width:auto">Rows</th>
+        <th style="width:auto">Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stat in table_stats %}
+      <tr>
+        <td><a href="{{ url_for('db_table', table_name=stat.name) }}">{{ stat.name }}</a></td>
+        <td>{{ stat.rows|default(0)|int }}</td>
+        <td>{{ stat.size }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if index_stats %}
+<div class="card">
+  <h2>Index Statistics</h2>
+  <p class="help-text">Showing index scan counts and usage. Indexes with zero scans may be candidates for removal.</p>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:auto">Table</th>
+        <th style="width:auto">Index Name</th>
+        <th style="width:auto">Scans</th>
+        <th style="width:auto">Tuples Read</th>
+        <th style="width:auto">Tuples Fetched</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for idx in index_stats %}
+      <tr class="{% if idx.scans == 0 %}unused-index{% endif %}">
+        <td>{{ idx.tablename }}</td>
+        <td>{{ idx.indexname }}</td>
+        <td>{{ idx.scans|default(0)|int }}</td>
+        <td>{{ idx.tuples_read|default(0)|int }}</td>
+        <td>{{ idx.tuples_fetched|default(0)|int }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="help-text" style="margin-top: 1rem; color: #666;">
+    <em>Rows highlighted in light red have never been scanned and may be unused indexes.</em>
+  </p>
+</div>
+{% endif %}
+
+<style>
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.stat-item {
+  background: #f5f5f5;
+  padding: 1rem;
+  border-radius: 4px;
+  border-left: 4px solid #2196F3;
+}
+
+.stat-item label {
+  display: block;
+  font-size: 0.875rem;
+  color: #666;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.stat-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #333;
+}
+
+.maintenance-ops {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+
+.op-group {
+  background: #f9f9f9;
+  padding: 1rem;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+.op-group h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+  color: #333;
+}
+
+.help-text {
+  font-size: 0.875rem;
+  color: #666;
+  margin: 0.5rem 0 1rem 0;
+}
+
+.inline-form {
+  display: inline-block;
+}
+
+.stat-note {
+  display: inline-block;
+  background: #fff3cd;
+  color: #856404;
+  padding: 0.25rem 0.75rem;
+  border-radius: 3px;
+  font-size: 0.875rem;
+  margin-left: 1rem;
+}
+
+.unused-index {
+  background-color: #ffe0e0;
+}
+</style>
+{% endblock %}
