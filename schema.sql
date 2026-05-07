@@ -79,7 +79,8 @@ CREATE TABLE charging_state (
     plug_status TEXT,
     charger_power_type TEXT,
     communication_status TEXT,
-
+    charge_display_status TEXT,
+    
     time_to_full_min REAL CHECK (time_to_full_min >= 0),
     charger_current REAL,
     charger_voltage REAL,
