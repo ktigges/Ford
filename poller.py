@@ -1135,8 +1135,8 @@ def _upsert_charging_state(vin: str, ts: datetime, m: dict) -> None:
     db.execute(
         """
         INSERT INTO charging_state (vin, last_update, plug_status, charger_power_type,
-            communication_status, time_to_full_min, charger_current, charger_voltage, evse_dc_current)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            communication_status, charge_display_status, time_to_full_min, charger_current, charger_voltage, evse_dc_current)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (vin) DO UPDATE SET
             last_update=EXCLUDED.last_update, plug_status=EXCLUDED.plug_status,
             charger_power_type=EXCLUDED.charger_power_type,
