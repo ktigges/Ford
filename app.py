@@ -439,6 +439,109 @@ def create_app() -> Flask:
 
         return list(reversed(session_rows_desc))
 
+    def _split_charging_sessions(rows_desc: list[dict], max_gap_minutes: int = 45) -> list[list[dict]]:
+        """Split DESC charging rows into logical sessions (newest session first)."""
+        if not rows_desc:
+            return []
+
+        sessions: list[list[dict]] = []
+        current_desc: list[dict] = []
+        current_uuid = None
+        last_polled_at = None
+        max_gap = timedelta(minutes=max_gap_minutes)
+
+        for row in rows_desc:
+            row_uuid = row.get("charging_session_uuid")
+            row_polled_at = row.get("polled_at")
+
+            if not current_desc:
+                current_desc = [row]
+                current_uuid = row_uuid
+                last_polled_at = row_polled_at
+                continue
+
+            split_session = False
+            if current_uuid and row_uuid:
+                split_session = current_uuid != row_uuid
+            elif current_uuid or row_uuid:
+                split_session = True
+            elif last_polled_at and row_polled_at and (last_polled_at - row_polled_at) > max_gap:
+                split_session = True
+
+            if split_session:
+                sessions.append(list(reversed(current_desc)))
+                current_desc = [row]
+                current_uuid = row_uuid
+                last_polled_at = row_polled_at
+                continue
+
+            current_desc.append(row)
+            last_polled_at = row_polled_at
+
+        if current_desc:
+            sessions.append(list(reversed(current_desc)))
+
+        return sessions
+
+    def _charging_sessions_summary(rows_desc: list[dict], limit: int = 20) -> list[dict]:
+        """Build summary rows for recent charging sessions."""
+        session_groups = _split_charging_sessions(rows_desc)
+        summaries: list[dict] = []
+
+        for idx, session_rows in enumerate(session_groups[:limit]):
+            if not session_rows:
+                continue
+
+            first_row = session_rows[0]
+            last_row = session_rows[-1]
+            session_uuid = None
+            for row in session_rows:
+                if row.get("charging_session_uuid"):
+                    session_uuid = str(row.get("charging_session_uuid"))
+                    break
+
+            start_soc = first_row.get("soc_percent")
+            end_soc = last_row.get("soc_percent")
+            try:
+                soc_delta = (float(end_soc) - float(start_soc)) if start_soc is not None and end_soc is not None else None
+            except (TypeError, ValueError):
+                soc_delta = None
+
+            max_power_kw = None
+            for row in session_rows:
+                raw_power = row.get("charge_power_kw")
+                try:
+                    power_val = float(raw_power)
+                except (TypeError, ValueError):
+                    continue
+                max_power_kw = power_val if max_power_kw is None else max(max_power_kw, power_val)
+
+            duration_min = None
+            start_ts = first_row.get("polled_at")
+            end_ts = last_row.get("polled_at")
+            if start_ts and end_ts:
+                try:
+                    duration_min = max(0.0, (end_ts - start_ts).total_seconds() / 60.0)
+                except Exception:
+                    duration_min = None
+
+            summaries.append(
+                {
+                    "session_label": (session_uuid[:8] if session_uuid else f"gap-{idx + 1}"),
+                    "session_uuid": session_uuid,
+                    "started_at": start_ts,
+                    "ended_at": end_ts,
+                    "duration_min": duration_min,
+                    "start_soc": start_soc,
+                    "end_soc": end_soc,
+                    "soc_delta": soc_delta,
+                    "max_power_kw": max_power_kw,
+                    "samples": len(session_rows),
+                }
+            )
+
+        return summaries
+
     def _build_charging_chart_data(latest_session: list[dict], system: str) -> dict:
         """Build charging chart series for a single charging session."""
         charging_chart_data = {
@@ -965,7 +1068,7 @@ def create_app() -> Flask:
         system = _get_setting("units") if db.is_available() else "imperial"
         charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
         charging_display = dict(charging) if charging else None
-        if charging_display and _plug_status_idle(charging_display.get("plug_status")):
+        if charging_display and not _charging_is_active(charging_display):
             charging_display["time_to_full_min"] = None
             charging_display["charger_current"] = None
             charging_display["charger_voltage"] = None
@@ -1034,6 +1137,7 @@ def create_app() -> Flask:
         meaningful_rows = [row for row in history_rows if _charging_sample_meaningful(row)]
         latest_session = _latest_charging_session(meaningful_rows) if meaningful_rows else []
         chart_data = _build_charging_chart_data(latest_session, system)
+        sessions_summary = _charging_sessions_summary(meaningful_rows, limit=25)
 
         return render_template(
             "charging_sessions.html",
@@ -1042,6 +1146,7 @@ def create_app() -> Flask:
             charging_active=_charging_is_active(charging),
             charging_power_kw=_charging_power_kw_from_row(charging),
             latest_session=latest_session,
+            sessions_summary=sessions_summary,
             chart_data=chart_data,
             refresh_interval=request.args.get("refresh", 0, type=int),
             display_timezone=_display_timezone()[1],

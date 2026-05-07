@@ -169,8 +169,9 @@ def _do_poll(provider: str, vin: str) -> None:
     # Ford wraps all metrics under a "metrics" key
     metrics = raw.get("metrics", raw)
 
-    # ── Conservative mode: skip write if vehicle is idle and state unchanged ──
-    if conservative_mode() and not _vehicle_is_active(vin, metrics):
+    # ── Conservative mode: skip write only when idle and no drive is active ──
+    active_drive = _get_active_drive(vin)
+    if conservative_mode() and active_drive is None and not _vehicle_is_active(vin, metrics):
         global _last_idle_write, _last_metrics_hash
         metrics_hash = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
         time_since_last = (now - _last_idle_write).total_seconds() if _last_idle_write else None
