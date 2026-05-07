@@ -377,14 +377,6 @@ def create_app() -> Flask:
         idle_status_tokens = ("station_ready", "ready", "waiting", "scheduled", "paused", "standby")
         active_status_tokens = ("charging", "in_progress", "active", "powering")
 
-        # Ford sometimes leaves communication status in standby while display status
-        # has already switched to IN_PROGRESS; prefer explicit charge display active.
-        if any(token in charge_display_status for token in active_status_tokens):
-            return True
-
-        if any(token in communication_status for token in idle_status_tokens):
-            return False
-
         power_kw = _charging_power_kw_from_row(charging)
         if power_kw is not None:
             try:
@@ -410,16 +402,24 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             pass
 
-        if any(token in communication_status for token in active_status_tokens):
-            return True
+        # If there is no measurable electrical flow, require corroborating
+        # active signals (status + time-to-full) to avoid stale "IN_PROGRESS"
+        # causing false positives.
+        if any(token in communication_status for token in idle_status_tokens):
+            return False
+
+        active_display = any(token in charge_display_status for token in active_status_tokens)
+        active_comm = any(token in communication_status for token in active_status_tokens)
 
         time_to_full = charging.get("time_to_full_min")
-        if time_to_full is None:
-            return False
+        ttf_positive = False
         try:
-            return float(time_to_full) > 0 and "charging" in plug_status and any(token in communication_status for token in active_status_tokens)
+            ttf_positive = time_to_full is not None and float(time_to_full) > 0
         except (TypeError, ValueError):
-            return False
+            ttf_positive = False
+
+        active_signal_count = sum([1 if active_display else 0, 1 if active_comm else 0, 1 if ttf_positive else 0])
+        return active_signal_count >= 2
 
     def _charging_mode_from_data(charging: dict | None, voltage_series: list[int | None]) -> str:
         """Infer charging profile from power-type hints and observed voltage samples."""
@@ -1219,6 +1219,8 @@ def create_app() -> Flask:
         """Dedicated charging session view focused on SOC, charge rate, and temperatures."""
         vin = _active_vin()
         system = _get_setting("units") if db.is_available() else "imperial"
+        selected_session_uuid = (request.args.get("session") or "").strip()
+        refresh_interval = request.args.get("refresh", 0, type=int)
         charging = db.fetch_one("SELECT * FROM charging_state WHERE vin = %s", (vin,)) if vin else None
 
         history_rows = []
@@ -1229,7 +1231,14 @@ def create_app() -> Flask:
             )
 
         meaningful_rows = [row for row in history_rows if _charging_sample_meaningful(row)]
-        latest_session = _latest_charging_session(meaningful_rows) if meaningful_rows else []
+        selected_session_rows = []
+        if selected_session_uuid:
+            selected_session_rows = [
+                row for row in meaningful_rows
+                if str(row.get("charging_session_uuid") or "") == selected_session_uuid
+            ]
+
+        latest_session = selected_session_rows or (_latest_charging_session(meaningful_rows) if meaningful_rows else [])
         chart_data = _build_charging_chart_data(latest_session, system)
         sessions_summary = []
         if vin and _table_exists("charging_sessions"):
@@ -1268,6 +1277,7 @@ def create_app() -> Flask:
                     {
                         "session_label": (session_uuid[:8] if session_uuid else "session"),
                         "session_uuid": session_uuid,
+                        "selected": bool(session_uuid and session_uuid == selected_session_uuid),
                         "started_at": started_at,
                         "ended_at": ended_at,
                         "in_progress": bool(row.get("in_progress")),
@@ -1281,6 +1291,15 @@ def create_app() -> Flask:
                 )
         else:
             sessions_summary = _charging_sessions_summary(meaningful_rows, limit=25)
+            for s in sessions_summary:
+                s_uuid = str(s.get("session_uuid") or "")
+                s["selected"] = bool(s_uuid and s_uuid == selected_session_uuid)
+
+        selected_session_label = None
+        if selected_session_uuid:
+            selected_session_label = selected_session_uuid[:8]
+        elif sessions_summary:
+            selected_session_label = sessions_summary[0].get("session_label")
 
         return render_template(
             "charging_sessions.html",
@@ -1290,8 +1309,10 @@ def create_app() -> Flask:
             charging_power_kw=_charging_power_kw_from_row(charging),
             latest_session=latest_session,
             sessions_summary=sessions_summary,
+            selected_session_uuid=selected_session_uuid,
+            selected_session_label=selected_session_label,
             chart_data=chart_data,
-            refresh_interval=request.args.get("refresh", 0, type=int),
+            refresh_interval=refresh_interval,
             display_timezone=_display_timezone()[1],
         )
 
