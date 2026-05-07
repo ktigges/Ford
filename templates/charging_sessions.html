@@ -12,10 +12,10 @@
 
 <div class="card" style="margin-bottom:1rem;">
   <strong>Auto Refresh:</strong>
-  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view') }}">Off</a>
-  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=15) }}">15s</a>
-  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=30) }}">30s</a>
-  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=60) }}">60s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', session=selected_session_uuid or '') }}">Off</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=15, session=selected_session_uuid or '') }}">15s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=30, session=selected_session_uuid or '') }}">30s</a>
+  <a class="btn btn-sm" href="{{ url_for('charging_sessions_view', refresh=60, session=selected_session_uuid or '') }}">60s</a>
   <a class="btn btn-sm" href="{{ url_for('charging_overview') }}" style="margin-left:0.5rem;">Back to Charging</a>
   {% if refresh_interval %}<span class="muted" style="margin-left:0.5rem;">Enabled: {{ refresh_interval }}s</span>{% endif %}
 </div>
@@ -39,8 +39,14 @@
       </thead>
       <tbody>
         {% for s in sessions_summary %}
-        <tr>
-          <td>{{ s.session_label }}</td>
+        <tr{% if s.selected %} style="background:#eef6ff;"{% endif %}>
+          <td>
+            {% if s.session_uuid %}
+            <a href="{{ url_for('charging_sessions_view', session=s.session_uuid, refresh=refresh_interval) }}"><strong>{{ s.session_label }}</strong></a>
+            {% else %}
+            <strong>{{ s.session_label }}</strong>
+            {% endif %}
+          </td>
           <td>{{ 'In Progress' if s.in_progress else 'Complete' }}</td>
           <td>{{ format_local_dt(s.started_at, '%Y-%m-%d %H:%M:%S') if s.started_at else '–' }}</td>
           <td>{{ format_local_dt(s.ended_at, '%Y-%m-%d %H:%M:%S') if s.ended_at else ('now' if s.in_progress else '–') }}</td>
@@ -66,7 +72,7 @@
 </div>
 
 <div class="card">
-  <h2>Latest Charging Session</h2>
+  <h2>{% if selected_session_label %}Charging Session {{ selected_session_label }}{% else %}Latest Charging Session{% endif %}</h2>
   {% if latest_session %}
   <p class="muted" style="margin-top:-0.5rem;">
     {{ chart_data.labels|length }} plotted points from {{ format_local_dt((latest_session|first).polled_at, '%Y-%m-%d %H:%M:%S') }}
