@@ -330,6 +330,119 @@ def create_app() -> Flask:
 
         return applied
 
+    def _db_vacuum() -> str:
+        """Run VACUUM to clean up dead tuples and reclaim space."""
+        db.execute("VACUUM ANALYZE")
+        return "VACUUM ANALYZE completed"
+
+    def _db_reindex() -> str:
+        """Rebuild all indexes for performance."""
+        # Reindex all tables to maintain good performance
+        for table_name in _VIEWABLE_TABLES:
+            if _table_exists(table_name):
+                db.execute(f"REINDEX TABLE {table_name}")
+        return "REINDEX completed for all tables"
+
+    def _db_check_stale_data() -> dict:
+        """Check for potentially stale data in charging/drive tables."""
+        results = {}
+        now = datetime.now(timezone.utc)
+        
+        # Check for old charging records (>30 days)
+        if _table_exists("charging_history"):
+            row = db.fetch_one(
+                """
+                SELECT COUNT(*) as cnt FROM charging_history 
+                WHERE last_update < NOW() - INTERVAL '30 days'
+                """
+            )
+            old_charging = row["cnt"] if row else 0
+            results["old_charging_records"] = (old_charging, "records >30 days old in charging_history")
+        
+        # Check for old drive records (>90 days)
+        if _table_exists("drive"):
+            row = db.fetch_one(
+                """
+                SELECT COUNT(*) as cnt FROM drive 
+                WHERE ended_at < NOW() - INTERVAL '90 days'
+                """
+            )
+            old_drives = row["cnt"] if row else 0
+            results["old_drive_records"] = (old_drives, "records >90 days old in drive")
+        
+        # Check for old vehicle_state records (>30 days)
+        if _table_exists("vehicle_state"):
+            row = db.fetch_one(
+                """
+                SELECT COUNT(*) as cnt FROM vehicle_state 
+                WHERE last_update < NOW() - INTERVAL '30 days'
+                """
+            )
+            old_vehicle_state = row["cnt"] if row else 0
+            results["old_vehicle_state"] = (old_vehicle_state, "records >30 days old in vehicle_state")
+        
+        return results
+
+    def _db_table_stats() -> list[dict]:
+        """Get table statistics (size, row count, last vacuum time)."""
+        stats = []
+        for table_name in _VIEWABLE_TABLES:
+            if not _table_exists(table_name):
+                continue
+            
+            row_count = db.fetch_one(f"SELECT count(*) as cnt FROM {table_name}")
+            size_row = db.fetch_one(
+                f"SELECT pg_size_pretty(pg_total_relation_size('{table_name}')) as size"
+            )
+            
+            size_str = size_row["size"] if size_row else "0 B"
+            count = row_count["cnt"] if row_count else 0
+            
+            stats.append({
+                "name": table_name,
+                "rows": count,
+                "size": size_str
+            })
+        
+        return stats
+
+    def _db_index_stats() -> list[dict]:
+        """Get index statistics and usage info."""
+        rows = db.fetch_all(
+            """
+            SELECT schemaname, tablename, indexname, idx_scan as scans, idx_tup_read as tuples_read, idx_tup_fetch as tuples_fetched
+            FROM pg_stat_user_indexes
+            ORDER BY idx_scan DESC, tablename
+            """
+        )
+        return [dict(r) for r in rows] if rows else []
+
+    def _db_cleanup_old_charging() -> str:
+        """Delete charging records older than 90 days."""
+        # First count how many will be deleted
+        count_result = db.fetch_one(
+            "SELECT COUNT(*) as cnt FROM charging_history WHERE last_update < NOW() - INTERVAL '90 days'"
+        )
+        to_delete = count_result["cnt"] if count_result else 0
+        
+        if to_delete > 0:
+            db.execute("DELETE FROM charging_history WHERE last_update < NOW() - INTERVAL '90 days'")
+        
+        return f"Deleted {to_delete} charging records older than 90 days"
+
+    def _db_cleanup_old_drives() -> str:
+        """Delete drive records older than 180 days."""
+        # First count how many will be deleted
+        count_result = db.fetch_one(
+            "SELECT COUNT(*) as cnt FROM drive WHERE ended_at < NOW() - INTERVAL '180 days'"
+        )
+        to_delete = count_result["cnt"] if count_result else 0
+        
+        if to_delete > 0:
+            db.execute("DELETE FROM drive WHERE ended_at < NOW() - INTERVAL '180 days'")
+        
+        return f"Deleted {to_delete} drive records older than 180 days"
+
     def _charging_power_kw_from_row(charging: dict | None) -> float | None:
         """Compute kW from the latest charging_state row when possible."""
         if not charging:
@@ -2417,6 +2530,75 @@ def create_app() -> Flask:
             row_id=row_id,
             row=formatted,
         )
+
+    # ── Database Maintenance ───────────────────────────────────────
+
+    @app.route("/db/maintenance")
+    def db_maintenance():
+        """Show database maintenance page with stats and available operations."""
+        table_stats = _db_table_stats()
+        index_stats = _db_index_stats()
+        stale_data = _db_check_stale_data()
+        
+        # Calculate total size
+        total_size_result = db.fetch_one("SELECT pg_size_pretty(pg_database_size(current_database())) as size")
+        total_size = total_size_result["size"] if total_size_result else "unknown"
+        
+        return render_template(
+            "db_maintenance.html",
+            table_stats=table_stats,
+            index_stats=index_stats,
+            stale_data=stale_data,
+            total_size=total_size
+        )
+
+    @app.route("/db/maintenance/vacuum", methods=["POST"])
+    def db_maintenance_vacuum():
+        """Run VACUUM ANALYZE to clean up and optimize."""
+        try:
+            msg = _db_vacuum()
+            log.info("Database maintenance: %s", msg)
+            flash(msg, "success")
+        except Exception as exc:
+            log.error("VACUUM failed: %s", exc)
+            flash(f"VACUUM failed: {exc}", "error")
+        return redirect(url_for("db_maintenance"))
+
+    @app.route("/db/maintenance/reindex", methods=["POST"])
+    def db_maintenance_reindex():
+        """Rebuild all indexes for performance."""
+        try:
+            msg = _db_reindex()
+            log.info("Database maintenance: %s", msg)
+            flash(msg, "success")
+        except Exception as exc:
+            log.error("REINDEX failed: %s", exc)
+            flash(f"REINDEX failed: {exc}", "error")
+        return redirect(url_for("db_maintenance"))
+
+    @app.route("/db/maintenance/cleanup-charging", methods=["POST"])
+    def db_maintenance_cleanup_charging():
+        """Delete old charging records (>90 days)."""
+        try:
+            msg = _db_cleanup_old_charging()
+            log.info("Database maintenance: %s", msg)
+            flash(msg, "success")
+        except Exception as exc:
+            log.error("Cleanup old charging records failed: %s", exc)
+            flash(f"Cleanup failed: {exc}", "error")
+        return redirect(url_for("db_maintenance"))
+
+    @app.route("/db/maintenance/cleanup-drives", methods=["POST"])
+    def db_maintenance_cleanup_drives():
+        """Delete old drive records (>180 days)."""
+        try:
+            msg = _db_cleanup_old_drives()
+            log.info("Database maintenance: %s", msg)
+            flash(msg, "success")
+        except Exception as exc:
+            log.error("Cleanup old drives failed: %s", exc)
+            flash(f"Cleanup failed: {exc}", "error")
+        return redirect(url_for("db_maintenance"))
 
     # ── Backup & Restore ───────────────────────────────────────────
 
