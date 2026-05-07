@@ -364,6 +364,14 @@ def create_app() -> Flask:
 
     def _charging_sample_meaningful(row: dict) -> bool:
         """Return True when a history row likely represents a real charging sample."""
+        comm = (row.get("communication_status") or "").strip().lower()
+        active_tokens = ("charging", "active", "in_progress", "powering")
+        idle_tokens = ("not_detected", "station_ready", "ready", "waiting", "scheduled", "complete", "completed")
+        if any(token in comm for token in active_tokens):
+            return True
+        if any(token in comm for token in idle_tokens):
+            return False
+
         if not _plug_status_idle(row.get("plug_status")):
             return True
         power_raw = row.get("charge_power_kw")
@@ -376,6 +384,15 @@ def create_app() -> Flask:
 
     def _latest_charging_session(rows_desc: list[dict], max_gap_minutes: int = 45) -> list[dict]:
         """Return the most recent contiguous charging session from DESC history rows."""
+        # Prefer explicit session UUIDs when they exist.
+        for row in rows_desc:
+            session_uuid = row.get("charging_session_uuid")
+            if not session_uuid:
+                continue
+            matched = [r for r in rows_desc if r.get("charging_session_uuid") == session_uuid]
+            if matched:
+                return list(reversed(matched))
+
         session_rows_desc = []
         last_polled_at = None
         max_gap = timedelta(minutes=max_gap_minutes)
@@ -936,9 +953,12 @@ def create_app() -> Flask:
                 "SELECT * FROM charging_history WHERE vin = %s ORDER BY polled_at DESC LIMIT 400",
                 (vin,),
             )
-            history = history_rows[:100]
 
-        latest_session = _latest_charging_session(history_rows) if history_rows else []
+            # Avoid stale unplugged rows in UI/charts (legacy data may contain these).
+            meaningful_rows = [row for row in history_rows if _charging_sample_meaningful(row)]
+            history = meaningful_rows[:100]
+
+        latest_session = _latest_charging_session(history) if history else []
 
         charging_chart_data = _build_charging_chart_data(latest_session, system)
 
@@ -984,7 +1004,8 @@ def create_app() -> Flask:
                 (vin,),
             )
 
-        latest_session = _latest_charging_session(history_rows) if history_rows else []
+        meaningful_rows = [row for row in history_rows if _charging_sample_meaningful(row)]
+        latest_session = _latest_charging_session(meaningful_rows) if meaningful_rows else []
         chart_data = _build_charging_chart_data(latest_session, system)
 
         return render_template(
