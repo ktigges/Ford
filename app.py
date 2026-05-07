@@ -373,6 +373,27 @@ def create_app() -> Flask:
         comm = (row.get("communication_status") or "").strip().lower()
         active_tokens = ("charging", "active", "in_progress", "powering")
         idle_tokens = ("not_detected", "station_ready", "ready", "waiting", "scheduled", "complete", "completed")
+
+        # Prefer physical electrical flow over status tokens.
+        try:
+            if row.get("charge_power_kw") is not None and float(row.get("charge_power_kw")) > 0.5:
+                return True
+        except (TypeError, ValueError):
+            pass
+        try:
+            if (
+                row.get("charger_voltage") is not None and float(row.get("charger_voltage")) > 20
+                and row.get("charger_current") is not None and float(row.get("charger_current")) > 0.5
+            ):
+                return True
+        except (TypeError, ValueError):
+            pass
+        try:
+            if row.get("evse_dc_current") is not None and float(row.get("evse_dc_current")) > 0.5:
+                return True
+        except (TypeError, ValueError):
+            pass
+
         if any(token in comm for token in active_tokens):
             return True
         if any(token in comm for token in idle_tokens):

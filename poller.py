@@ -1239,7 +1239,11 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
     explicitly_idle = any(token in communication_status for token in idle_tokens) or any(token in charge_display for token in idle_tokens)
     explicitly_active = any(token in communication_status for token in active_tokens) or any(token in charge_display for token in active_tokens)
 
-    should_store = plug_connected and (has_power_flow or has_current_flow or has_dc_flow or explicitly_active) and not explicitly_idle
+    # Ford can report stale idle communication tokens while power/current is flowing.
+    # Treat measured electrical flow as authoritative for history capture.
+    flow_detected = has_power_flow or has_current_flow or has_dc_flow
+    status_active = explicitly_active and not explicitly_idle
+    should_store = plug_connected and (flow_detected or status_active)
 
     if not should_store:
         return
