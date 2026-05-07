@@ -112,6 +112,27 @@ CREATE TABLE charging_history (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+CREATE TABLE charging_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    session_uuid UUID NOT NULL UNIQUE,
+    vin TEXT NOT NULL REFERENCES garage(vin) ON DELETE CASCADE,
+    started_at TIMESTAMPTZ NOT NULL,
+    last_update TIMESTAMPTZ NOT NULL,
+    ended_at TIMESTAMPTZ,
+    in_progress BOOLEAN NOT NULL DEFAULT TRUE,
+
+    charger_power_type TEXT,
+    start_soc_percent REAL CHECK (start_soc_percent BETWEEN 0 AND 100),
+    end_soc_percent REAL CHECK (end_soc_percent BETWEEN 0 AND 100),
+    start_energy_remaining_kwh REAL CHECK (start_energy_remaining_kwh >= 0),
+    end_energy_remaining_kwh REAL CHECK (end_energy_remaining_kwh >= 0),
+    max_power_kw REAL CHECK (max_power_kw >= 0),
+    sample_count INTEGER NOT NULL DEFAULT 1 CHECK (sample_count >= 1),
+
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- =========================
 -- Location / navigation state
 -- =========================
@@ -419,3 +440,5 @@ CREATE INDEX idx_drives_in_progress ON drives (vin) WHERE in_progress = TRUE;
 CREATE INDEX idx_drive_points_drive_time ON drive_points (drive_id, recorded_at);
 CREATE INDEX idx_charging_history_vin_time ON charging_history (vin, polled_at DESC);
 CREATE INDEX idx_charging_history_session_uuid ON charging_history (charging_session_uuid);
+CREATE INDEX idx_charging_sessions_vin_start ON charging_sessions (vin, started_at DESC);
+CREATE INDEX idx_charging_sessions_open ON charging_sessions (vin) WHERE in_progress = TRUE;

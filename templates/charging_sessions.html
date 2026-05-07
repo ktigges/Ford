@@ -28,6 +28,7 @@
       <thead>
         <tr>
           <th>Session</th>
+          <th>Status</th>
           <th>Start</th>
           <th>End</th>
           <th>Duration</th>
@@ -40,8 +41,9 @@
         {% for s in sessions_summary %}
         <tr>
           <td>{{ s.session_label }}</td>
+          <td>{{ 'In Progress' if s.in_progress else 'Complete' }}</td>
           <td>{{ format_local_dt(s.started_at, '%Y-%m-%d %H:%M:%S') if s.started_at else '–' }}</td>
-          <td>{{ format_local_dt(s.ended_at, '%Y-%m-%d %H:%M:%S') if s.ended_at else '–' }}</td>
+          <td>{{ format_local_dt(s.ended_at, '%Y-%m-%d %H:%M:%S') if s.ended_at else ('now' if s.in_progress else '–') }}</td>
           <td>{{ s.duration_min|round(1) if s.duration_min is not none else '–' }} min</td>
           <td>
             {{ s.start_soc|round(1) if s.start_soc is not none else '–' }}%
