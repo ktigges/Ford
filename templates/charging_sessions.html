@@ -21,6 +21,49 @@
 </div>
 
 <div class="card">
+  <h2>Recent Sessions</h2>
+  {% if sessions_summary %}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th>Start</th>
+          <th>End</th>
+          <th>Duration</th>
+          <th>SOC</th>
+          <th>Max Rate</th>
+          <th>Samples</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sessions_summary %}
+        <tr>
+          <td>{{ s.session_label }}</td>
+          <td>{{ format_local_dt(s.started_at, '%Y-%m-%d %H:%M:%S') if s.started_at else '–' }}</td>
+          <td>{{ format_local_dt(s.ended_at, '%Y-%m-%d %H:%M:%S') if s.ended_at else '–' }}</td>
+          <td>{{ s.duration_min|round(1) if s.duration_min is not none else '–' }} min</td>
+          <td>
+            {{ s.start_soc|round(1) if s.start_soc is not none else '–' }}%
+            →
+            {{ s.end_soc|round(1) if s.end_soc is not none else '–' }}%
+            {% if s.soc_delta is not none %}
+            ({{ '+' if s.soc_delta >= 0 else '' }}{{ s.soc_delta|round(1) }}%)
+            {% endif %}
+          </td>
+          <td>{{ s.max_power_kw|round(1) if s.max_power_kw is not none else '–' }} kW</td>
+          <td>{{ s.samples }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="no-data">No completed charging sessions recorded yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Latest Charging Session</h2>
   {% if latest_session %}
   <p class="muted" style="margin-top:-0.5rem;">
