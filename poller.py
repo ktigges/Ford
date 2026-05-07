@@ -1392,7 +1392,10 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
         has_dc_flow = False
 
     active_tokens = ("charging", "active", "in_progress", "powering")
-    idle_tokens = ("not_detected", "station_ready", "ready", "waiting", "scheduled", "charge_scheduling", "not_ready", "complete", "completed")
+    idle_tokens = (
+        "not_detected", "station_ready", "ready", "waiting", "scheduled",
+        "charge_scheduling", "not_ready", "complete", "completed", "stopped", "stop",
+    )
     explicitly_idle = any(token in communication_status for token in idle_tokens) or any(token in charge_display for token in idle_tokens)
     explicitly_active = any(token in communication_status for token in active_tokens) or any(token in charge_display for token in active_tokens)
 
