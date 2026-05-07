@@ -1,11 +1,38 @@
 -- Reset charging telemetry so charging collection can start fresh.
 --
--- Usage:
--- 1) Edit target_vin below:
---    - NULL  -> reset all VINs
---    - '1FT...' -> reset only that VIN
--- 2) Run with psql:
---    psql "$DATABASE_URL" -f scripts/reset_charging_data.sql
+-- This script safely deletes charging_history and charging_state rows.
+-- When clearing all VINs, it also resets the sequence for clean IDs.
+--
+-- ============================================================================
+-- DATABASE_URL SETUP:
+-- ============================================================================
+--
+-- Option 1: Set environment variable and run
+--   export DATABASE_URL="postgresql://lightning:PASSWORD@localhost:5432/lightning"
+--   psql "$DATABASE_URL" -f scripts/reset_charging_data.sql
+--
+-- Option 2: For live server (linux-web.tigges-us.com)
+--   export DATABASE_URL="postgresql://lightning:PASSWORD@linux-web.tigges-us.com:5432/lightning"
+--   psql "$DATABASE_URL" -f scripts/reset_charging_data.sql
+--
+-- Option 3: Inline connection string (include it directly)
+--   psql "postgresql://lightning:PASSWORD@localhost:5432/lightning" -f scripts/reset_charging_data.sql
+--
+-- CONNECTION STRING FORMAT: postgresql://USERNAME:PASSWORD@HOST:PORT/DATABASE
+--   USERNAME: Usually 'lightning' (check your database setup)
+--   PASSWORD: Your database password
+--   HOST:     'localhost' for local dev, or 'linux-web.tigges-us.com' for live
+--   PORT:     5432 (default PostgreSQL port)
+--   DATABASE: Usually 'lightning' (check your database name)
+--
+-- ============================================================================
+-- EDIT TARGET_vin BELOW:
+-- ============================================================================
+--
+-- - NULL                 -> reset all VINs (complete wipe of charging data)
+-- - '1FT...'             -> reset only that specific VIN
+--
+-- After editing, run the script using one of the methods above.
 --
 -- This script deletes:
 --   - charging_history rows
