@@ -270,6 +270,15 @@ def create_app() -> Flask:
         )
         return row is not None
 
+    def _resolve_time_column(table_name: str, candidates: tuple[str, ...]) -> str | None:
+        """Return the first existing timestamp-like column for a table, else None."""
+        if not _table_exists(table_name):
+            return None
+        for col in candidates:
+            if _column_exists(table_name, col):
+                return col
+        return None
+
     def _run_startup_migrations() -> list[str]:
         """Apply lightweight schema migrations at startup and return applied change labels."""
         if not db.is_available():
@@ -346,40 +355,42 @@ def create_app() -> Flask:
     def _db_check_stale_data() -> dict:
         """Check for potentially stale data in charging/drive tables."""
         results = {}
-        now = datetime.now(timezone.utc)
         
         # Check for old charging records (>30 days)
         if _table_exists("charging_history"):
-            row = db.fetch_one(
-                """
-                SELECT COUNT(*) as cnt FROM charging_history 
-                WHERE last_update < NOW() - INTERVAL '30 days'
-                """
-            )
-            old_charging = row["cnt"] if row else 0
-            results["old_charging_records"] = (old_charging, "records >30 days old in charging_history")
+            charging_ts_col = _resolve_time_column("charging_history", ("polled_at", "created_at", "last_update"))
+            if charging_ts_col:
+                row = db.fetch_one(
+                    f"SELECT COUNT(*) as cnt FROM charging_history WHERE {charging_ts_col} < NOW() - INTERVAL '30 days'"
+                )
+                old_charging = row["cnt"] if row else 0
+                results["old_charging_records"] = (old_charging, f"records >30 days old in charging_history ({charging_ts_col})")
+            else:
+                results["old_charging_records"] = (0, "timestamp column unavailable in charging_history")
         
         # Check for old drive records (>90 days)
-        if _table_exists("drive"):
-            row = db.fetch_one(
-                """
-                SELECT COUNT(*) as cnt FROM drive 
-                WHERE ended_at < NOW() - INTERVAL '90 days'
-                """
-            )
-            old_drives = row["cnt"] if row else 0
-            results["old_drive_records"] = (old_drives, "records >90 days old in drive")
+        if _table_exists("drives"):
+            drives_ts_col = _resolve_time_column("drives", ("ended_at", "started_at", "created_at"))
+            if drives_ts_col:
+                row = db.fetch_one(
+                    f"SELECT COUNT(*) as cnt FROM drives WHERE {drives_ts_col} < NOW() - INTERVAL '90 days'"
+                )
+                old_drives = row["cnt"] if row else 0
+                results["old_drive_records"] = (old_drives, f"records >90 days old in drives ({drives_ts_col})")
+            else:
+                results["old_drive_records"] = (0, "timestamp column unavailable in drives")
         
         # Check for old vehicle_state records (>30 days)
         if _table_exists("vehicle_state"):
-            row = db.fetch_one(
-                """
-                SELECT COUNT(*) as cnt FROM vehicle_state 
-                WHERE last_update < NOW() - INTERVAL '30 days'
-                """
-            )
-            old_vehicle_state = row["cnt"] if row else 0
-            results["old_vehicle_state"] = (old_vehicle_state, "records >30 days old in vehicle_state")
+            vehicle_ts_col = _resolve_time_column("vehicle_state", ("last_update", "created_at", "updated_at"))
+            if vehicle_ts_col:
+                row = db.fetch_one(
+                    f"SELECT COUNT(*) as cnt FROM vehicle_state WHERE {vehicle_ts_col} < NOW() - INTERVAL '30 days'"
+                )
+                old_vehicle_state = row["cnt"] if row else 0
+                results["old_vehicle_state"] = (old_vehicle_state, f"records >30 days old in vehicle_state ({vehicle_ts_col})")
+            else:
+                results["old_vehicle_state"] = (0, "timestamp column unavailable in vehicle_state")
         
         return results
 
@@ -425,29 +436,37 @@ def create_app() -> Flask:
 
     def _db_cleanup_old_charging() -> str:
         """Delete charging records older than 90 days."""
+        ts_col = _resolve_time_column("charging_history", ("polled_at", "created_at", "last_update"))
+        if not ts_col:
+            return "No compatible timestamp column found in charging_history"
+
         # First count how many will be deleted
         count_result = db.fetch_one(
-            "SELECT COUNT(*) as cnt FROM charging_history WHERE last_update < NOW() - INTERVAL '90 days'"
+            f"SELECT COUNT(*) as cnt FROM charging_history WHERE {ts_col} < NOW() - INTERVAL '90 days'"
         )
         to_delete = count_result["cnt"] if count_result else 0
         
         if to_delete > 0:
-            db.execute("DELETE FROM charging_history WHERE last_update < NOW() - INTERVAL '90 days'")
+            db.execute(f"DELETE FROM charging_history WHERE {ts_col} < NOW() - INTERVAL '90 days'")
         
-        return f"Deleted {to_delete} charging records older than 90 days"
+        return f"Deleted {to_delete} charging records older than 90 days using {ts_col}"
 
     def _db_cleanup_old_drives() -> str:
         """Delete drive records older than 180 days."""
+        ts_col = _resolve_time_column("drives", ("ended_at", "started_at", "created_at"))
+        if not ts_col:
+            return "No compatible timestamp column found in drives"
+
         # First count how many will be deleted
         count_result = db.fetch_one(
-            "SELECT COUNT(*) as cnt FROM drive WHERE ended_at < NOW() - INTERVAL '180 days'"
+            f"SELECT COUNT(*) as cnt FROM drives WHERE {ts_col} < NOW() - INTERVAL '180 days'"
         )
         to_delete = count_result["cnt"] if count_result else 0
         
         if to_delete > 0:
-            db.execute("DELETE FROM drive WHERE ended_at < NOW() - INTERVAL '180 days'")
+            db.execute(f"DELETE FROM drives WHERE {ts_col} < NOW() - INTERVAL '180 days'")
         
-        return f"Deleted {to_delete} drive records older than 180 days"
+        return f"Deleted {to_delete} drive records older than 180 days using {ts_col}"
 
     def _charging_power_kw_from_row(charging: dict | None) -> float | None:
         """Compute kW from the latest charging_state row when possible."""
