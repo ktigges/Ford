@@ -5,8 +5,8 @@ poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.4.0
-Date:        2026-04-28
+Version:     0.6.0
+Date:        2026-05-08
 """
 
 import logging
@@ -187,7 +187,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.5.2"
+    app.config["APP_VERSION"] = "0.6.0"
     app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     app.config["STARTUP_DB_NOTICE"] = None
 
@@ -213,6 +213,7 @@ def create_app() -> Flask:
         "poll_interval_charging": "60",
         "conservative_polling": "off",
         "autostart_poller": "off",
+        "developing": "off",  # disables startup delay if 'on'
     }
 
     # Safety limits for polling intervals (seconds)
@@ -1780,11 +1781,7 @@ def create_app() -> Flask:
             speed_val = None
             if row.get("speed_kmh") is not None:
                 speed_val = units.convert_for_display(row["speed_kmh"], "speed_kmh", system)
-                # Always keep 1 decimal for mph, 0.1 for km/h
-                if system == "imperial":
-                    speed_val = round(float(speed_val), 1)
-                else:
-                    speed_val = round(float(speed_val), 1)
+                # Do not round here; keep raw converted value for chart
                 if not (0 <= speed_val <= 120):
                     speed_val = None
 
@@ -1858,8 +1855,20 @@ def create_app() -> Flask:
             sampled_indices = list(range(0, point_count, step))
             if sampled_indices[-1] != point_count - 1:
                 sampled_indices.append(point_count - 1)
+
+            # Downsample by taking the max speed in each interval for more accurate charting
+            def max_in_interval(series, indices):
+                result = []
+                for i in range(len(indices) - 1):
+                    interval = [v for v in series[indices[i]:indices[i+1]] if v is not None]
+                    result.append(max(interval) if interval else None)
+                # Last interval
+                interval = [v for v in series[indices[-2]:indices[-1]+1] if v is not None] if len(indices) > 1 else []
+                result.append(max(interval) if interval else None)
+                return result
+
             labels = [labels[idx] for idx in sampled_indices]
-            speed_series = [speed_series[idx] for idx in sampled_indices]
+            speed_series = max_in_interval(speed_series, sampled_indices)
             soc_series = [soc_series[idx] for idx in sampled_indices]
             energy_series = [energy_series[idx] for idx in sampled_indices]
             energy_used_series = [energy_used_series[idx] for idx in sampled_indices]
@@ -2203,6 +2212,11 @@ def create_app() -> Flask:
             autostart = "on" if request.form.get("autostart_poller") == "on" else "off"
             _set_setting("autostart_poller", autostart, "Automatically start poller when app starts")
 
+
+            # Developing mode toggle
+            developing = "on" if request.form.get("developing") == "on" else "off"
+            _set_setting("developing", developing, "Disable startup delay for development")
+
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
             iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
@@ -2257,6 +2271,7 @@ def create_app() -> Flask:
             "poll_interval_charging": _get_setting("poll_interval_charging"),
             "conservative_polling": _get_setting("conservative_polling"),
             "autostart_poller": _get_setting("autostart_poller"),
+            "developing": _get_setting("developing"),
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
