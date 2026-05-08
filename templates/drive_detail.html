@@ -20,6 +20,10 @@
       </div>
     </div>
     <div class="drive-kpi">
+      <div class="drive-kpi-label">Average Speed</div>
+      <div class="drive-kpi-value">{% if drive_summary.avg_speed is not none %}{{ drive_summary.avg_speed|round(1) }} {{ speed_label }}{% else %}–{% endif %}</div>
+    </div>
+    <div class="drive-kpi">
       <div class="drive-kpi-label">Energy Used</div>
       <div class="drive-kpi-value">{% if drive_summary.energy_used_kwh is not none %}{{ "%.2f"|format(drive_summary.energy_used_kwh) }} kWh{% else %}–{% endif %}</div>
     </div>

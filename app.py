@@ -1956,6 +1956,16 @@ def create_app() -> Flask:
             except (TypeError, ValueError):
                 wh_per_mile = None
 
+        summary_avg_speed = None
+        if drive.get("distance_km") is not None and summary_duration_sec is not None:
+            try:
+                duration_hours = float(summary_duration_sec) / 3600.0
+                if duration_hours > 0:
+                    avg_speed_kmh = float(drive["distance_km"]) / duration_hours
+                    summary_avg_speed = units.convert_for_display(avg_speed_kmh, "speed_kmh", system)
+            except (TypeError, ValueError, ZeroDivisionError):
+                summary_avg_speed = None
+
         battery_temps = [float(p["battery_temp_c"]) for p in points if p.get("battery_temp_c") is not None]
         outside_temps = [float(p["outside_temp_c"]) for p in points if p.get("outside_temp_c") is not None]
         altitudes = [float(p["altitude_m"]) for p in points if p.get("altitude_m") is not None]
@@ -1990,6 +2000,7 @@ def create_app() -> Flask:
             "duration_sec": summary_duration_sec,
             "energy_used_kwh": drive.get("energy_used_kwh"),
             "avg_mi_per_kwh": summary_avg_mi_per_kwh,
+            "avg_speed": summary_avg_speed,
             "wh_per_mile": wh_per_mile,
             "kwh_remaining": summary_kwh_remaining,
             "battery_temp_avg_c": battery_temp_avg_c,
