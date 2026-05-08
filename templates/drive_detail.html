@@ -85,10 +85,10 @@
       </div>
     </div>
     <div class="drive-kpi">
-      <div class="drive-kpi-label">Max Speed</div>
+      <div class="drive-kpi-label">Average Speed</div>
       <div class="drive-kpi-value">
-        {% if drive.max_speed_kmh is not none %}
-          {{ convert(drive.max_speed_kmh, 'max_speed_kmh')|round(0)|int }} {{ ulabel('speed') }}
+        {% if drive_summary.avg_speed is not none %}
+          {{ drive_summary.avg_speed|round(1) }} {{ speed_label }}
         {% else %}–{% endif %}
       </div>
     </div>
