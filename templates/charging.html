@@ -156,7 +156,7 @@ const baseXAxis = {
   type: 'category',
   data: cdata.labels || [],
   axisLine: { lineStyle: { color: '#ddd' } },
-  axisLabel: { color: '#666', interval: Math.max(0, Math.floor((cdata.labels || []).length / 8)) },
+  axisLabel: { color: '#333', fontSize: 11, fontWeight: 'bold', interval: Math.max(0, Math.floor((cdata.labels || []).length / 8)), rotate: 45 },
   splitLine: { show: false }
 };
 const baseTooltip = {
