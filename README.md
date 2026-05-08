@@ -1,8 +1,8 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.4.0  
-**Date:** 2026-05-02
+**Version:** 0.5.2  
+**Date:** 2026-05-08
 
 ---
 
@@ -10,7 +10,7 @@
 
 The ultimate goal of this project is to train an AI model for **user-specific driving behaviour**, incorporating GEO information and charger location data to optimize range prediction and route planning for a Ford F-150 Lightning.
 
-**Phase 1 (this prototype)** focuses solely on **telemetry collection** — making sure we can reliably authenticate with Ford's connected-vehicle API, poll raw telemetry, store it in PostgreSQL, and display it in a lightweight dashboard. The goal is to build a good, representative data sampling pipeline before layering on analytics.
+**Phase 1 (this prototype)** focuses on reliable telemetry collection plus operational analytics: OAuth-based API access, adaptive polling, PostgreSQL persistence, charging session tracking, drive/session charts, backup/restore, and maintenance tooling.
 
 ---
 
@@ -40,7 +40,7 @@ The ultimate goal of this project is to train an AI model for **user-specific dr
                │  db.py  │  ← psycopg2 connection pool
                └────┬────┘
                ┌────┴─────┐
-               │ PostgreSQL│  ← 21 tables (schema.sql)
+               │ PostgreSQL│  ← 22 tables (schema.sql)
                └──────────┘
 ```
 
@@ -293,9 +293,9 @@ Provides two backup strategies for the complete database and all configuration.
 
 | Function | Description |
 |---|---|
-| `backup_sql(label)` | Full database dump using `pg_dump`. Requires PostgreSQL client tools on the server. |
-| `restore_sql(filepath)` | Restore from a SQL dump using `psql`. |
-| `backup_json(label)` | Export all application tables to a portable JSON file. No external tools required. |
+| `backup_sql(label)` | Full database dump using `pg_dump` with `--clean --if-exists` for migration-safe restore. Requires PostgreSQL client tools on the server. |
+| `restore_sql(filepath)` | Restore from a SQL dump using `psql -v ON_ERROR_STOP=1` (fails fast on first SQL error). |
+| `backup_json(label)` | Export all application tables (including charging sessions and drive data) to a portable JSON file. No external tools required. |
 | `restore_json(filepath)` | Restore from a JSON backup. Uses `INSERT ... ON CONFLICT DO NOTHING` — existing rows are never overwritten. |
 | `list_backups()` | List all `.sql` and `.json` files in the `backups/` directory. |
 | `delete_backup(filename)` | Delete a backup file (path-traversal safe). |
@@ -328,72 +328,95 @@ Backups are stored in the `backups/` directory at the project root.
 
 ## Database Setup (Docker)
 
-The application uses PostgreSQL 16. The recommended approach is Docker with a **named volume** so data persists across container restarts and upgrades.
+The project now includes scripts to automate first install, memory tuning, persistent startup, and migration restore.
 
-### First-time setup
-
-```bash
-# 1. Create a persistent volume (only once — survives container removal)
-docker volume create lightning_pgdata
-
-# 2. Start PostgreSQL
-docker run -d \
-  --name lightning-db \
-  -e POSTGRES_USER=lightning \
-  -e POSTGRES_PASSWORD=lightningpass \
-  -e POSTGRES_DB=lightning \
-  -p 5432:5432 \
-  -v lightning_pgdata:/var/lib/postgresql/data \
-  postgres:16
-
-# 3. Wait a few seconds for startup, then apply the schema
-docker exec -i lightning-db psql -U lightning -d lightning < schema.sql
-```
-
-### Restarting (preserves all data)
+### First-time install (recommended)
 
 ```bash
-# If the container is stopped:
-docker start lightning-db
-
-# If the container was removed but the volume still exists:
-docker run -d \
-  --name lightning-db \
-  -e POSTGRES_USER=lightning \
-  -e POSTGRES_PASSWORD=lightningpass \
-  -e POSTGRES_DB=lightning \
-  -p 5432:5432 \
-  -v lightning_pgdata:/var/lib/postgresql/data \
-  postgres:16
-# Data is intact — do NOT re-run schema.sql (it would fail on existing tables)
+./scripts/install.sh
 ```
 
-### Upgrading PostgreSQL
+What `scripts/install.sh` does:
+
+1. Pulls `postgres:16`.
+2. Creates persistent volume `lightning_pgdata` if missing.
+3. Creates container `lightning-db` only if it does not exist.
+4. Applies `schema.sql` only when tables are not already present.
+5. Applies PostgreSQL memory settings via `ALTER SYSTEM`:
+   - `shared_buffers` (default `512MB`)
+   - `work_mem` (default `16MB`)
+   - `maintenance_work_mem` (default `256MB`)
+   - `effective_cache_size` (default `1536MB`)
+   - `max_wal_size` / `min_wal_size`
+6. Restarts DB container and verifies effective settings.
+
+You can override memory values with env vars, for example:
 
 ```bash
-# 1. Create a backup first (from the web UI or CLI)
-docker exec lightning-db pg_dump -U lightning -d lightning > backup_before_upgrade.sql
-
-# 2. Stop and remove the old container (volume is preserved)
-docker stop lightning-db && docker rm lightning-db
-
-# 3. Start with the new image version
-docker run -d --name lightning-db \
-  -e POSTGRES_USER=lightning \
-  -e POSTGRES_PASSWORD=lightningpass \
-  -e POSTGRES_DB=lightning \
-  -p 5432:5432 \
-  -v lightning_pgdata:/var/lib/postgresql/data \
-  postgres:17   # <-- new version
+PG_SHARED_BUFFERS=1GB PG_EFFECTIVE_CACHE_SIZE=3GB ./scripts/install.sh
 ```
 
-> **Key point:** The named volume `lightning_pgdata` holds all data. As long as you don’t delete the volume (`docker volume rm lightning_pgdata`), your database survives container stops, removals, and image upgrades.
-
-### Checking the volume
+### Start existing DB container only (no new container creation)
 
 ```bash
-docker volume inspect lightning_pgdata
+./scripts/start_db_container.sh
 ```
+
+This script intentionally fails if `lightning-db` does not exist, so restarts are safe and predictable.
+
+### App start (DB + app)
+
+```bash
+./start.sh
+```
+
+`start.sh` now:
+
+1. Ensures the existing DB container is running (unless `--no-db`).
+2. Restarts `app.py` with repo-relative paths.
+3. Does not start the poller automatically from shell scripts.
+
+Poller control is managed from the app UI (`/poller`) and optional app setting `autostart_poller`.
+
+### One-command deploy wrapper
+
+```bash
+# Standard deploy (pull + install/tune + app restart)
+./scripts/deploy.sh
+
+# Deploy with restore from SQL backup
+./scripts/deploy.sh --restore-sql backups/lightning_backup_YYYYMMDD_HHMMSS_migration.sql
+```
+
+`deploy.sh` runs:
+
+1. `git pull --ff-only`
+2. `scripts/install.sh` (or `scripts/install.sh --restore-sql ...`)
+3. `start.sh`
+
+### Backup and restore for migration
+
+```bash
+# Create SQL backup
+./scripts/backup_db.sh migration
+
+# Restore SQL backup to running DB
+./scripts/restore_db.sh backups/lightning_backup_YYYYMMDD_HHMMSS_migration.sql
+```
+
+Or combine install + restore in one step on the destination host:
+
+```bash
+./scripts/install.sh --restore-sql backups/lightning_backup_YYYYMMDD_HHMMSS_migration.sql
+```
+
+### Fresh install + restore verification
+
+```bash
+./scripts/verify_fresh_install_restore.sh backups/lightning_backup_YYYYMMDD_HHMMSS_migration.sql
+```
+
+This launches a temporary clean PostgreSQL container/volume, restores backup, runs validation queries, and tears down automatically.
 
 ---
 

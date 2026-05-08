@@ -41,6 +41,7 @@ TABLES_ORDERED = [
     "vehicle_state",
     "battery_state",
     "charging_state",
+    "charging_sessions",
     "charging_history",
     "location_state",
     "tire_state",
@@ -93,6 +94,8 @@ def backup_sql(label: str = "") -> str:
         "-p", str(cfg["port"]),
         "-U", cfg["user"],
         "-d", cfg["name"],
+        "--clean",
+        "--if-exists",
         "--no-owner",
         "--no-privileges",
         "-f", filepath,
@@ -129,6 +132,7 @@ def restore_sql(filepath: str) -> None:
         "-p", str(cfg["port"]),
         "-U", cfg["user"],
         "-d", cfg["name"],
+        "-v", "ON_ERROR_STOP=1",
         "-f", filepath,
     ]
 
