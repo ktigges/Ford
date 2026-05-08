@@ -93,6 +93,14 @@
       </div>
     </div>
     <div class="drive-kpi">
+      <div class="drive-kpi-label">Max Speed</div>
+      <div class="drive-kpi-value">
+        {% if drive_summary.max_speed is not none %}
+          {{ drive_summary.max_speed|round(1) }} {{ speed_label }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
       <div class="drive-kpi-label">Points</div>
       <div class="drive-kpi-value">{{ points|length }}</div>
     </div>

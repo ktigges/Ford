@@ -2001,6 +2001,7 @@ def create_app() -> Flask:
             "energy_used_kwh": drive.get("energy_used_kwh"),
             "avg_mi_per_kwh": summary_avg_mi_per_kwh,
             "avg_speed": summary_avg_speed,
+            "max_speed": speed_axis_max,
             "wh_per_mile": wh_per_mile,
             "kwh_remaining": summary_kwh_remaining,
             "battery_temp_avg_c": battery_temp_avg_c,
