@@ -2767,15 +2767,38 @@ def create_app() -> Flask:
         """Application teardown hook. Pool cleanup handled by atexit."""
         pass  # pool cleanup handled by atexit / signal
 
-    # Optional startup behavior: auto-start poller when configured.
-    try:
-        if db.is_available() and (_get_setting("autostart_poller") == "on"):
-            if poller.start():
-                log.info("Autostart poller is enabled — poller started at app init")
-            else:
-                log.info("Autostart poller enabled, but poller already running")
-    except Exception as exc:
-        log.warning("Autostart poller check failed: %s", exc)
+
+    # ── Startup pause and UI suppression ──
+    import threading
+    app.config["STARTUP_READY"] = False
+
+    def _delayed_startup():
+        log.info("Delaying poller/UI startup for 30 seconds to allow normalization...")
+        import time
+        time.sleep(30)
+        app.config["STARTUP_READY"] = True
+        log.info("Startup pause complete. UI and poller now enabled.")
+        # Start poller if configured
+        try:
+            if db.is_available() and (_get_setting("autostart_poller") == "on"):
+                if poller.start():
+                    log.info("Autostart poller is enabled — poller started at app init")
+                else:
+                    log.info("Autostart poller enabled, but poller already running")
+        except Exception as exc:
+            log.warning("Autostart poller check failed: %s", exc)
+
+    threading.Thread(target=_delayed_startup, daemon=True).start()
+
+    @app.before_request
+    def _suppress_ui_until_ready():
+        # Allow setup, static, and API endpoints before ready
+        if app.config.get("STARTUP_READY", False):
+            return
+        safe = {"db_setup", "db_setup_test", "db_setup_create", "db_setup_restore", "db_setup_upload", "static"}
+        if request.endpoint in safe or (request.endpoint and request.endpoint.startswith("static")):
+            return
+        return render_template("startup_wait.html"), 503
 
     return app
 

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lightning – Starting Up…</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    body { background: #0a1833; color: #fff; font-family: sans-serif; text-align: center; }
+    .startup-wait {
+      margin-top: 10vh;
+      padding: 2em 2em 2em 2em;
+      background: #122a4d;
+      border-radius: 1em;
+      box-shadow: 0 4px 32px #0008;
+      display: inline-block;
+    }
+    .spinner {
+      margin: 2em auto 1em auto;
+      width: 48px; height: 48px;
+      border: 6px solid #3a6ed8;
+      border-top: 6px solid #fff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="startup-wait">
+    <div class="spinner"></div>
+    <h2>Lightning is starting up…</h2>
+    <p>Please wait while the system normalizes and prepares the dashboard.<br>
+    This may take up to <b>30 seconds</b> after a restart or upgrade.</p>
+    <p style="color:#8ec6ff; font-size:1.1em; margin-top:2em;">If this message does not disappear after a minute, check your database and logs.</p>
+  </div>
+</body>
+</html>
