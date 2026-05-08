@@ -110,13 +110,14 @@ nav a:active, .nav-btn:active {
   border-radius: 4px;
   box-shadow: 0 5px 15px rgba(0,0,0,.3);
   flex-direction: column;
-  margin-top: 0.5rem;
+  margin-top: 0;
   min-width: 150px;
   z-index: 1000;
   border: 1px solid rgba(255,255,255,.1);
 }
 
-.nav-dropdown:hover .dropdown-menu {
+.nav-dropdown:hover .dropdown-menu,
+.nav-dropdown:focus-within .dropdown-menu {
   display: flex;
 }
 
