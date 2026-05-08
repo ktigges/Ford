@@ -2824,11 +2824,22 @@ def create_app() -> Flask:
     app.config["STARTUP_READY"] = False
 
     def _delayed_startup():
-        log.info("Delaying poller/UI startup for 30 seconds to allow normalization...")
-        import time
-        time.sleep(30)
-        app.config["STARTUP_READY"] = True
-        log.info("Startup pause complete. UI and poller now enabled.")
+        developing_mode = "off"
+        try:
+            if db.is_available():
+                developing_mode = _get_setting("developing")
+        except Exception as exc:
+            log.warning("Failed reading developing mode at startup: %s", exc)
+
+        if developing_mode == "on":
+            app.config["STARTUP_READY"] = True
+            log.info("Developing mode enabled: skipping startup delay.")
+        else:
+            log.info("Delaying poller/UI startup for 30 seconds to allow normalization...")
+            import time
+            time.sleep(30)
+            app.config["STARTUP_READY"] = True
+            log.info("Startup pause complete. UI and poller now enabled.")
         # Start poller if configured
         try:
             if db.is_available() and (_get_setting("autostart_poller") == "on"):

@@ -920,7 +920,7 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (drive_id, ts,
-         _v(metrics, "speed", "value"),
+         _speed_to_kmh(_v(metrics, "speed", "value")),
          _v(metrics, "odometer", "value"),
          _v(metrics, "heading", "value", "heading"),
          _v(metrics, "compassDirection", "value"),
@@ -1080,6 +1080,23 @@ def _v(raw: dict, *keys, default=None):
     return node
 
 
+def _speed_to_kmh(raw_speed):
+    """Convert Ford speed metric to km/h for storage.
+
+    Ford speed readings are delivered in SI base units (m/s).
+    We store speed in km/h across drive/vehicle tables for consistency.
+    """
+    if raw_speed is None:
+        return None
+    try:
+        speed_mps = float(raw_speed)
+    except (TypeError, ValueError):
+        return None
+    if speed_mps < 0:
+        return None
+    return speed_mps * 3.6
+
+
 def _v_if_fresh(metrics: dict, metric_key: str, now_ts: datetime, max_stale_minutes: int = 60) -> None | float | str | int:
     """Get metric value only if its updateTime is recent; skip stale readings from Ford API."""
     metric = metrics.get(metric_key)
@@ -1117,7 +1134,10 @@ def _v_if_fresh(metrics: dict, metric_key: str, now_ts: datetime, max_stale_minu
 
 
 def _upsert_vehicle_state(vin: str, ts: datetime, m: dict) -> None:
-    """Map Ford metrics to vehicle_state. All values stored in raw metric units."""
+    """Map Ford metrics to vehicle_state in normalized storage units.
+
+    Speed is stored as km/h (column name remains legacy: speed_mph).
+    """
     db.execute(
         """
         INSERT INTO vehicle_state (vin, last_update, ignition_status, speed_mph, gear_position, odometer_miles, lifecycle_mode)
@@ -1132,7 +1152,7 @@ def _upsert_vehicle_state(vin: str, ts: datetime, m: dict) -> None:
         """,
         (vin, ts,
          _v(m, "ignitionStatus", "value"),
-         _v(m, "speed", "value"),                        # km/h from Ford
+            _speed_to_kmh(_v(m, "speed", "value")),
          _v(m, "gearLeverPosition", "value"),
          _v(m, "odometer", "value"),                     # km from Ford
          _v(m, "vehicleLifeCycleMode", "value")),
