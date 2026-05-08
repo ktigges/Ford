@@ -1777,12 +1777,16 @@ def create_app() -> Flask:
 
         for row in points:
             labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
-            speed_val = (
-                round(units.convert_for_display(row["speed_kmh"], "speed_kmh", system), 1)
-                if row.get("speed_kmh") is not None else None
-            )
-            if speed_val is not None and not (0 <= speed_val <= 120):
-                speed_val = None
+            speed_val = None
+            if row.get("speed_kmh") is not None:
+                speed_val = units.convert_for_display(row["speed_kmh"], "speed_kmh", system)
+                # Always keep 1 decimal for mph, 0.1 for km/h
+                if system == "imperial":
+                    speed_val = round(float(speed_val), 1)
+                else:
+                    speed_val = round(float(speed_val), 1)
+                if not (0 <= speed_val <= 120):
+                    speed_val = None
 
             soc_val = round(float(row["soc_percent"]), 1) if row.get("soc_percent") is not None else None
             if soc_val is not None and not (0 <= soc_val <= 100):
