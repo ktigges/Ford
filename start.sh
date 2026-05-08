@@ -1,46 +1,41 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Optional flag to auto-start the poller
-ENABLE_POLLER=false
-if [[ "$1" == "--enable-poller" ]] || [[ "$1" == "--start-poller" ]]; then
-    ENABLE_POLLER=true
-    echo "Poller will be started after app is ready."
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_ENTRY="${ROOT_DIR}/app.py"
+PYTHON_BIN="${PYTHON_BIN:-${ROOT_DIR}/venv/bin/python}"
+LOG_FILE="${ROOT_DIR}/logs/stdout.log"
+
+ENSURE_DB=true
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-db)
+            ENSURE_DB=false
+            ;;
+        *)
+            echo "Unknown option: ${arg}" >&2
+            echo "Usage: ./start.sh [--no-db]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+mkdir -p "${ROOT_DIR}/logs"
+
+if [[ "${ENSURE_DB}" == "true" ]]; then
+    "${ROOT_DIR}/scripts/start_db_container.sh"
 fi
 
-# Kill any running instance of app.py
-PID=$(ps -aux | grep 'app.py' | grep -v 'grep' | awk '{print $2}')
-if [ -n "$PID" ]; then
-    echo "Killing existing app.py process(es) with PID(s): $PID"
-    kill -9 $PID
-else
-    echo "No existing app.py process found."
+EXISTING_PIDS="$(pgrep -f "${APP_ENTRY}" || true)"
+if [[ -n "${EXISTING_PIDS}" ]]; then
+    echo "Stopping existing app.py process(es): ${EXISTING_PIDS}"
+    kill ${EXISTING_PIDS}
+    sleep 2
 fi
 
-# Wait a second or two to ensure the process is fully terminated before starting a new one
-sleep 2
-
-# Start the app in the background using nohup
 echo "Starting app.py in the background..."
-nohup /home/sysadmin/Ford/venv/bin/python /home/sysadmin/Ford/app.py > /home/sysadmin/Ford/logs/stdout.log 2>&1 &
+nohup "${PYTHON_BIN}" "${APP_ENTRY}" > "${LOG_FILE}" 2>&1 &
 
-APP_PID=$(ps -aux | grep 'app.py' | grep -v 'grep' | awk '{print $2}')
-echo "App started with PID $APP_PID"
-
-# Wait for the app to be ready on port 5000 and optionally start poller
-if [ "$ENABLE_POLLER" = true ]; then
-    echo "Waiting for app to be ready..."
-    for i in {1..30}; do
-        if nc -z localhost 5000 2>/dev/null; then
-            echo "App is ready. Starting poller..."
-            sleep 1
-            curl -s -X POST http://localhost:5000/poller -d "action=start" > /dev/null 2>&1
-            if [ $? -eq 0 ]; then
-                echo "Poller started successfully."
-            else
-                echo "Warning: Could not start poller via API."
-            fi
-            break
-        fi
-        sleep 1
-    done
-fi
+APP_PID="$(pgrep -f "${APP_ENTRY}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+echo "App started with PID(s): ${APP_PID}"

@@ -1,6 +1,6 @@
 -- Reset charging telemetry so charging collection can start fresh.
 --
--- This script safely deletes charging_history and charging_state rows.
+-- This script safely deletes charging_history, charging_sessions, and charging_state rows.
 -- When clearing all VINs, it also resets the sequence for clean IDs.
 --
 -- ============================================================================
@@ -36,8 +36,9 @@
 --
 -- This script deletes:
 --   - charging_history rows
+--   - charging_sessions rows
 --   - charging_state rows
--- It also resets charging_history.id sequence when clearing all VINs.
+-- It also resets charging_history.id and charging_sessions.id sequences when clearing all VINs.
 
 BEGIN;
 
@@ -45,14 +46,20 @@ DO $$
 DECLARE
     target_vin TEXT := NULL;  -- Set to a VIN string to reset only one vehicle.
     hist_deleted BIGINT := 0;
+    session_deleted BIGINT := 0;
     state_deleted BIGINT := 0;
     remaining_hist BIGINT := 0;
+    remaining_sessions BIGINT := 0;
     remaining_state BIGINT := 0;
 BEGIN
-    -- Delete history first, then current charging state snapshot.
+    -- Delete history first, then sessions, then current charging state snapshot.
     DELETE FROM charging_history
     WHERE target_vin IS NULL OR vin = target_vin;
     GET DIAGNOSTICS hist_deleted = ROW_COUNT;
+
+    DELETE FROM charging_sessions
+    WHERE target_vin IS NULL OR vin = target_vin;
+    GET DIAGNOSTICS session_deleted = ROW_COUNT;
 
     DELETE FROM charging_state
     WHERE target_vin IS NULL OR vin = target_vin;
@@ -61,6 +68,7 @@ BEGIN
     -- If all VINs were cleared, reset sequence to 1 for clean IDs.
     IF target_vin IS NULL THEN
         PERFORM setval(pg_get_serial_sequence('charging_history', 'id'), 1, false);
+        PERFORM setval(pg_get_serial_sequence('charging_sessions', 'id'), 1, false);
     END IF;
 
     SELECT count(*) INTO remaining_hist
@@ -71,9 +79,15 @@ BEGIN
     FROM charging_state
     WHERE target_vin IS NULL OR vin = target_vin;
 
+    SELECT count(*) INTO remaining_sessions
+    FROM charging_sessions
+    WHERE target_vin IS NULL OR vin = target_vin;
+
     RAISE NOTICE 'charging_history deleted: %', hist_deleted;
+    RAISE NOTICE 'charging_sessions deleted: %', session_deleted;
     RAISE NOTICE 'charging_state deleted: %', state_deleted;
     RAISE NOTICE 'charging_history remaining in scope: %', remaining_hist;
+    RAISE NOTICE 'charging_sessions remaining in scope: %', remaining_sessions;
     RAISE NOTICE 'charging_state remaining in scope: %', remaining_state;
 END $$;
 

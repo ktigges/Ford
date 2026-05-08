@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- =========================
 -- Core vehicle metadata
 -- =========================
