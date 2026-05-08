@@ -325,6 +325,29 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
   }));
 
   // Declare currentOption BEFORE legend setup to fix reference issue
+  
+  // Calculate dynamic axis ranges based on data
+  const getAxisRange = (dataArray) => {
+    if (!Array.isArray(dataArray) || dataArray.length === 0) return { min: 0, max: 100 };
+    const values = dataArray.filter(v => v !== null && v !== undefined && typeof v === 'number');
+    if (values.length === 0) return { min: 0, max: 100 };
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const padding = range * 0.1; // 10% padding
+    return {
+      min: Math.max(0, min - padding),
+      max: max + padding
+    };
+  };
+
+  // Get ranges for each axis
+  const speedRange = getAxisRange(driveChartData.speed);
+  const socRange = getAxisRange(driveChartData.soc);
+  const energyUsedRange = getAxisRange(driveChartData.energy_used);
+  const efficiencyRange = getAxisRange(driveChartData.efficiency);
+  const elevationRange = getAxisRange(driveChartData.elevation);
+
   let currentOption = {
     color: seriesConfig.map(c => c.color),
     backgroundColor: 'transparent',
@@ -365,7 +388,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameTextStyle: { color: '#2d5f9a', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#2d5f9a' } },
         axisLabel: { color: '#2d5f9a', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
+        splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } },
+        min: speedRange.min,
+        max: speedRange.max
       },
       {
         type: 'value',
@@ -378,7 +403,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameTextStyle: { color: '#2a9d8f', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#2a9d8f' } },
         axisLabel: { color: '#2a9d8f', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false }
+        splitLine: { show: false },
+        min: socRange.min,
+        max: socRange.max
       },
       {
         type: 'value',
@@ -391,7 +418,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameTextStyle: { color: '#dc3545', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#dc3545' } },
         axisLabel: { color: '#dc3545', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false }
+        splitLine: { show: false },
+        min: energyUsedRange.min,
+        max: energyUsedRange.max
       },
       {
         type: 'value',
@@ -404,7 +433,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameTextStyle: { color: '#4caf50', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#4caf50' } },
         axisLabel: { color: '#4caf50', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false }
+        splitLine: { show: false },
+        min: efficiencyRange.min,
+        max: efficiencyRange.max
       },
       {
         type: 'value',
@@ -417,7 +448,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameTextStyle: { color: '#8a6130', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#8a6130' } },
         axisLabel: { color: '#8a6130', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false }
+        splitLine: { show: false },
+        min: elevationRange.min,
+        max: elevationRange.max
       }
     ],
     series: buildSeries()
