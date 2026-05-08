@@ -1747,6 +1747,34 @@ def create_app() -> Flask:
         )
 
         system = _get_setting("units") if db.is_available() else "imperial"
+
+        # Some historical rows stored Ford speed metric as m/s in speed_kmh.
+        # Detect this per-drive and normalize to km/h so charts/tables are accurate.
+        speed_scale_to_kmh = 1.0
+        raw_speed_values = []
+        for p in points:
+            if p.get("speed_kmh") is None:
+                continue
+            try:
+                raw_speed_values.append(float(p["speed_kmh"]))
+            except (TypeError, ValueError):
+                continue
+
+        if raw_speed_values:
+            raw_max_speed = max(raw_speed_values)
+            avg_kmh = None
+            try:
+                if drive.get("distance_km") is not None and drive.get("duration_sec"):
+                    duration_hours = float(drive["duration_sec"]) / 3600.0
+                    if duration_hours > 0:
+                        avg_kmh = float(drive["distance_km"]) / duration_hours
+            except (TypeError, ValueError, ZeroDivisionError):
+                avg_kmh = None
+
+            # If average speed exceeds observed max, stored values are almost certainly m/s.
+            if avg_kmh is not None and raw_max_speed > 0 and avg_kmh > (raw_max_speed * 1.05):
+                speed_scale_to_kmh = 3.6
+
         labels = []
         speed_series = []
         soc_series = []
@@ -1780,7 +1808,8 @@ def create_app() -> Flask:
             labels.append(_format_local_datetime(row.get("recorded_at"), "%H:%M:%S"))
             speed_val = None
             if row.get("speed_kmh") is not None:
-                speed_val = units.convert_for_display(row["speed_kmh"], "speed_kmh", system)
+                speed_kmh_normalized = float(row["speed_kmh"]) * speed_scale_to_kmh
+                speed_val = units.convert_for_display(speed_kmh_normalized, "speed_kmh", system)
                 # Do not round here; keep raw converted value for chart
                 if not (0 <= speed_val <= 120):
                     speed_val = None
@@ -1842,7 +1871,7 @@ def create_app() -> Flask:
         if drive.get("max_speed_kmh") is not None:
             try:
                 drive_max_speed = round(
-                    units.convert_for_display(drive["max_speed_kmh"], "max_speed_kmh", system),
+                    units.convert_for_display(float(drive["max_speed_kmh"]) * speed_scale_to_kmh, "max_speed_kmh", system),
                     1,
                 )
                 if speed_axis_max is None or drive_max_speed > speed_axis_max:
@@ -1976,7 +2005,10 @@ def create_app() -> Flask:
             {
                 "lat": p.get("latitude"),
                 "lon": p.get("longitude"),
-                "speed": round(units.convert_for_display(p["speed_kmh"], "speed_kmh", system), 1) if p.get("speed_kmh") is not None else None,
+                "speed": round(
+                    units.convert_for_display(float(p["speed_kmh"]) * speed_scale_to_kmh, "speed_kmh", system),
+                    1,
+                ) if p.get("speed_kmh") is not None else None,
                 "time": _format_local_datetime(p.get("recorded_at"), "%H:%M:%S"),
             }
             for p in points
