@@ -374,7 +374,7 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
       type: 'category',
       data: driveChartData.labels,
       axisLine: { lineStyle: { color: '#ddd' } },
-      axisLabel: { color: '#666', interval: Math.max(0, Math.floor(driveChartData.labels.length / 8)) },
+      axisLabel: { color: '#333', fontSize: 11, fontWeight: 'bold', interval: Math.max(0, Math.floor(driveChartData.labels.length / 8)), rotate: 45 },
       splitLine: { show: false }
     },
     yAxis: [
@@ -386,9 +386,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameLocation: 'middle',
         nameRotate: 90,
         nameGap: 58,
-        nameTextStyle: { color: '#2d5f9a' },
+        nameTextStyle: { color: '#2d5f9a', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#2d5f9a' } },
-        axisLabel: { color: '#2d5f9a' },
+        axisLabel: { color: '#2d5f9a', fontSize: 11, fontWeight: 'bold' },
         splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } }
       },
       {
@@ -399,9 +399,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameLocation: 'middle',
         nameRotate: 90,
         nameGap: 70,
-        nameTextStyle: { color: '#2a9d8f' },
+        nameTextStyle: { color: '#2a9d8f', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#2a9d8f' } },
-        axisLabel: { color: '#2a9d8f' },
+        axisLabel: { color: '#2a9d8f', fontSize: 11, fontWeight: 'bold' },
         splitLine: { show: false }
       },
       {
@@ -412,9 +412,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
         nameLocation: 'middle',
         nameRotate: -90,
         nameGap: 52,
-        nameTextStyle: { color: '#dc3545' },
+        nameTextStyle: { color: '#dc3545', fontSize: 12, fontWeight: 'bold' },
         axisLine: { lineStyle: { color: '#dc3545' } },
-        axisLabel: { color: '#dc3545' },
+        axisLabel: { color: '#dc3545', fontSize: 11, fontWeight: 'bold' },
         splitLine: { show: false }
       },
       {
