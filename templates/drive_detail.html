@@ -97,10 +97,11 @@
 
 <div class="card">
   <h2>Drive Analytics</h2>
-  <p class="muted" style="margin-top:-0.5rem;">All series with legend toggles. Click legend items to show/hide series. Using {{ drive_chart_point_count }} plotted samples from {{ drive_total_point_count }} recorded points.</p>
+  <p class="muted" style="margin-top:-0.5rem;">Three focused charts with synchronized time hover. Using {{ drive_chart_point_count }} plotted samples from {{ drive_total_point_count }} recorded points.</p>
   {% if drive_chart_data and drive_chart_data.labels and drive_chart_data.labels|length > 0 %}
-  <div id="driveEChartsPlot" style="height:480px; width:100%; margin-bottom:0;"></div>
-  <div id="driveEChartsLegend" style="display:flex; flex-wrap:wrap; gap:1rem; padding:1rem; background:#f9f9f9; border-radius:0 0 6px 6px; border:1px solid #ddd; border-top:none; font-size:0.95rem; overflow-y:auto; max-height:120px;"></div>
+  <div id="driveEChartsMotion" style="height:320px; width:100%; margin-bottom:1rem;"></div>
+  <div id="driveEChartsBattery" style="height:320px; width:100%; margin-bottom:1rem;"></div>
+  <div id="driveEChartsEfficiency" style="height:320px; width:100%;"></div>
   {% else %}
   <p class="no-data">No drive analytics points available.</p>
   {% endif %}
@@ -291,195 +292,184 @@ const speedLabel = document.getElementById("drive-speed-label").dataset.speedLab
 const tempLabel = document.getElementById("drive-temp-label").dataset.tempLabel || "°F";
 
 if (driveChartData.labels && driveChartData.labels.length > 0) {
-  const chartDom = document.getElementById('driveEChartsPlot');
-  const chart = echarts.init(chartDom, null, { renderer: 'canvas' });
-  const legendDom = document.getElementById('driveEChartsLegend');
+  const motionDom = document.getElementById('driveEChartsMotion');
+  const batteryDom = document.getElementById('driveEChartsBattery');
+  const efficiencyDom = document.getElementById('driveEChartsEfficiency');
 
-  const seriesConfig = [
-    { key: 'speed', name: `Speed (${speedLabel})`, color: '#2d5f9a', yAxisIndex: 0 },
-    { key: 'soc', name: 'SOC %', color: '#2a9d8f', yAxisIndex: 1 },
-    { key: 'energy', name: 'Energy Remaining (kWh)', color: '#e66f51', yAxisIndex: 1 },
-    { key: 'energy_used', name: 'Energy Used (kWh)', color: '#dc3545', yAxisIndex: 2 },
-    { key: 'efficiency', name: 'Consumption Rate (mi/kWh)', color: '#4caf50', yAxisIndex: 3 },
-    { key: 'battery_temp', name: `Battery Temp (${tempLabel})`, color: '#8f4cb7', yAxisIndex: 1 },
-    { key: 'elevation', name: 'Elevation (ft)', color: '#8a6130', yAxisIndex: 4 },
-    { key: 'outside_temp', name: `Outside Temp (${tempLabel})`, color: '#ff6b35', yAxisIndex: 1 }
-  ];
+  const motionChart = echarts.init(motionDom, null, { renderer: 'canvas' });
+  const batteryChart = echarts.init(batteryDom, null, { renderer: 'canvas' });
+  const efficiencyChart = echarts.init(efficiencyDom, null, { renderer: 'canvas' });
 
-  const visibleSeries = Object.fromEntries(seriesConfig.map(cfg => [cfg.key, true]));
-
-  const buildSeries = () => seriesConfig.map(cfg => ({
-    name: cfg.name,
-    type: 'line',
-    data: visibleSeries[cfg.key] ? (driveChartData[cfg.key] || []) : [],
-    yAxisIndex: cfg.yAxisIndex,
-    smooth: true,
-    lineStyle: { width: 2 },
-    itemStyle: { color: cfg.color },
-    areaStyle: visibleSeries[cfg.key] && (cfg.key === 'speed' || cfg.key === 'energy_used')
-      ? { color: cfg.color, opacity: 0.25 }
-      : null,
-    symbol: 'circle',
-    symbolSize: 4,
-    tooltip: { valueFormatter: (v) => (v === null ? '–' : v.toFixed(2)) }
-  }));
-
-  // Declare currentOption BEFORE legend setup to fix reference issue
-  
-  // Calculate dynamic axis ranges based on data
-  const getAxisRange = (dataArray) => {
-    if (!Array.isArray(dataArray) || dataArray.length === 0) return { min: 0, max: 100 };
-    const values = dataArray.filter(v => v !== null && v !== undefined && typeof v === 'number');
-    if (values.length === 0) return { min: 0, max: 100 };
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const range = max - min || 1;
-    const padding = range * 0.1; // 10% padding
-    return {
-      min: Math.max(0, min - padding),
-      max: max + padding
-    };
+  const cleanValues = (arr) => (Array.isArray(arr) ? arr.filter((v) => Number.isFinite(v)) : []);
+  const mergeValues = (...arrays) => arrays.flatMap((arr) => cleanValues(arr));
+  const rangeFor = (values, { floorZero = false, padPct = 0.1 } = {}) => {
+    if (!values.length) return { min: floorZero ? 0 : -1, max: 1 };
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const span = maxVal - minVal || Math.max(Math.abs(maxVal), 1);
+    const pad = span * padPct;
+    const min = floorZero ? Math.max(0, minVal - pad) : (minVal - pad);
+    const max = maxVal + pad;
+    return { min, max: max > min ? max : min + 1 };
   };
 
-  // Get ranges for each axis
-  const speedRange = getAxisRange(driveChartData.speed);
-  const socRange = getAxisRange(driveChartData.soc);
-  const energyUsedRange = getAxisRange(driveChartData.energy_used);
-  const efficiencyRange = getAxisRange(driveChartData.efficiency);
-  const elevationRange = getAxisRange(driveChartData.elevation);
+  const labels = driveChartData.labels || [];
+  const axisLabelOpts = {
+    color: '#333',
+    fontSize: 10,
+    fontWeight: 'bold',
+    interval: Math.max(0, Math.floor(labels.length / 10)),
+    rotate: 30
+  };
 
-  let currentOption = {
-    color: seriesConfig.map(c => c.color),
-    backgroundColor: 'transparent',
-    textStyle: { color: '#333' },
-    grid: { left: 100, right: 220, top: 40, bottom: 40, containLabel: false },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: 'rgba(0, 0, 0, 0.8)',
-      borderColor: '#555',
-      textStyle: { color: '#fff' },
-      formatter: (params) => {
-        if (!Array.isArray(params) || !params.length) return '';
-        const time = params[0].name;
-        const lines = params
-          .filter(p => p.value !== null && p.value !== undefined)
-          .map(p => `<span style="color:${p.color}">●</span> ${p.seriesName}: <strong>${p.value.toFixed(2)}</strong>`)
-          .join('<br>');
-        return `<div style="font-weight:600;">${time}</div>${lines}`;
-      }
-    },
-    legend: { show: false },
-    xAxis: {
-      type: 'category',
-      data: driveChartData.labels,
-      axisLine: { lineStyle: { color: '#ddd' } },
-      axisLabel: { color: '#333', fontSize: 11, fontWeight: 'bold', interval: Math.max(0, Math.floor(driveChartData.labels.length / 8)), rotate: 45 },
-      splitLine: { show: false }
-    },
+  const speedRange = rangeFor(cleanValues(driveChartData.speed), { floorZero: true, padPct: 0.12 });
+  const elevationRange = rangeFor(cleanValues(driveChartData.elevation), { floorZero: false, padPct: 0.08 });
+  const socRange = rangeFor(cleanValues(driveChartData.soc), { floorZero: true, padPct: 0.06 });
+  const energyRange = rangeFor(cleanValues(driveChartData.energy), { floorZero: true, padPct: 0.1 });
+  const tempRange = rangeFor(mergeValues(driveChartData.battery_temp, driveChartData.outside_temp), { floorZero: false, padPct: 0.1 });
+  const energyUsedRange = rangeFor(cleanValues(driveChartData.energy_used), { floorZero: true, padPct: 0.12 });
+  const efficiencyRange = rangeFor(cleanValues(driveChartData.efficiency), { floorZero: true, padPct: 0.12 });
+
+  const commonGrid = { left: 64, right: 64, top: 48, bottom: 58, containLabel: true };
+  const commonTooltip = {
+    trigger: 'axis',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    borderColor: '#555',
+    textStyle: { color: '#fff' }
+  };
+
+  const lineSeries = (name, key, color, yAxisIndex = 0, smooth = true, area = false) => ({
+    name,
+    type: 'line',
+    data: driveChartData[key] || [],
+    yAxisIndex,
+    smooth,
+    connectNulls: false,
+    symbol: 'none',
+    lineStyle: { width: 2, color },
+    itemStyle: { color },
+    areaStyle: area ? { color, opacity: 0.12 } : undefined,
+    emphasis: { focus: 'series' }
+  });
+
+  motionChart.setOption({
+    animation: false,
+    color: ['#2d5f9a', '#8a6130'],
+    title: { text: 'Motion', left: 8, top: 6, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
+    tooltip: commonTooltip,
+    legend: { top: 6, right: 8, textStyle: { color: '#333', fontSize: 11 } },
+    grid: commonGrid,
+    xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#ddd' } }, axisLabel: axisLabelOpts },
     yAxis: [
       {
         type: 'value',
-        position: 'left',
-        offset: 0,
-        name: 'Speed',
-        nameLocation: 'middle',
-        nameRotate: 90,
-        nameGap: 50,
-        nameTextStyle: { color: '#2d5f9a', fontSize: 12, fontWeight: 'bold' },
-        axisLine: { lineStyle: { color: '#2d5f9a' } },
-        axisLabel: { color: '#2d5f9a', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { lineStyle: { color: 'rgba(200, 200, 200, 0.3)' } },
+        name: `Speed (${speedLabel})`,
         min: speedRange.min,
-        max: speedRange.max
+        max: speedRange.max,
+        axisLine: { lineStyle: { color: '#2d5f9a' } },
+        axisLabel: { color: '#2d5f9a', fontWeight: 'bold' },
+        splitLine: { lineStyle: { color: 'rgba(200,200,200,0.25)' } }
       },
       {
         type: 'value',
-        position: 'left',
-        offset: 58,
-        name: 'SOC / Energy',
-        nameLocation: 'middle',
-        nameRotate: 90,
-        nameGap: 50,
-        nameTextStyle: { color: '#2a9d8f', fontSize: 12, fontWeight: 'bold' },
-        axisLine: { lineStyle: { color: '#2a9d8f' } },
-        axisLabel: { color: '#2a9d8f', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false },
-        min: socRange.min,
-        max: socRange.max
-      },
-      {
-        type: 'value',
-        position: 'right',
-        offset: 0,
-        name: 'Energy Used',
-        nameLocation: 'middle',
-        nameRotate: -90,
-        nameGap: 50,
-        nameTextStyle: { color: '#dc3545', fontSize: 12, fontWeight: 'bold' },
-        axisLine: { lineStyle: { color: '#dc3545' } },
-        axisLabel: { color: '#dc3545', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false },
-        min: energyUsedRange.min,
-        max: energyUsedRange.max
-      },
-      {
-        type: 'value',
-        position: 'right',
-        offset: 70,
-        name: 'Efficiency',
-        nameLocation: 'middle',
-        nameRotate: -90,
-        nameGap: 50,
-        nameTextStyle: { color: '#4caf50', fontSize: 12, fontWeight: 'bold' },
-        axisLine: { lineStyle: { color: '#4caf50' } },
-        axisLabel: { color: '#4caf50', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false },
-        min: efficiencyRange.min,
-        max: efficiencyRange.max
-      },
-      {
-        type: 'value',
-        position: 'right',
-        offset: 140,
-        name: 'Elevation',
-        nameLocation: 'middle',
-        nameRotate: -90,
-        nameGap: 50,
-        nameTextStyle: { color: '#8a6130', fontSize: 12, fontWeight: 'bold' },
-        axisLine: { lineStyle: { color: '#8a6130' } },
-        axisLabel: { color: '#8a6130', fontSize: 10, fontWeight: 'bold' },
-        splitLine: { show: false },
+        name: 'Elevation (ft)',
         min: elevationRange.min,
-        max: elevationRange.max
+        max: elevationRange.max,
+        position: 'right',
+        axisLine: { lineStyle: { color: '#8a6130' } },
+        axisLabel: { color: '#8a6130', fontWeight: 'bold' },
+        splitLine: { show: false }
       }
     ],
-    series: buildSeries()
+    series: [
+      lineSeries(`Speed (${speedLabel})`, 'speed', '#2d5f9a', 0, true, true),
+      lineSeries('Elevation (ft)', 'elevation', '#8a6130', 1, true, false)
+    ]
+  });
+
+  batteryChart.setOption({
+    animation: false,
+    color: ['#2a9d8f', '#e66f51', '#8f4cb7', '#ff6b35'],
+    title: { text: 'Battery And Thermal', left: 8, top: 6, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
+    tooltip: commonTooltip,
+    legend: { top: 6, right: 8, textStyle: { color: '#333', fontSize: 11 } },
+    grid: commonGrid,
+    xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#ddd' } }, axisLabel: axisLabelOpts },
+    yAxis: [
+      {
+        type: 'value',
+        name: 'SOC % / Energy (kWh)',
+        min: Math.min(socRange.min, energyRange.min),
+        max: Math.max(socRange.max, energyRange.max),
+        axisLine: { lineStyle: { color: '#2a9d8f' } },
+        axisLabel: { color: '#2a9d8f', fontWeight: 'bold' },
+        splitLine: { lineStyle: { color: 'rgba(200,200,200,0.25)' } }
+      },
+      {
+        type: 'value',
+        name: `Temp (${tempLabel})`,
+        min: tempRange.min,
+        max: tempRange.max,
+        position: 'right',
+        axisLine: { lineStyle: { color: '#8f4cb7' } },
+        axisLabel: { color: '#8f4cb7', fontWeight: 'bold' },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      lineSeries('SOC %', 'soc', '#2a9d8f', 0, true, false),
+      lineSeries('Energy Remaining (kWh)', 'energy', '#e66f51', 0, true, true),
+      lineSeries(`Battery Temp (${tempLabel})`, 'battery_temp', '#8f4cb7', 1, true, false),
+      lineSeries(`Outside Temp (${tempLabel})`, 'outside_temp', '#ff6b35', 1, true, false)
+    ]
+  });
+
+  efficiencyChart.setOption({
+    animation: false,
+    color: ['#dc3545', '#4caf50'],
+    title: { text: 'Efficiency And Consumption', left: 8, top: 6, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
+    tooltip: commonTooltip,
+    legend: { top: 6, right: 8, textStyle: { color: '#333', fontSize: 11 } },
+    grid: commonGrid,
+    xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#ddd' } }, axisLabel: axisLabelOpts },
+    yAxis: [
+      {
+        type: 'value',
+        name: 'Energy Used (kWh)',
+        min: energyUsedRange.min,
+        max: energyUsedRange.max,
+        axisLine: { lineStyle: { color: '#dc3545' } },
+        axisLabel: { color: '#dc3545', fontWeight: 'bold' },
+        splitLine: { lineStyle: { color: 'rgba(200,200,200,0.25)' } }
+      },
+      {
+        type: 'value',
+        name: 'Consumption Rate (mi/kWh)',
+        min: efficiencyRange.min,
+        max: efficiencyRange.max,
+        position: 'right',
+        axisLine: { lineStyle: { color: '#4caf50' } },
+        axisLabel: { color: '#4caf50', fontWeight: 'bold' },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      lineSeries('Energy Used (kWh)', 'energy_used', '#dc3545', 0, true, true),
+      lineSeries('Consumption Rate (mi/kWh)', 'efficiency', '#4caf50', 1, true, false)
+    ]
+  });
+
+  motionChart.group = 'drive-sync';
+  batteryChart.group = 'drive-sync';
+  efficiencyChart.group = 'drive-sync';
+  echarts.connect('drive-sync');
+
+  const resizeCharts = () => {
+    motionChart.resize();
+    batteryChart.resize();
+    efficiencyChart.resize();
   };
-
-  // Build custom legend below chart
-  if (legendDom) {
-    legendDom.innerHTML = seriesConfig.map(cfg => `
-      <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; user-select:none; padding:0.25rem 0.5rem; border-radius:4px; transition:background 0.2s;" class="legend-item" data-series="${cfg.name}">
-        <input type="checkbox" checked style="width:16px; height:16px; cursor:pointer;" />
-        <span style="color:${cfg.color}; font-weight:600; display:inline-block; width:10px; height:10px; background:${cfg.color}; border-radius:2px; margin-right:0.25rem;"></span>
-        <span>${cfg.name}</span>
-      </label>
-    `).join('');
-
-    legendDom.querySelectorAll('.legend-item').forEach((item, idx) => {
-      const input = item.querySelector('input');
-      input.addEventListener('change', () => {
-        const key = seriesConfig[idx].key;
-        visibleSeries[key] = input.checked;
-        currentOption.series = buildSeries();
-        chart.setOption({ series: currentOption.series }, false);
-        item.style.background = input.checked ? 'transparent' : '#f0f0f0';
-      });
-    });
-  }
-
-  chart.setOption(currentOption);
-  window.addEventListener('resize', () => chart.resize());
+  window.addEventListener('resize', resizeCharts);
 }
 
 const mapPoints = JSON.parse(document.getElementById('drive-map-data')?.textContent || '[]');
