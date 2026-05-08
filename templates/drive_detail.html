@@ -319,10 +319,19 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
     fontSize: 10,
     fontWeight: 'bold',
     interval: Math.max(0, Math.floor(labels.length / 10)),
-    rotate: 30
+    rotate: 25
   };
 
-  const speedRange = rangeFor(cleanValues(driveChartData.speed), { floorZero: true, padPct: 0.12 });
+  const speedValues = cleanValues(driveChartData.speed);
+  const speedObservedMax = speedValues.length ? Math.max(...speedValues) : 0;
+  const speedMetaMax = Number.isFinite(Number(driveChartData.speed_axis_max))
+    ? Number(driveChartData.speed_axis_max)
+    : 0;
+  const speedPeak = Math.max(speedObservedMax, speedMetaMax);
+  const speedFloor = String(speedLabel).toLowerCase().includes('mph') ? 100 : 160;
+  const speedStep = String(speedLabel).toLowerCase().includes('mph') ? 10 : 20;
+  const speedAxisMax = Math.max(speedFloor, Math.ceil((speedPeak || 0) / speedStep) * speedStep || speedFloor);
+  const speedRange = { min: 0, max: speedAxisMax };
   const elevationRange = rangeFor(cleanValues(driveChartData.elevation), { floorZero: false, padPct: 0.08 });
   const socRange = rangeFor(cleanValues(driveChartData.soc), { floorZero: true, padPct: 0.06 });
   const energyRange = rangeFor(cleanValues(driveChartData.energy), { floorZero: true, padPct: 0.1 });
@@ -330,7 +339,7 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
   const energyUsedRange = rangeFor(cleanValues(driveChartData.energy_used), { floorZero: true, padPct: 0.12 });
   const efficiencyRange = rangeFor(cleanValues(driveChartData.efficiency), { floorZero: true, padPct: 0.12 });
 
-  const commonGrid = { left: 64, right: 64, top: 48, bottom: 58, containLabel: true };
+  const commonGrid = { left: 72, right: 72, top: 86, bottom: 62, containLabel: true };
   const commonTooltip = {
     trigger: 'axis',
     backgroundColor: 'rgba(0, 0, 0, 0.8)',
@@ -355,9 +364,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
   motionChart.setOption({
     animation: false,
     color: ['#2d5f9a', '#8a6130'],
-    title: { text: 'Motion', left: 8, top: 6, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
+    title: { text: 'Motion', left: 8, top: 8, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
     tooltip: commonTooltip,
-    legend: { top: 6, right: 8, textStyle: { color: '#333', fontSize: 11 } },
+    legend: { top: 34, right: 8, textStyle: { color: '#333', fontSize: 11 } },
     grid: commonGrid,
     xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#ddd' } }, axisLabel: axisLabelOpts },
     yAxis: [
@@ -390,9 +399,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
   batteryChart.setOption({
     animation: false,
     color: ['#2a9d8f', '#e66f51', '#8f4cb7', '#ff6b35'],
-    title: { text: 'Battery And Thermal', left: 8, top: 6, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
+    title: { text: 'Battery And Thermal', left: 8, top: 8, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
     tooltip: commonTooltip,
-    legend: { top: 6, right: 8, textStyle: { color: '#333', fontSize: 11 } },
+    legend: { top: 34, right: 8, textStyle: { color: '#333', fontSize: 11 } },
     grid: commonGrid,
     xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#ddd' } }, axisLabel: axisLabelOpts },
     yAxis: [
@@ -427,9 +436,9 @@ if (driveChartData.labels && driveChartData.labels.length > 0) {
   efficiencyChart.setOption({
     animation: false,
     color: ['#dc3545', '#4caf50'],
-    title: { text: 'Efficiency And Consumption', left: 8, top: 6, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
+    title: { text: 'Efficiency And Consumption', left: 8, top: 8, textStyle: { fontSize: 14, fontWeight: 'bold', color: '#213547' } },
     tooltip: commonTooltip,
-    legend: { top: 6, right: 8, textStyle: { color: '#333', fontSize: 11 } },
+    legend: { top: 34, right: 8, textStyle: { color: '#333', fontSize: 11 } },
     grid: commonGrid,
     xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#ddd' } }, axisLabel: axisLabelOpts },
     yAxis: [

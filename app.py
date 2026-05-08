@@ -1834,6 +1834,21 @@ def create_app() -> Flask:
 
         max_chart_points = 24
         point_count = len(labels)
+        speed_axis_max = None
+        full_speed_values = [v for v in speed_series if v is not None]
+        if full_speed_values:
+            speed_axis_max = max(full_speed_values)
+        if drive.get("max_speed_kmh") is not None:
+            try:
+                drive_max_speed = round(
+                    units.convert_for_display(drive["max_speed_kmh"], "max_speed_kmh", system),
+                    1,
+                )
+                if speed_axis_max is None or drive_max_speed > speed_axis_max:
+                    speed_axis_max = drive_max_speed
+            except (TypeError, ValueError):
+                pass
+
         if point_count > max_chart_points:
             step = max(1, point_count // max_chart_points)
             sampled_indices = list(range(0, point_count, step))
@@ -1852,6 +1867,7 @@ def create_app() -> Flask:
         drive_chart_data = {
             "labels": labels,
             "speed": speed_series,
+            "speed_axis_max": speed_axis_max,
             "soc": soc_series,
             "energy": energy_series,
             "energy_used": energy_used_series,
