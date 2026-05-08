@@ -6,6 +6,15 @@
 <form method="post" class="card form-card">
   <h2>Display Units</h2>
   <div class="form-group">
+    <label for="developing">
+      <input type="checkbox" name="developing" id="developing" value="on" {% if settings.developing == 'on' %}checked{% endif %} style="width:auto; margin-right:0.5rem;">
+      Developing Mode (disable startup delay)
+    </label>
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      When enabled, the 30s startup delay is skipped so the UI and poller are available instantly.<br>
+      <strong>Recommended only for development/testing.</strong>
+    </p>
+  </div>
     <label for="units">Unit System</label>
     <select name="units" id="units" class="form-select">
       <option value="imperial" {% if settings.units == 'imperial' %}selected{% endif %}>Imperial (mph, mi, °F, PSI)</option>
