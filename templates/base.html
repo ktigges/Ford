@@ -11,21 +11,26 @@
   <nav>
     <div class="nav-brand">⚡ Lightning</div>
     <ul>
-      <li><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
-      <li><a href="{{ url_for('vehicle_state') }}">Vehicle State</a></li>
-      <li><a href="{{ url_for('telemetry_overview') }}">Telemetry</a></li>
-      <li><a href="{{ url_for('charging_overview') }}">Charging</a></li>
-      <li><a href="{{ url_for('charging_sessions_view') }}">Charge Sessions</a></li>
-      <li><a href="{{ url_for('drives_list') }}">Drives</a></li>
-      <li><a href="{{ url_for('analytics_overview') }}">Analytics</a></li>
-      <li><a href="{{ url_for('oauth_config') }}">OAuth Config</a></li>
-      <li><a href="{{ url_for('poller_control') }}">Poller</a></li>
-      <li><a href="{{ url_for('settings') }}">Settings</a></li>
-      <li><a href="{{ url_for('manage') }}">Manage</a></li>
-      <li><a href="{{ url_for('db_browser') }}">Database</a></li>
-      <li><a href="{{ url_for('db_maintenance') }}">DB Maintenance</a></li>
-      <li><a href="{{ url_for('backup_page') }}">Backup</a></li>
-      <li><a href="{{ url_for('reset') }}">Reset</a></li>
+      <li><a href="{{ url_for('dashboard') }}" class="nav-btn">Dashboard</a></li>
+      <li><a href="{{ url_for('vehicle_state') }}" class="nav-btn">Vehicle State</a></li>
+      <li><a href="{{ url_for('telemetry_overview') }}" class="nav-btn">Telemetry</a></li>
+      <li><a href="{{ url_for('charging_overview') }}" class="nav-btn">Charging</a></li>
+      <li><a href="{{ url_for('charging_sessions_view') }}" class="nav-btn">Charge Sessions</a></li>
+      <li><a href="{{ url_for('drives_list') }}" class="nav-btn">Drives</a></li>
+      <li><a href="{{ url_for('analytics_overview') }}" class="nav-btn">Analytics</a></li>
+      <li class="nav-dropdown">
+        <button class="nav-btn dropdown-toggle">⚙️ Options</button>
+        <div class="dropdown-menu">
+          <a href="{{ url_for('oauth_config') }}">OAuth Config</a>
+          <a href="{{ url_for('poller_control') }}">Poller</a>
+          <a href="{{ url_for('settings') }}">Settings</a>
+          <a href="{{ url_for('manage') }}">Manage</a>
+          <a href="{{ url_for('db_browser') }}">Database</a>
+          <a href="{{ url_for('db_maintenance') }}">DB Maintenance</a>
+          <a href="{{ url_for('backup_page') }}">Backup</a>
+          <a href="{{ url_for('reset') }}">Reset</a>
+        </div>
+      </li>
     </ul>
   </nav>
 
