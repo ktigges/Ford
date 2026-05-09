@@ -19,6 +19,8 @@ import config
 import crypto
 import db
 
+_SENSITIVE_OAUTH_FIELDS = ("client_secret", "refresh_token", "access_token")
+
 # Tables in dependency order
 TABLES_ORDERED = [
     "app_config",
@@ -58,34 +60,40 @@ def _json_encoder(obj):
     return str(obj)
 
 def main():
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"lightning_backup_{ts}.json"
-    filepath = os.path.join(BACKUP_DIR, filename)
+    config.load()
+    db.init_pool()
+    try:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        filename = f"lightning_backup_{ts}.json"
+        filepath = os.path.join(BACKUP_DIR, filename)
 
-    data = {
-        "_meta": {
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "format_version": "1.0",
-            "tables": TABLES_ORDERED,
+        data = {
+            "_meta": {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "format_version": "1.0",
+                "tables": TABLES_ORDERED,
+            }
         }
-    }
 
-    for table in TABLES_ORDERED:
-        rows = db.fetch_all(f"SELECT * FROM {table}")
-        # Decrypt sensitive fields for portability
-        if table == "oauth_credentials":
-            for row in rows:
-                if row.get("client_secret"):
-                    row["client_secret"] = crypto.decrypt(row["client_secret"])
-        data[table] = rows
-        print(f"{table}: {len(rows)} rows")
+        for table in TABLES_ORDERED:
+            rows = db.fetch_all(f"SELECT * FROM {table}")
+            # Decrypt sensitive fields for portability
+            if table == "oauth_credentials":
+                for row in rows:
+                    for field in _SENSITIVE_OAUTH_FIELDS:
+                        if row.get(field):
+                            row[field] = crypto.decrypt(row[field])
+            data[table] = rows
+            print(f"{table}: {len(rows)} rows")
 
-    with open(filepath, "w") as f:
-        json.dump(data, f, default=_json_encoder, indent=2)
+        with open(filepath, "w") as f:
+            json.dump(data, f, default=_json_encoder, indent=2)
 
-    size = os.path.getsize(filepath)
-    print(f"JSON backup created: {filename} ({size} bytes)")
-    print(f"Location: {filepath}")
+        size = os.path.getsize(filepath)
+        print(f"JSON backup created: {filename} ({size} bytes)")
+        print(f"Location: {filepath}")
+    finally:
+        db.close_pool()
 
 if __name__ == "__main__":
     main()

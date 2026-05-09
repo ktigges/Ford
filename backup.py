@@ -56,6 +56,8 @@ TABLES_ORDERED = [
     "drive_points",
 ]
 
+_SENSITIVE_OAUTH_FIELDS = ("client_secret", "refresh_token", "access_token")
+
 
 def _ensure_backup_dir() -> str:
     """Create the backups directory if it doesn't exist and return its path."""
@@ -187,8 +189,9 @@ def backup_json(label: str = "") -> str:
         # Decrypt sensitive fields so backups are portable across hosts
         if table == "oauth_credentials":
             for row in rows:
-                if row.get("client_secret"):
-                    row["client_secret"] = crypto.decrypt(row["client_secret"])
+                for field in _SENSITIVE_OAUTH_FIELDS:
+                    if row.get(field):
+                        row[field] = crypto.decrypt(row[field])
         data[table] = rows
         log.info("  %s: %d rows", table, len(rows))
 
@@ -225,8 +228,10 @@ def restore_json(filepath: str) -> dict:
         restored = 0
         for row in rows:
             # Re-encrypt sensitive fields with this host's key
-            if table == "oauth_credentials" and row.get("client_secret"):
-                row["client_secret"] = crypto.encrypt(row["client_secret"])
+            if table == "oauth_credentials":
+                for field in _SENSITIVE_OAUTH_FIELDS:
+                    if row.get(field):
+                        row[field] = crypto.encrypt(row[field])
 
             columns = list(row.keys())
             placeholders = ", ".join(["%s"] * len(columns))
