@@ -222,6 +222,12 @@
         <td style="padding:0.25rem 0; text-align:right; color:var(--accent-red);">{{ charger_status.errors }}</td>
       </tr>
       {% endif %}
+      {% if charger_status.last_error %}
+      <tr>
+        <td style="padding:0.25rem 0; color:var(--accent-red);">Last Error:</td>
+        <td style="padding:0.25rem 0; text-align:right; color:var(--accent-red); max-width:340px; word-break:break-word;">{{ charger_status.last_error }}</td>
+      </tr>
+      {% endif %}
     </table>
     {% if charger_status.status == 'in_progress' and charger_heartbeat_stale %}
     <div style="margin-top:0.6rem; color:var(--accent-red); font-size:0.82rem;">

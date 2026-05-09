@@ -13,6 +13,7 @@ Date:        2026-05-09
 
 import json
 import logging
+import os
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
@@ -33,6 +34,12 @@ FUEL_TYPE_ELEC = "ELEC"
 NLR_HTTP_TIMEOUT_SEC = 45
 NLR_MAX_RETRIES = 2
 
+_AUDIT_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "logs",
+    "charger_sync_audit.log",
+)
+
 # US state codes (for validation)
 US_STATES = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
@@ -41,6 +48,18 @@ US_STATES = {
     "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
     "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"
 }
+
+
+def _audit_sync(message: str) -> None:
+    """Append explicit charger sync audit events to a dedicated file."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    line = f"{timestamp} | {message}\n"
+    try:
+        os.makedirs(os.path.dirname(_AUDIT_LOG_PATH), exist_ok=True)
+        with open(_AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as exc:
+        log.warning("Failed writing charger sync audit log: %s", exc)
 
 
 def _ensure_charger_tables() -> None:
@@ -107,6 +126,7 @@ def _ensure_charger_tables() -> None:
             stations_imported INTEGER DEFAULT 0,
             stations_updated INTEGER DEFAULT 0,
             errors INTEGER DEFAULT 0,
+            last_error TEXT,
             created_at TIMESTAMPTZ DEFAULT now()
         )
         """
@@ -115,6 +135,7 @@ def _ensure_charger_tables() -> None:
     db.execute(
         "ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()"
     )
+    db.execute("ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_error TEXT")
 
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
@@ -125,10 +146,29 @@ def _ensure_charger_tables() -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
 
 
-def _touch_sync_run(sync_run_id: Optional[int], updated_count: int, error_count: int) -> None:
+def _touch_sync_run(
+    sync_run_id: Optional[int],
+    updated_count: int,
+    error_count: int,
+    last_error: Optional[str] = None,
+) -> None:
     """Persist lightweight progress heartbeat for a running sync job."""
     if not sync_run_id:
         return
+    if last_error:
+        db.execute(
+            """
+            UPDATE ev_sync_runs
+            SET stations_updated = %s,
+                errors = %s,
+                last_heartbeat_at = now(),
+                last_error = LEFT(%s, 1000)
+            WHERE id = %s
+            """,
+            (updated_count, error_count, last_error, sync_run_id),
+        )
+        return
+
     db.execute(
         """
         UPDATE ev_sync_runs
@@ -220,17 +260,25 @@ def _nlr_get(
                 limit,
                 offset,
             )
+            _audit_sync(
+                f"REQUEST_START state={state or 'all'} limit={limit} offset={offset} attempt={attempt}/{max_retries + 1}"
+            )
             nlr_log.debug("NLR GET %s params=%s", NLR_API_BASE, params)
             resp = requests.get(NLR_API_BASE, params=params, headers=headers, timeout=timeout_sec)
             resp.raise_for_status()
             data = resp.json()
             elapsed_s = (datetime.now(timezone.utc) - req_started).total_seconds()
+            returned = len(data.get("fuel_stations", []))
+            total_results = data.get("total_results", 0)
             nlr_log.info(
                 "NLR request ok (state=%s, returned=%d, total=%d, elapsed_s=%.2f)",
                 state or "all",
-                len(data.get("fuel_stations", [])),
-                data.get("total_results", 0),
+                returned,
+                total_results,
                 elapsed_s,
+            )
+            _audit_sync(
+                f"REQUEST_OK state={state or 'all'} returned={returned} total={total_results} elapsed_s={elapsed_s:.2f}"
             )
             return data
         except Timeout as e:
@@ -243,6 +291,9 @@ def _nlr_get(
                 limit,
                 offset,
                 elapsed_s,
+            )
+            _audit_sync(
+                f"REQUEST_TIMEOUT state={state or 'all'} limit={limit} offset={offset} attempt={attempt}/{max_retries + 1} elapsed_s={elapsed_s:.2f}"
             )
             last_exc = e
             if attempt >= (max_retries + 1):
@@ -257,6 +308,9 @@ def _nlr_get(
                 offset,
                 e,
             )
+            _audit_sync(
+                f"REQUEST_FAILED state={state or 'all'} limit={limit} offset={offset} attempt={attempt}/{max_retries + 1} error={str(e)[:300]}"
+            )
             raise
 
     nlr_log.error(
@@ -264,6 +318,9 @@ def _nlr_get(
         state or "all",
         limit,
         offset,
+    )
+    _audit_sync(
+        f"REQUEST_GAVE_UP state={state or 'all'} limit={limit} offset={offset} reason=timeout_after_retries"
     )
     raise RuntimeError("NLR API request timed out after retries") from last_exc
 
@@ -464,7 +521,8 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
                 UPDATE ev_sync_runs
                 SET status = %s, completed_at = now(),
                     stations_imported = %s, stations_updated = %s, errors = %s,
-                    last_heartbeat_at = now()
+                    last_heartbeat_at = now(),
+                    last_error = NULL
                 WHERE id = %s
                 """,
                 ("completed", imported_count, updated_count, error_count, sync_run_id),
@@ -480,14 +538,18 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
             "sync_run_id": sync_run_id,
         }
         log.info("EV station import complete: %s", result)
+        _audit_sync(
+            f"RUN_DONE sync_run_id={sync_run_id} mode=legacy_paged processed={updated_count + imported_count} errors={error_count}"
+        )
         return result
 
     except Exception as e:
         log.error("Import failed: %s", e)
+        _audit_sync(f"RUN_FAILED sync_run_id={sync_run_id} mode=legacy_paged error={str(e)[:300]}")
         if sync_run_id:
             db.execute(
-                "UPDATE ev_sync_runs SET status = %s, completed_at = now(), last_heartbeat_at = now() WHERE id = %s",
-                ("failed", sync_run_id),
+                "UPDATE ev_sync_runs SET status = %s, completed_at = now(), last_heartbeat_at = now(), last_error = LEFT(%s, 1000) WHERE id = %s",
+                ("failed", str(e), sync_run_id),
             )
         raise
 
@@ -543,6 +605,9 @@ def import_ev_stations_with_strategy(
             state or "all",
             page_size,
         )
+        _audit_sync(
+            f"RUN_START sync_run_id={sync_run_id} strategy={strategy} state={state or 'all'} page_size={page_size}"
+        )
 
         stations: list[dict[str, Any]] = []
         if strategy == "all_then_200":
@@ -584,6 +649,9 @@ def import_ev_stations_with_strategy(
                         elapsed_s,
                     )
                     _touch_sync_run(sync_run_id, updated_count, error_count)
+                    _audit_sync(
+                        f"RUN_PROGRESS sync_run_id={sync_run_id} mode=all processed={processed_count} errors={error_count} elapsed_s={elapsed_s}"
+                    )
 
                 for charging_unit in station.get("ev_charging_units", []):
                     _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
@@ -609,6 +677,9 @@ def import_ev_stations_with_strategy(
                         total_chunks,
                         st,
                     )
+                    _audit_sync(
+                        f"STATE_START sync_run_id={sync_run_id} step={idx}/{total_chunks} state={st}"
+                    )
                     data = _nlr_get(
                         fuel_type=FUEL_TYPE_ELEC,
                         state=st,
@@ -621,6 +692,9 @@ def import_ev_stations_with_strategy(
                     if not batch:
                         elapsed_s = int((datetime.now(timezone.utc) - chunk_started).total_seconds())
                         log.info("State step %d/%d done (state=%s, stations=0, elapsed_s=%d)", idx, total_chunks, st, elapsed_s)
+                        _audit_sync(
+                            f"STATE_DONE sync_run_id={sync_run_id} step={idx}/{total_chunks} state={st} stations=0 elapsed_s={elapsed_s}"
+                        )
                         chunks_seen += 1
                         continue
 
@@ -630,6 +704,9 @@ def import_ev_stations_with_strategy(
                         total_chunks,
                         st,
                         len(batch),
+                    )
+                    _audit_sync(
+                        f"STATE_FETCHED sync_run_id={sync_run_id} step={idx}/{total_chunks} state={st} stations={len(batch)}"
                     )
                     for station in batch:
                         if station.get("fuel_type_code") != FUEL_TYPE_ELEC:
@@ -655,6 +732,9 @@ def import_ev_stations_with_strategy(
                                 elapsed_s,
                             )
                             _touch_sync_run(sync_run_id, updated_count, error_count)
+                            _audit_sync(
+                                f"RUN_PROGRESS sync_run_id={sync_run_id} mode=state_chunks state={st} processed={processed_count} errors={error_count} elapsed_s={elapsed_s}"
+                            )
 
                         for charging_unit in station.get("ev_charging_units", []):
                             _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
@@ -668,12 +748,18 @@ def import_ev_stations_with_strategy(
                         error_count,
                         elapsed_s,
                     )
+                    _audit_sync(
+                        f"STATE_DONE sync_run_id={sync_run_id} step={idx}/{total_chunks} state={st} processed_total={processed_count} errors={error_count} elapsed_s={elapsed_s}"
+                    )
                     _touch_sync_run(sync_run_id, updated_count, error_count)
                     chunks_seen += 1
                 except Exception as e:
                     log.error("State step %d/%d failed (state=%s): %s", idx, total_chunks, st, e)
                     error_count += 1
-                    _touch_sync_run(sync_run_id, updated_count, error_count)
+                    _touch_sync_run(sync_run_id, updated_count, error_count, str(e))
+                    _audit_sync(
+                        f"STATE_FAILED sync_run_id={sync_run_id} step={idx}/{total_chunks} state={st} error={str(e)[:300]}"
+                    )
                     chunks_seen += 1
 
             page = chunks_seen
@@ -684,7 +770,8 @@ def import_ev_stations_with_strategy(
                 UPDATE ev_sync_runs
                 SET status = %s, completed_at = now(),
                     stations_imported = %s, stations_updated = %s, errors = %s,
-                    last_heartbeat_at = now()
+                    last_heartbeat_at = now(),
+                    last_error = NULL
                 WHERE id = %s
                 """,
                 ("completed", imported_count, updated_count, error_count, sync_run_id),
@@ -704,13 +791,17 @@ def import_ev_stations_with_strategy(
         }
         elapsed_s = int((datetime.now(timezone.utc) - started_at).total_seconds())
         log.info("EV station import complete (elapsed_s=%d): %s", elapsed_s, result)
+        _audit_sync(
+            f"RUN_DONE sync_run_id={sync_run_id} mode={fetch_mode_used} processed={processed_count} errors={error_count} elapsed_s={elapsed_s}"
+        )
         return result
     except Exception as e:
         log.error("Import with strategy failed: %s", e)
+        _audit_sync(f"RUN_FAILED sync_run_id={sync_run_id} mode={fetch_mode_used} error={str(e)[:300]}")
         if sync_run_id:
             db.execute(
-                "UPDATE ev_sync_runs SET status = %s, completed_at = now(), last_heartbeat_at = now() WHERE id = %s",
-                ("failed", sync_run_id),
+                "UPDATE ev_sync_runs SET status = %s, completed_at = now(), last_heartbeat_at = now(), last_error = LEFT(%s, 1000) WHERE id = %s",
+                ("failed", str(e), sync_run_id),
             )
         raise
 
@@ -721,7 +812,7 @@ def get_sync_status() -> Optional[Dict[str, Any]]:
         row = db.fetch_one(
             """
              SELECT id, sync_type, state_filter, status, started_at, last_heartbeat_at, completed_at,
-                 stations_imported, stations_updated, errors,
+                 stations_imported, stations_updated, errors, last_error,
                  EXTRACT(EPOCH FROM (now() - COALESCE(last_heartbeat_at, started_at)))::BIGINT AS heartbeat_age_seconds
             FROM ev_sync_runs
             ORDER BY started_at DESC
@@ -782,7 +873,8 @@ def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
                 SET status = %s,
                     completed_at = now(),
                     last_heartbeat_at = now(),
-                    errors = COALESCE(errors, 0) + 1
+                    errors = COALESCE(errors, 0) + 1,
+                    last_error = COALESCE(last_error, 'No heartbeat detected; run marked stale')
                 WHERE id = %s
                 """,
                 ("failed", row["id"]),

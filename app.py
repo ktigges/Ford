@@ -525,6 +525,7 @@ def create_app() -> Flask:
                     stations_imported INTEGER DEFAULT 0,
                     stations_updated INTEGER DEFAULT 0,
                     errors INTEGER DEFAULT 0,
+                    last_error TEXT,
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
@@ -548,6 +549,9 @@ def create_app() -> Flask:
                     "ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()"
                 )
                 applied.append("Added ev_sync_runs.last_heartbeat_at")
+            if not _column_exists("ev_sync_runs", "last_error"):
+                db.execute("ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_error TEXT")
+                applied.append("Added ev_sync_runs.last_error")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
@@ -2927,6 +2931,12 @@ def create_app() -> Flask:
             """
         )
 
+        state_count_map = {str(row["state"]): int(row["station_count"]) for row in by_state}
+        all_states_counts = [
+            {"state": st, "station_count": state_count_map.get(st, 0)}
+            for st in sorted(nlr_chargers.US_STATES)
+        ]
+
         connector_types = []
         charging_levels = []
         if _table_exists("ev_charger_connectors"):
@@ -2969,8 +2979,8 @@ def create_app() -> Flask:
         if _table_exists("ev_sync_runs"):
             recent_runs = db.fetch_all(
                 """
-                SELECT id, sync_type, state_filter, status, started_at, completed_at,
-                       stations_imported, stations_updated, errors
+                SELECT id, sync_type, state_filter, status, started_at, last_heartbeat_at, completed_at,
+                       stations_imported, stations_updated, errors, last_error
                 FROM ev_sync_runs
                 ORDER BY started_at DESC
                 LIMIT 10
@@ -2981,6 +2991,7 @@ def create_app() -> Flask:
             "public_chargers.html",
             totals=totals,
             by_state=by_state,
+            all_states_counts=all_states_counts,
             connector_types=connector_types,
             charging_levels=charging_levels,
             network_breakdown=network_breakdown,

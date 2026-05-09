@@ -32,10 +32,12 @@
       <tr><th>Type</th><td>{{ sync_status.sync_type }}</td></tr>
       <tr><th>State Filter</th><td>{{ sync_status.state_filter }}</td></tr>
       <tr><th>Started</th><td>{{ sync_status.started_at }}</td></tr>
+      <tr><th>Heartbeat</th><td>{{ sync_status.last_heartbeat_at or 'N/A' }}{% if sync_status.heartbeat_age_seconds is not none %} ({{ sync_status.heartbeat_age_seconds }}s ago){% endif %}</td></tr>
       <tr><th>Completed</th><td>{{ sync_status.completed_at or 'In progress' }}</td></tr>
       <tr><th>Imported</th><td>{{ sync_status.stations_imported or 0 }}</td></tr>
       <tr><th>Updated</th><td>{{ sync_status.stations_updated or 0 }}</td></tr>
       <tr><th>Errors</th><td>{{ sync_status.errors or 0 }}</td></tr>
+      <tr><th>Last Error</th><td>{{ sync_status.last_error or 'None' }}</td></tr>
     </tbody>
   </table>
   {% else %}
@@ -43,17 +45,33 @@
   {% endif %}
 </div>
 
-<div class="card">
-  <h2>Stations By State</h2>
-  <div class="table-scroll">
-    <table>
-      <thead><tr><th>State</th><th>Stations</th></tr></thead>
-      <tbody>
-        {% for row in by_state %}
-        <tr><td>{{ row.state }}</td><td>{{ row.station_count }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<div class="card-grid">
+  <div class="card">
+    <h2>Stations By State (Present)</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>State</th><th>Stations</th></tr></thead>
+        <tbody>
+          {% for row in by_state %}
+          <tr><td>{{ row.state }}</td><td>{{ row.station_count }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>All States Coverage</h2>
+    <div class="table-scroll" style="max-height:420px; overflow-y:auto;">
+      <table>
+        <thead><tr><th>State</th><th>Stations</th></tr></thead>
+        <tbody>
+          {% for row in all_states_counts %}
+          <tr><td>{{ row.state }}</td><td>{{ row.station_count }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -120,9 +138,11 @@
           <th>State</th>
           <th>Status</th>
           <th>Started</th>
+          <th>Heartbeat</th>
           <th>Completed</th>
           <th>Updated</th>
           <th>Errors</th>
+          <th>Last Error</th>
         </tr>
       </thead>
       <tbody>
@@ -133,9 +153,11 @@
           <td>{{ run.state_filter }}</td>
           <td>{{ run.status }}</td>
           <td>{{ run.started_at }}</td>
+          <td>{{ run.last_heartbeat_at or 'N/A' }}</td>
           <td>{{ run.completed_at or 'In progress' }}</td>
           <td>{{ run.stations_updated or 0 }}</td>
           <td>{{ run.errors or 0 }}</td>
+          <td style="max-width:360px; word-break:break-word;">{{ run.last_error or '' }}</td>
         </tr>
         {% endfor %}
       </tbody>

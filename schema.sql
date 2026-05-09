@@ -523,6 +523,7 @@ CREATE TABLE ev_sync_runs (
     stations_imported INTEGER DEFAULT 0,
     stations_updated INTEGER DEFAULT 0,
     errors INTEGER DEFAULT 0,
+    last_error TEXT,
     
     created_at TIMESTAMPTZ DEFAULT now()
 );
