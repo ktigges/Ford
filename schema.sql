@@ -503,8 +503,7 @@ CREATE TABLE ev_charger_connectors (
     
     updated_at TIMESTAMPTZ DEFAULT now(),
     created_at TIMESTAMPTZ DEFAULT now(),
-    
-    PRIMARY KEY (station_id, connector_type, network),
+
     UNIQUE (station_id, connector_type, network)
 );
 
