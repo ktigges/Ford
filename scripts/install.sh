@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCHEMA_FILE="${ROOT_DIR}/schema.sql"
+REQUIREMENTS_FILE="${ROOT_DIR}/requirements.txt"
+VENV_DIR="${VENV_DIR:-${ROOT_DIR}/venv}"
+PYTHON_CMD="${PYTHON_CMD:-python3}"
 
 DB_CONTAINER="${DB_CONTAINER:-lightning-db}"
 DB_VOLUME="${DB_VOLUME:-lightning_pgdata}"
@@ -21,6 +24,49 @@ PG_EFFECTIVE_CACHE_SIZE="${PG_EFFECTIVE_CACHE_SIZE:-1536MB}"
 PG_MAX_WAL_SIZE="${PG_MAX_WAL_SIZE:-2GB}"
 PG_MIN_WAL_SIZE="${PG_MIN_WAL_SIZE:-512MB}"
 PG_CHECKPOINT_COMPLETION_TARGET="${PG_CHECKPOINT_COMPLETION_TARGET:-0.9}"
+
+ensure_python_env() {
+  if ! command -v "${PYTHON_CMD}" >/dev/null 2>&1; then
+    echo "ERROR: ${PYTHON_CMD} is required to build the virtual environment." >&2
+    exit 1
+  fi
+
+  if [[ ! -d "${VENV_DIR}" ]]; then
+    echo "Creating Python virtual environment at ${VENV_DIR}..."
+    "${PYTHON_CMD}" -m venv "${VENV_DIR}"
+  else
+    echo "Virtual environment already exists at ${VENV_DIR}."
+  fi
+
+  echo "Ensuring Python dependencies are installed..."
+  "${VENV_DIR}/bin/python" -m pip install --upgrade pip >/dev/null
+  if [[ -f "${REQUIREMENTS_FILE}" ]]; then
+    "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+  else
+    echo "WARNING: requirements.txt not found at ${REQUIREMENTS_FILE}; skipping dependency install."
+  fi
+}
+
+wait_for_postgres() {
+  local timeout_seconds="$1"
+  local start_time
+  start_time="$(date +%s)"
+
+  echo "Waiting for PostgreSQL to accept SQL connections (timeout: ${timeout_seconds}s)..."
+  while true; do
+    if docker exec "${DB_CONTAINER}" pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
+      if docker exec -e PGPASSWORD="${DB_PASSWORD}" "${DB_CONTAINER}" \
+        psql -U "${DB_USER}" -d "${DB_NAME}" -tA -c "SELECT 1" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+
+    if (( $(date +%s) - start_time >= timeout_seconds )); then
+      return 1
+    fi
+    sleep 1
+  done
+}
 
 RESTORE_SQL_FILE=""
 if [[ "${1:-}" == "--restore-sql" ]]; then
@@ -44,6 +90,8 @@ if [[ ! -f "${SCHEMA_FILE}" ]]; then
   echo "ERROR: schema.sql not found at ${SCHEMA_FILE}" >&2
   exit 1
 fi
+
+ensure_python_env
 
 echo "Ensuring PostgreSQL image is available (${POSTGRES_IMAGE})..."
 docker pull "${POSTGRES_IMAGE}" >/dev/null
@@ -73,15 +121,7 @@ else
     "${POSTGRES_IMAGE}" >/dev/null
 fi
 
-echo "Waiting for PostgreSQL to accept connections..."
-for _ in $(seq 1 "${DB_WAIT_SECONDS}"); do
-  if docker exec "${DB_CONTAINER}" pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-if ! docker exec "${DB_CONTAINER}" pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
+if ! wait_for_postgres "${DB_WAIT_SECONDS}"; then
   echo "ERROR: PostgreSQL is not ready after ${DB_WAIT_SECONDS}s." >&2
   exit 1
 fi
@@ -120,12 +160,10 @@ SQL
 
 echo "Restarting database container to ensure all settings are active..."
 docker restart "${DB_CONTAINER}" >/dev/null
-for _ in $(seq 1 "${DB_WAIT_SECONDS}"); do
-  if docker exec "${DB_CONTAINER}" pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
+if ! wait_for_postgres "${DB_WAIT_SECONDS}"; then
+  echo "ERROR: PostgreSQL did not become ready after restart within ${DB_WAIT_SECONDS}s." >&2
+  exit 1
+fi
 
 docker exec -e PGPASSWORD="${DB_PASSWORD}" "${DB_CONTAINER}" psql -U "${DB_USER}" -d "${DB_NAME}" -c "SHOW shared_buffers; SHOW work_mem; SHOW maintenance_work_mem; SHOW effective_cache_size; SHOW max_wal_size; SHOW min_wal_size;"
 
