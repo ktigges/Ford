@@ -194,6 +194,19 @@
         <td style="padding:0.25rem 0; text-align:right;">{{ charger_status.started_at.strftime('%Y-%m-%d %H:%M:%S') if charger_status.started_at else 'N/A' }}</td>
       </tr>
       <tr>
+        <td style="padding:0.25rem 0;">Run Heartbeat:</td>
+        <td style="padding:0.25rem 0; text-align:right;">
+          {% if charger_status.last_heartbeat_at %}
+            {{ charger_status.last_heartbeat_at.strftime('%Y-%m-%d %H:%M:%S') }}
+            {% if charger_status.heartbeat_age_seconds is not none %}
+              ({{ charger_status.heartbeat_age_seconds }}s ago)
+            {% endif %}
+          {% else %}
+            N/A
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
         <td style="padding:0.25rem 0;">Completed:</td>
         <td style="padding:0.25rem 0; text-align:right;">{{ charger_status.completed_at.strftime('%Y-%m-%d %H:%M:%S') if charger_status.completed_at else 'In progress...' }}</td>
       </tr>
@@ -210,6 +223,11 @@
       </tr>
       {% endif %}
     </table>
+    {% if charger_status.status == 'in_progress' and charger_heartbeat_stale %}
+    <div style="margin-top:0.6rem; color:var(--accent-red); font-size:0.82rem;">
+      Heartbeat is stale (&gt; 5 minutes). This run may be stalled and will be auto-marked failed.
+    </div>
+    {% endif %}
   </div>
   {% else %}
   <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.75rem; margin-bottom:0.75rem; font-size:0.85rem; color:var(--muted);">

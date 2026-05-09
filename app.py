@@ -520,6 +520,7 @@ def create_app() -> Flask:
                     state_filter TEXT,
                     status TEXT NOT NULL,
                     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     completed_at TIMESTAMPTZ,
                     stations_imported INTEGER DEFAULT 0,
                     stations_updated INTEGER DEFAULT 0,
@@ -542,8 +543,14 @@ def create_app() -> Flask:
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
 
         if _table_exists("ev_sync_runs"):
+            if not _column_exists("ev_sync_runs", "last_heartbeat_at"):
+                db.execute(
+                    "ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                )
+                applied.append("Added ev_sync_runs.last_heartbeat_at")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
 
         # One-time repair after backup/restore (or when queued by UI):
         # align serial sequences to table MAX(id)+1 to prevent duplicate PKs.
@@ -2647,6 +2654,12 @@ def create_app() -> Flask:
 
         # Get charger sync status
         charger_status = nlr_chargers.get_sync_status()
+        charger_heartbeat_stale = False
+        if charger_status and charger_status.get("status") == "in_progress":
+            try:
+                charger_heartbeat_stale = int(charger_status.get("heartbeat_age_seconds") or 0) > 300
+            except (TypeError, ValueError):
+                charger_heartbeat_stale = False
 
         seq_marker = db.fetch_one(
             "SELECT value FROM app_config WHERE key = %s",
@@ -2667,7 +2680,8 @@ def create_app() -> Flask:
         return render_template("settings.html", settings=current, ssl=ssl_cfg,
                                ssl_status=ssl_status, charger_status=charger_status,
                                sequence_alignment=sequence_alignment,
-                               charger_job_running=charger_job_running)
+                               charger_job_running=charger_job_running,
+                               charger_heartbeat_stale=charger_heartbeat_stale)
 
     @app.route("/settings/sequence-alignment", methods=["POST"])
     def sequence_alignment_settings():

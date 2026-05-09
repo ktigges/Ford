@@ -516,6 +516,7 @@ CREATE TABLE ev_sync_runs (
     
     -- Timestamps
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMPTZ,
     
     -- Statistics
@@ -537,3 +538,4 @@ CREATE INDEX idx_ev_connectors_network ON ev_charger_connectors (network);
 CREATE INDEX idx_ev_connectors_charging_level ON ev_charger_connectors (charging_level);
 CREATE INDEX idx_ev_sync_runs_status ON ev_sync_runs (status);
 CREATE INDEX idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC);
+CREATE INDEX idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC);
