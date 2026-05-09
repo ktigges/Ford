@@ -39,6 +39,82 @@ US_STATES = {
 }
 
 
+def _ensure_charger_tables() -> None:
+    """Create charger tables/indexes if they are missing.
+
+    This protects manual imports when startup migrations were skipped or failed.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ev_stations (
+            id BIGSERIAL PRIMARY KEY,
+            nlr_station_id BIGINT NOT NULL UNIQUE,
+            station_name TEXT NOT NULL,
+            street_address TEXT,
+            city TEXT,
+            state TEXT,
+            zip TEXT,
+            country TEXT DEFAULT 'US',
+            latitude DOUBLE PRECISION NOT NULL,
+            longitude DOUBLE PRECISION NOT NULL,
+            status_code TEXT,
+            fuel_type_code TEXT DEFAULT 'ELEC',
+            access_code TEXT,
+            access_detail TEXT,
+            owner_type_code TEXT,
+            facility_type TEXT,
+            network_name TEXT,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            nlr_updated_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            raw_data JSONB
+        )
+        """
+    )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ev_charger_connectors (
+            id BIGSERIAL PRIMARY KEY,
+            station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
+            nlr_station_id BIGINT NOT NULL,
+            connector_type TEXT NOT NULL,
+            network TEXT,
+            charging_level TEXT,
+            power_kw REAL,
+            port_count INTEGER,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE (station_id, connector_type, network)
+        )
+        """
+    )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ev_sync_runs (
+            id BIGSERIAL PRIMARY KEY,
+            sync_type TEXT NOT NULL,
+            state_filter TEXT,
+            status TEXT NOT NULL,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            completed_at TIMESTAMPTZ,
+            stations_imported INTEGER DEFAULT 0,
+            stations_updated INTEGER DEFAULT 0,
+            errors INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+        """
+    )
+
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
+
+
 def get_nlr_api_key() -> Optional[str]:
     """Retrieve stored NLR API key from app_config."""
     try:
@@ -232,6 +308,8 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
     if not api_key:
         raise RuntimeError("NLR API key not configured. Add it in Settings → Charger Locations.")
 
+    _ensure_charger_tables()
+
     log.info("Starting EV station import (state=%s, limit_pages=%s)", state, limit_pages)
 
     imported_count = 0
@@ -353,6 +431,8 @@ def import_ev_stations_with_strategy(
     api_key = get_nlr_api_key()
     if not api_key:
         raise RuntimeError("NLR API key not configured. Add it in Settings -> Charger Locations.")
+
+    _ensure_charger_tables()
 
     if page_size < 50:
         page_size = 50
