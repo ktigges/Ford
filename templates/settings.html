@@ -133,6 +133,44 @@
     </p>
   </div>
 
+  <div class="form-group">
+    <label for="charger_scope">Import Scope</label>
+    <select name="charger_scope" id="charger_scope" class="form-select">
+      <option value="all_us" {% if settings.charger_scope == 'all_us' %}selected{% endif %}>All US chargers</option>
+      <option value="single_state" {% if settings.charger_scope == 'single_state' %}selected{% endif %}>Single state only</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label for="charger_state_filter">State Filter (optional, 2-letter)</label>
+    <input type="text" name="charger_state_filter" id="charger_state_filter" class="form-input"
+           value="{{ settings.charger_state_filter }}" maxlength="2" placeholder="CA">
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      Used when scope is "Single state only".
+    </p>
+  </div>
+
+  <div class="form-group">
+    <label for="charger_fetch_strategy">Fetch Strategy</label>
+    <select name="charger_fetch_strategy" id="charger_fetch_strategy" class="form-select">
+      <option value="all_then_200" {% if settings.charger_fetch_strategy == 'all_then_200' %}selected{% endif %}>
+        Try limit=all first, fallback to paged mode
+      </option>
+      <option value="paged_200" {% if settings.charger_fetch_strategy == 'paged_200' %}selected{% endif %}>
+        Paged mode only
+      </option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label for="charger_page_size">Paged Fetch Size</label>
+    <input type="number" name="charger_page_size" id="charger_page_size" class="form-input"
+           value="{{ settings.charger_page_size }}" min="50" max="1000" step="50">
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      Recommended: 200. Used for paged mode and fallback pages.
+    </p>
+  </div>
+
   {% if charger_status %}
   <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.75rem; margin-bottom:0.75rem;">
     <h3 style="margin-top:0; font-size:0.95rem; color:var(--text);">Last Sync Status</h3>
@@ -179,8 +217,10 @@
   </div>
   {% endif %}
 
-  <div class="btn-group">
-    <button type="submit" class="btn">Save API Key</button>
+  <div class="btn-group" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    <button type="submit" name="action" value="save_charger_api_key" class="btn">Save API Key</button>
+    <button type="submit" name="action" value="save_charger_options" class="btn">Save Import Options</button>
+    <button type="submit" name="action" value="run_charger_import" class="btn">Run Charger Import Now</button>
   </div>
 </form>
 

@@ -217,6 +217,10 @@ def create_app() -> Flask:
         "developing": "off",  # disables startup delay if 'on'
         "home_country": "US",  # inferred from timezone; used for charger region
         "nlr_api_key": "",  # NREL Alt Fuel Stations API key (empty until set)
+        "charger_scope": "all_us",  # all_us or single_state
+        "charger_state_filter": "",  # two-letter state when scope=single_state
+        "charger_fetch_strategy": "all_then_200",  # all_then_200 or paged_200
+        "charger_page_size": "200",  # page size for paged mode / fallback
     }
 
     # Safety limits for polling intervals (seconds)
@@ -2417,6 +2421,70 @@ def create_app() -> Flask:
     def settings():
         """Application settings: display units, polling intervals, log level."""
         if request.method == "POST":
+            action = (request.form.get("action") or "save_settings").strip()
+
+            if action in ("save_charger_api_key", "save_charger_options", "run_charger_import"):
+                nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
+                if nlr_api_key:
+                    nlr_chargers.set_nlr_api_key(nlr_api_key)
+                    log.info("NLR API key updated")
+
+                charger_scope = (request.form.get("charger_scope", "all_us") or "all_us").strip()
+                if charger_scope not in ("all_us", "single_state"):
+                    charger_scope = "all_us"
+
+                state_filter = (request.form.get("charger_state_filter", "") or "").strip().upper()
+                if charger_scope == "single_state" and state_filter and state_filter not in nlr_chargers.US_STATES:
+                    flash(f"Invalid state code '{state_filter}'. Falling back to all US.", "warning")
+                    charger_scope = "all_us"
+                    state_filter = ""
+
+                fetch_strategy = (request.form.get("charger_fetch_strategy", "all_then_200") or "all_then_200").strip()
+                if fetch_strategy not in ("all_then_200", "paged_200"):
+                    fetch_strategy = "all_then_200"
+
+                page_size_raw = (request.form.get("charger_page_size", "200") or "200").strip()
+                try:
+                    page_size = int(page_size_raw)
+                except (ValueError, TypeError):
+                    page_size = 200
+                page_size = max(50, min(1000, page_size))
+
+                _set_setting("charger_scope", charger_scope, "Charger import scope: all_us or single_state")
+                _set_setting("charger_state_filter", state_filter, "State code filter for charger import")
+                _set_setting(
+                    "charger_fetch_strategy",
+                    fetch_strategy,
+                    "Charger import strategy: all_then_200 or paged_200",
+                )
+                _set_setting("charger_page_size", str(page_size), "Charger import page size")
+
+                if action == "save_charger_api_key":
+                    flash("NIL/NLR API key saved.", "success")
+                    return redirect(url_for("settings"))
+
+                if action == "save_charger_options":
+                    flash("Charger import options saved.", "success")
+                    return redirect(url_for("settings"))
+
+                state_for_import = state_filter if charger_scope == "single_state" and state_filter else None
+                try:
+                    result = nlr_chargers.import_ev_stations_with_strategy(
+                        state=state_for_import,
+                        strategy=fetch_strategy,
+                        page_size=page_size,
+                    )
+                    flash(
+                        "Charger import complete: "
+                        f"{result.get('updated', 0)} upserted, {result.get('errors', 0)} errors, "
+                        f"mode={result.get('fetch_mode_used', 'paged')}, pages={result.get('pages_processed', 0)}",
+                        "success",
+                    )
+                except Exception as exc:
+                    log.error("Charger import failed: %s", exc)
+                    flash(f"Charger import failed: {exc}", "error")
+                return redirect(url_for("settings"))
+
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
 
             requested_tz = (request.form.get("timezone", "") or "").strip() or _SETTINGS_DEFAULTS["timezone"]
@@ -2448,13 +2516,6 @@ def create_app() -> Flask:
             # Developing mode toggle
             developing = "on" if request.form.get("developing") == "on" else "off"
             _set_setting("developing", developing, "Disable startup delay for development")
-
-            # NLR API key (charger integration)
-            nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
-            if nlr_api_key:
-                nlr_chargers.set_nlr_api_key(nlr_api_key)
-                flash("NLR API key saved.", "success")
-                log.info("NLR API key updated")
 
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
@@ -2512,6 +2573,10 @@ def create_app() -> Flask:
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
             "nlr_api_key": _get_setting("nlr_api_key") or "",
+            "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
+            "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
+            "charger_fetch_strategy": _get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"],
+            "charger_page_size": _get_setting("charger_page_size") or _SETTINGS_DEFAULTS["charger_page_size"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
