@@ -154,20 +154,20 @@
     <label for="charger_fetch_strategy">Fetch Strategy</label>
     <select name="charger_fetch_strategy" id="charger_fetch_strategy" class="form-select">
       <option value="all_then_200" {% if settings.charger_fetch_strategy == 'all_then_200' %}selected{% endif %}>
-        Try limit=all first, fallback to paged mode
+        Try limit=all first, fallback to state-by-state chunks
       </option>
       <option value="paged_200" {% if settings.charger_fetch_strategy == 'paged_200' %}selected{% endif %}>
-        Paged mode only
+        State-by-state chunks only
       </option>
     </select>
   </div>
 
   <div class="form-group">
-    <label for="charger_page_size">Paged Fetch Size</label>
+    <label for="charger_page_size">Chunk Size (reserved)</label>
     <input type="number" name="charger_page_size" id="charger_page_size" class="form-input"
            value="{{ settings.charger_page_size }}" min="50" max="1000" step="50">
     <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
-      Recommended: 200. Used for paged mode and fallback pages.
+      This endpoint ignores offset; this value is reserved for future API pagination support.
     </p>
   </div>
 
