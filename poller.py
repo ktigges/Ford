@@ -42,6 +42,32 @@ _charging_sessions_table_present: bool | None = None
 _charging_session_by_vin: dict[str, dict[str, datetime | str]] = {}
 
 
+def _insert_telemetry_row(vin: str, polled_at: datetime, raw: dict) -> None:
+    """Insert a telemetry row, auto-fixing sequence drift from DB restore if needed."""
+    sql = "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)"
+    params = (vin, polled_at, json.dumps(raw))
+    try:
+        db.execute(sql, params)
+        return
+    except Exception as exc:
+        err = str(exc).lower()
+        # After backup/restore, telemetry_id_seq can lag behind MAX(id), causing id collisions.
+        if "telemetry_pkey" not in err or "duplicate key value" not in err:
+            raise
+
+    log.warning("Telemetry insert hit duplicate PK; realigning telemetry ID sequence and retrying")
+    db.execute(
+        """
+        SELECT setval(
+            pg_get_serial_sequence('telemetry', 'id'),
+            COALESCE((SELECT MAX(id) FROM telemetry), 0) + 1,
+            false
+        )
+        """
+    )
+    db.execute(sql, params)
+
+
 # ── Public control API ─────────────────────────────────────────────
 
 def is_running() -> bool:
@@ -213,10 +239,7 @@ def _do_poll(provider: str, vin: str) -> None:
 
     # Step 3: Store data
     log.info("[STEP 3/3] Storing telemetry and updating state tables...")
-    db.execute(
-        "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)",
-        (vin, now, json.dumps(raw)),
-    )
+    _insert_telemetry_row(vin, now, raw)
 
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
@@ -319,10 +342,7 @@ def initial_setup_poll(provider: str, vin: str | None = None) -> str:
     # Step 4: Store telemetry + state
     log.info("[SETUP STEP 4/4] Storing telemetry and populating state tables...")
     now = datetime.now(timezone.utc)
-    db.execute(
-        "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)",
-        (vin, now, json.dumps(raw)),
-    )
+    _insert_telemetry_row(vin, now, raw)
 
     # Ford wraps all metrics under a "metrics" key
     metrics = raw.get("metrics", raw)

@@ -117,14 +117,14 @@
 
 <!-- EV Charger Integration -->
 <form method="post" class="card form-card">
-  <h2>EV Charger Network (NLR/NREL)</h2>
+  <h2>EV Charger Network (NIL/NLR/NREL)</h2>
   <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
     Connect to the NREL Alt Fuel Stations API to import and maintain a database of EV charging stations.
     This data is used for route planning and AI model training.
   </p>
 
   <div class="form-group">
-    <label for="nlr_api_key">NLR API Key</label>
+    <label for="nlr_api_key">NIL/NLR API Key</label>
     <input type="password" name="nlr_api_key" id="nlr_api_key" class="form-input"
            value="{{ settings.nlr_api_key }}" placeholder="HIlQvDzVPbVZquZZbwKu6cvGDouAmcMoKyZnlYyK">
     <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
@@ -181,6 +181,44 @@
 
   <div class="btn-group">
     <button type="submit" class="btn">Save API Key</button>
+  </div>
+</form>
+
+<form method="post" action="{{ url_for('sequence_alignment_settings') }}" class="card form-card">
+  <h2>Database Sequence Alignment</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Keeps serial IDs in sync after restore operations by aligning each sequence to <strong>MAX(id)+1</strong>.
+  </p>
+
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.75rem; margin-bottom:0.75rem; font-size:0.85rem;">
+    <div><strong>Status:</strong>
+      {% if sequence_alignment.last_run %}
+        Last run at {{ sequence_alignment.last_run }}
+      {% else %}
+        Not run yet
+      {% endif %}
+    </div>
+    <div style="margin-top:0.35rem;"><strong>Next startup:</strong>
+      {% if sequence_alignment.force_next_startup %}
+        Queued to run once
+      {% else %}
+        Not queued
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label for="force_next_startup">
+      <input type="checkbox" name="force_next_startup" id="force_next_startup" value="on"
+             {% if sequence_alignment.force_next_startup %}checked{% endif %}
+             style="width:auto; margin-right:0.5rem;">
+      Run sequence alignment once on next startup (recommended after DB restore)
+    </label>
+  </div>
+
+  <div class="btn-group" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    <button type="submit" name="action" value="save_restore_option" class="btn">Save Restore Option</button>
+    <button type="submit" name="action" value="run_now" class="btn">Run Sequence Alignment Now</button>
   </div>
 </form>
 

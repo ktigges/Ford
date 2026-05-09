@@ -283,6 +283,98 @@ def create_app() -> Flask:
                 return col
         return None
 
+    def _align_id_sequence(table_name: str) -> bool:
+        """Align table id sequence to MAX(id)+1 when the table uses a serial/bigserial id."""
+        if not _table_exists(table_name) or not _column_exists(table_name, "id"):
+            return False
+
+        row = db.fetch_one("SELECT pg_get_serial_sequence(%s, 'id') AS seq", (table_name,))
+        seq_name = row["seq"] if row else None
+        if not seq_name:
+            return False
+
+        db.execute(
+            f"""
+            SELECT setval(
+                pg_get_serial_sequence('{table_name}', 'id'),
+                COALESCE((SELECT MAX(id) FROM {table_name}), 0) + 1,
+                false
+            )
+            """
+        )
+        return True
+
+    _SEQUENCE_ALIGNMENT_MARKER_KEY = "startup_sequence_alignment_v1_done"
+    _SEQUENCE_ALIGNMENT_FORCE_KEY = "startup_sequence_alignment_force_next_startup"
+    _SEQUENCE_ALIGNMENT_TABLES = (
+        "telemetry",
+        "charging_history",
+        "charging_sessions",
+        "polling_config",
+        "oauth_credentials",
+        "drives",
+        "drive_points",
+        "ev_stations",
+        "ev_charger_connectors",
+        "ev_sync_runs",
+    )
+
+    def _run_sequence_alignment(force: bool = False) -> list[str]:
+        """Align serial/bigserial sequences to MAX(id)+1 (one-time unless forced)."""
+        if not _table_exists("app_config"):
+            return []
+
+        marker = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_MARKER_KEY,),
+        )
+        force_row = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_FORCE_KEY,),
+        )
+        force_requested = (
+            force_row is not None
+            and str(force_row.get("value", "")).strip().lower() in ("on", "true", "1", "yes")
+        )
+
+        should_run = force or force_requested or marker is None
+        if not should_run:
+            return []
+
+        aligned_tables: list[str] = []
+        for table_name in _SEQUENCE_ALIGNMENT_TABLES:
+            if _align_id_sequence(table_name):
+                aligned_tables.append(table_name)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            """
+            INSERT INTO app_config (key, value, description, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (
+                _SEQUENCE_ALIGNMENT_MARKER_KEY,
+                now_iso,
+                "One-time startup repair: aligned serial sequences to MAX(id)+1",
+            ),
+        )
+        # Clear one-shot force flag after a run.
+        db.execute(
+            """
+            INSERT INTO app_config (key, value, description, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (
+                _SEQUENCE_ALIGNMENT_FORCE_KEY,
+                "off",
+                "If on, run sequence alignment once at next app startup",
+            ),
+        )
+
+        return aligned_tables
+
     def _run_startup_migrations() -> list[str]:
         """Apply lightweight schema migrations at startup and return applied change labels."""
         if not db.is_available():
@@ -413,6 +505,12 @@ def create_app() -> Flask:
         if _table_exists("ev_sync_runs"):
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
+
+        # One-time repair after backup/restore (or when queued by UI):
+        # align serial sequences to table MAX(id)+1 to prevent duplicate PKs.
+        aligned_tables = _run_sequence_alignment(force=False)
+        if aligned_tables:
+            applied.append("Aligned ID sequences: " + ", ".join(aligned_tables))
 
         if _table_exists("app_config") and applied:
             db.execute(
@@ -2432,9 +2530,59 @@ def create_app() -> Flask:
         
         # Get charger sync status
         charger_status = nlr_chargers.get_sync_status()
+
+        seq_marker = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_MARKER_KEY,),
+        )
+        seq_force = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_FORCE_KEY,),
+        )
+        sequence_alignment = {
+            "last_run": seq_marker["value"] if seq_marker else None,
+            "force_next_startup": (
+                seq_force is not None
+                and str(seq_force.get("value", "")).strip().lower() in ("on", "true", "1", "yes")
+            ),
+        }
         
         return render_template("settings.html", settings=current, ssl=ssl_cfg,
-                               ssl_status=ssl_status, charger_status=charger_status)
+                               ssl_status=ssl_status, charger_status=charger_status,
+                               sequence_alignment=sequence_alignment)
+
+    @app.route("/settings/sequence-alignment", methods=["POST"])
+    def sequence_alignment_settings():
+        """Manage database ID sequence alignment controls from the Settings page."""
+        action = (request.form.get("action") or "").strip()
+
+        if action == "run_now":
+            aligned_tables = _run_sequence_alignment(force=True)
+            if aligned_tables:
+                flash(
+                    "Sequence alignment completed for: " + ", ".join(aligned_tables),
+                    "success",
+                )
+            else:
+                flash(
+                    "Sequence alignment completed. No serial ID tables required adjustment.",
+                    "success",
+                )
+        elif action == "save_restore_option":
+            force_next = "on" if request.form.get("force_next_startup") == "on" else "off"
+            _set_setting(
+                _SEQUENCE_ALIGNMENT_FORCE_KEY,
+                force_next,
+                "If on, run sequence alignment once at next app startup",
+            )
+            if force_next == "on":
+                flash("Sequence alignment is queued for next startup.", "success")
+            else:
+                flash("Sequence alignment is not queued for next startup.", "success")
+        else:
+            flash("Unknown sequence-alignment action.", "warning")
+
+        return redirect(url_for("settings"))
 
     @app.route("/settings/upload-image", methods=["POST"])
     def upload_vehicle_image():
