@@ -347,8 +347,8 @@ def import_ev_stations_with_strategy(
     """Import EV stations with selectable fetch strategy.
 
     Strategies:
-    - "all_then_200": try one-shot limit="all" first, then fallback to paged fetch.
-    - "paged_200": always use paged fetch at page_size.
+    - "all_then_200": try one-shot limit="all" first, then fallback to state chunks.
+    - "paged_200": compatibility alias; uses state chunks because this API ignores offset.
     """
     api_key = get_nlr_api_key()
     if not api_key:
@@ -365,7 +365,7 @@ def import_ev_stations_with_strategy(
     page = 0
     total_results = None
     sync_run_id = None
-    fetch_mode_used = "paged"
+    fetch_mode_used = "state_chunks"
 
     try:
         sync_result = db.execute_returning(
@@ -390,9 +390,9 @@ def import_ev_stations_with_strategy(
                     log.info("Using one-shot charger import (stations=%d)", len(stations))
                 else:
                     stations = []
-                    log.warning("One-shot charger import returned partial/empty result; falling back to paged mode")
+                    log.warning("One-shot charger import returned partial/empty result; falling back to state chunks")
             except Exception as e:
-                log.warning("One-shot charger import failed (%s); falling back to paged mode", e)
+                log.warning("One-shot charger import failed (%s); falling back to state chunks", e)
 
         if fetch_mode_used == "all":
             for station in stations:
@@ -411,27 +411,31 @@ def import_ev_stations_with_strategy(
                     _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
             page = 1
         else:
-            while True:
-                if limit_pages is not None and page >= limit_pages:
+            # NREL/NLR endpoint currently ignores offset for this resource,
+            # so fallback uses state-by-state chunks instead of page offsets.
+            states_to_fetch = [state] if state else sorted(US_STATES)
+            chunks_seen = 0
+
+            for st in states_to_fetch:
+                if limit_pages is not None and chunks_seen >= limit_pages:
                     log.info("Reached limit_pages=%d, stopping import", limit_pages)
                     break
 
-                offset = page * page_size
                 try:
                     data = _nlr_get(
                         fuel_type=FUEL_TYPE_ELEC,
-                        state=state,
-                        limit=page_size,
-                        offset=offset,
+                        state=st,
+                        limit="all",
+                        offset=0,
                     )
-                    total_results = data.get("total_results", 0)
                     batch = data.get("fuel_stations", [])
+                    total_results = (total_results or 0) + len(batch)
 
                     if not batch:
-                        log.info("No more stations to import (page %d, offset %d)", page, offset)
-                        break
+                        chunks_seen += 1
+                        continue
 
-                    log.info("Processing page %d (%d stations, total_results=%d)", page, len(batch), total_results)
+                    log.info("Processing state chunk %s (%d stations)", st, len(batch))
                     for station in batch:
                         if station.get("fuel_type_code") != FUEL_TYPE_ELEC:
                             continue
@@ -446,11 +450,13 @@ def import_ev_stations_with_strategy(
 
                         for charging_unit in station.get("ev_charging_units", []):
                             _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
-                    page += 1
+                    chunks_seen += 1
                 except Exception as e:
-                    log.error("Error fetching page %d: %s", page, e)
+                    log.error("Error fetching state chunk %s: %s", st, e)
                     error_count += 1
-                    break
+                    chunks_seen += 1
+
+            page = chunks_seen
 
         if sync_run_id:
             db.execute(
