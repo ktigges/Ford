@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Public Chargers – Lightning{% endblock %}
+{% block content %}
+<h1>Public Chargers</h1>
+<p class="muted">Summary of imported public charging data.</p>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Stations</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.stations }}</p>
+  </div>
+  <div class="card">
+    <h2>Connectors</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.connectors }}</p>
+  </div>
+  <div class="card">
+    <h2>States Covered</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.states }}</p>
+  </div>
+  <div class="card">
+    <h2>Networks</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.networks }}</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Latest Sync</h2>
+  {% if sync_status %}
+  <table>
+    <tbody>
+      <tr><th>Status</th><td>{{ sync_status.status }}</td></tr>
+      <tr><th>Type</th><td>{{ sync_status.sync_type }}</td></tr>
+      <tr><th>State Filter</th><td>{{ sync_status.state_filter }}</td></tr>
+      <tr><th>Started</th><td>{{ sync_status.started_at }}</td></tr>
+      <tr><th>Completed</th><td>{{ sync_status.completed_at or 'In progress' }}</td></tr>
+      <tr><th>Imported</th><td>{{ sync_status.stations_imported or 0 }}</td></tr>
+      <tr><th>Updated</th><td>{{ sync_status.stations_updated or 0 }}</td></tr>
+      <tr><th>Errors</th><td>{{ sync_status.errors or 0 }}</td></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No sync runs yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Stations By State</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>State</th><th>Stations</th></tr></thead>
+      <tbody>
+        {% for row in by_state %}
+        <tr><td>{{ row.state }}</td><td>{{ row.station_count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Connector Types</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Connector</th><th>Connectors</th><th>Stations</th></tr></thead>
+        <tbody>
+          {% for row in connector_types %}
+          <tr>
+            <td>{{ row.connector_type }}</td>
+            <td>{{ row.connector_count }}</td>
+            <td>{{ row.station_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Charging Levels</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th>Connectors</th></tr></thead>
+        <tbody>
+          {% for row in charging_levels %}
+          <tr>
+            <td>{{ row.charging_level }}</td>
+            <td>{{ row.connector_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Top Networks</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Network</th><th>Stations</th></tr></thead>
+      <tbody>
+        {% for row in network_breakdown %}
+        <tr><td>{{ row.network_name }}</td><td>{{ row.station_count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Recent Sync Runs</h2>
+  {% if recent_runs %}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Type</th>
+          <th>State</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Completed</th>
+          <th>Updated</th>
+          <th>Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in recent_runs %}
+        <tr>
+          <td>{{ run.id }}</td>
+          <td>{{ run.sync_type }}</td>
+          <td>{{ run.state_filter }}</td>
+          <td>{{ run.status }}</td>
+          <td>{{ run.started_at }}</td>
+          <td>{{ run.completed_at or 'In progress' }}</td>
+          <td>{{ run.stations_updated or 0 }}</td>
+          <td>{{ run.errors or 0 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No sync history available.</p>
+  {% endif %}
+</div>
+{% endblock %}
