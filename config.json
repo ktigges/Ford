@@ -1,7 +1,6 @@
 {
   "environment": "development",
   "port": 5000,
-
   "database": {
     "host": "localhost",
     "port": 5432,
@@ -20,7 +19,7 @@
   },
   "ssl": {
     "enabled": true,
-    "cert": "/Users/kevin/dev/Ford/certs/server.crt",
-    "key": "/Users/kevin/dev/Ford/certs/server.key"
+    "cert": "/home/sysadmin/Ford-dev/certs/server.crt",
+    "key": "/home/sysadmin/Ford-dev/certs/server.key"
   }
 }
