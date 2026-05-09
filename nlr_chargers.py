@@ -727,3 +727,51 @@ def get_station_count(state: Optional[str] = None) -> int:
     except Exception as e:
         log.error("Failed to get station count: %s", e)
         return 0
+
+
+def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
+    """Mark stale in-progress sync runs as failed.
+
+    This handles interrupted jobs (for example app restarts) that would
+    otherwise remain in_progress forever.
+    """
+    try:
+        stale_after_minutes = max(5, int(stale_after_minutes))
+    except (TypeError, ValueError):
+        stale_after_minutes = 45
+
+    try:
+        stale_rows = db.fetch_all(
+            """
+            SELECT id
+            FROM ev_sync_runs
+            WHERE status = 'in_progress'
+              AND completed_at IS NULL
+              AND started_at < now() - (%s * interval '1 minute')
+            """,
+            (stale_after_minutes,),
+        )
+        if not stale_rows:
+            return 0
+
+        for row in stale_rows:
+            db.execute(
+                """
+                UPDATE ev_sync_runs
+                SET status = %s,
+                    completed_at = now(),
+                    errors = COALESCE(errors, 0) + 1
+                WHERE id = %s
+                """,
+                ("failed", row["id"]),
+            )
+
+        log.warning(
+            "Marked %d stale charger sync run(s) as failed (stale_after_minutes=%d)",
+            len(stale_rows),
+            stale_after_minutes,
+        )
+        return len(stale_rows)
+    except Exception as e:
+        log.error("Failed stale sync-run cleanup: %s", e)
+        return 0
