@@ -70,7 +70,7 @@ def set_nlr_api_key(api_key: str) -> bool:
 def _nlr_get(
     fuel_type: str = FUEL_TYPE_ELEC,
     state: Optional[str] = None,
-    limit: int = 1000,
+    limit: int | str = 1000,
     offset: int = 0,
 ) -> Dict[str, Any]:
     """Fetch EV stations from NLR API with pagination.
@@ -78,7 +78,7 @@ def _nlr_get(
     Args:
         fuel_type: Fuel type code (default: ELEC for electric)
         state: US state code (optional filter)
-        limit: Records per page (default 1000)
+        limit: Records per page (or "all" if API supports it)
         offset: Result offset for pagination
 
     Returns:
@@ -330,6 +330,154 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
 
     except Exception as e:
         log.error("Import failed: %s", e)
+        if sync_run_id:
+            db.execute(
+                "UPDATE ev_sync_runs SET status = %s, completed_at = now() WHERE id = %s",
+                ("failed", sync_run_id),
+            )
+        raise
+
+
+def import_ev_stations_with_strategy(
+    state: Optional[str] = None,
+    strategy: str = "all_then_200",
+    page_size: int = 200,
+    limit_pages: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Import EV stations with selectable fetch strategy.
+
+    Strategies:
+    - "all_then_200": try one-shot limit="all" first, then fallback to paged fetch.
+    - "paged_200": always use paged fetch at page_size.
+    """
+    api_key = get_nlr_api_key()
+    if not api_key:
+        raise RuntimeError("NLR API key not configured. Add it in Settings -> Charger Locations.")
+
+    if page_size < 50:
+        page_size = 50
+    if page_size > 1000:
+        page_size = 1000
+
+    imported_count = 0
+    updated_count = 0
+    error_count = 0
+    page = 0
+    total_results = None
+    sync_run_id = None
+    fetch_mode_used = "paged"
+
+    try:
+        sync_result = db.execute_returning(
+            """
+            INSERT INTO ev_sync_runs (sync_type, state_filter, status, started_at)
+            VALUES (%s, %s, %s, now())
+            RETURNING id
+            """,
+            (f"manual_import_{strategy}", state or "all", "in_progress"),
+        )
+        sync_run_id = sync_result["id"] if sync_result else None
+
+        stations: list[dict[str, Any]] = []
+        if strategy == "all_then_200":
+            try:
+                one_shot = _nlr_get(fuel_type=FUEL_TYPE_ELEC, state=state, limit="all", offset=0)
+                total_results = one_shot.get("total_results", 0)
+                stations = one_shot.get("fuel_stations", [])
+                # Use one-shot result only if it appears complete.
+                if stations and (total_results is None or len(stations) >= total_results):
+                    fetch_mode_used = "all"
+                    log.info("Using one-shot charger import (stations=%d)", len(stations))
+                else:
+                    stations = []
+                    log.warning("One-shot charger import returned partial/empty result; falling back to paged mode")
+            except Exception as e:
+                log.warning("One-shot charger import failed (%s); falling back to paged mode", e)
+
+        if fetch_mode_used == "all":
+            for station in stations:
+                if station.get("fuel_type_code") != FUEL_TYPE_ELEC:
+                    continue
+                if station.get("status_code") != "E":
+                    continue
+
+                station_db_id = _upsert_ev_station(station)
+                if not station_db_id:
+                    error_count += 1
+                    continue
+                updated_count += 1
+
+                for charging_unit in station.get("ev_charging_units", []):
+                    _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
+            page = 1
+        else:
+            while True:
+                if limit_pages is not None and page >= limit_pages:
+                    log.info("Reached limit_pages=%d, stopping import", limit_pages)
+                    break
+
+                offset = page * page_size
+                try:
+                    data = _nlr_get(
+                        fuel_type=FUEL_TYPE_ELEC,
+                        state=state,
+                        limit=page_size,
+                        offset=offset,
+                    )
+                    total_results = data.get("total_results", 0)
+                    batch = data.get("fuel_stations", [])
+
+                    if not batch:
+                        log.info("No more stations to import (page %d, offset %d)", page, offset)
+                        break
+
+                    log.info("Processing page %d (%d stations, total_results=%d)", page, len(batch), total_results)
+                    for station in batch:
+                        if station.get("fuel_type_code") != FUEL_TYPE_ELEC:
+                            continue
+                        if station.get("status_code") != "E":
+                            continue
+
+                        station_db_id = _upsert_ev_station(station)
+                        if not station_db_id:
+                            error_count += 1
+                            continue
+                        updated_count += 1
+
+                        for charging_unit in station.get("ev_charging_units", []):
+                            _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
+                    page += 1
+                except Exception as e:
+                    log.error("Error fetching page %d: %s", page, e)
+                    error_count += 1
+                    break
+
+        if sync_run_id:
+            db.execute(
+                """
+                UPDATE ev_sync_runs
+                SET status = %s, completed_at = now(),
+                    stations_imported = %s, stations_updated = %s, errors = %s
+                WHERE id = %s
+                """,
+                ("completed", imported_count, updated_count, error_count, sync_run_id),
+            )
+
+        result = {
+            "success": True,
+            "imported": imported_count,
+            "updated": updated_count,
+            "errors": error_count,
+            "total_results": total_results,
+            "pages_processed": page,
+            "sync_run_id": sync_run_id,
+            "fetch_mode_used": fetch_mode_used,
+            "page_size": page_size,
+        }
+        log.info("EV station import complete: %s", result)
+        return result
+    except Exception as e:
+        log.error("Import with strategy failed: %s", e)
         if sync_run_id:
             db.execute(
                 "UPDATE ev_sync_runs SET status = %s, completed_at = now() WHERE id = %s",
