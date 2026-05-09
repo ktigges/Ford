@@ -57,6 +57,9 @@ TABLES_ORDERED = [
     "departure_schedule",
     "drives",
     "drive_points",
+    "ev_stations",
+    "ev_charger_connectors",
+    "ev_sync_runs",
 ]
 
 _SENSITIVE_OAUTH_FIELDS = ("client_secret", "refresh_token", "access_token")

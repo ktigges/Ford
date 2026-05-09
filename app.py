@@ -5,8 +5,8 @@ poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.6.0
-Date:        2026-05-08
+Version:     0.6.0.0
+Date:        2026-05-09
 """
 
 import logging
@@ -25,6 +25,7 @@ import poller
 import units
 import backup
 import crypto
+import nlr_chargers
 
 # ── Logging setup ──────────────────────────────────────────────────
 
@@ -187,7 +188,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.6.0"
+    app.config["APP_VERSION"] = "0.6.0.0"
     app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     app.config["STARTUP_DB_NOTICE"] = None
 
@@ -214,6 +215,8 @@ def create_app() -> Flask:
         "conservative_polling": "off",
         "autostart_poller": "off",
         "developing": "off",  # disables startup delay if 'on'
+        "home_country": "US",  # inferred from timezone; used for charger region
+        "nlr_api_key": "",  # NREL Alt Fuel Stations API key (empty until set)
     }
 
     # Safety limits for polling intervals (seconds)
@@ -323,6 +326,93 @@ def create_app() -> Flask:
             db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_charging_sessions_open ON charging_sessions (vin) WHERE in_progress = TRUE"
             )
+
+        # Create EV charger tables for NLR API integration
+        if not _table_exists("ev_stations"):
+            db.execute(
+                """
+                CREATE TABLE ev_stations (
+                    id BIGSERIAL PRIMARY KEY,
+                    nlr_station_id BIGINT NOT NULL UNIQUE,
+                    station_name TEXT NOT NULL,
+                    street_address TEXT,
+                    city TEXT,
+                    state TEXT,
+                    zip TEXT,
+                    country TEXT DEFAULT 'US',
+                    latitude DOUBLE PRECISION NOT NULL,
+                    longitude DOUBLE PRECISION NOT NULL,
+                    status_code TEXT,
+                    fuel_type_code TEXT DEFAULT 'ELEC',
+                    access_code TEXT,
+                    access_detail TEXT,
+                    owner_type_code TEXT,
+                    facility_type TEXT,
+                    network_name TEXT,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    nlr_updated_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    raw_data JSONB,
+                    UNIQUE (nlr_station_id)
+                )
+                """
+            )
+            applied.append("Created ev_stations table")
+
+        if not _table_exists("ev_charger_connectors"):
+            db.execute(
+                """
+                CREATE TABLE ev_charger_connectors (
+                    id BIGSERIAL PRIMARY KEY,
+                    station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
+                    nlr_station_id BIGINT NOT NULL,
+                    connector_type TEXT NOT NULL,
+                    network TEXT,
+                    charging_level TEXT,
+                    power_kw REAL,
+                    port_count INTEGER,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (station_id, connector_type, network),
+                    UNIQUE (station_id, connector_type, network)
+                )
+                """
+            )
+            applied.append("Created ev_charger_connectors table")
+
+        if not _table_exists("ev_sync_runs"):
+            db.execute(
+                """
+                CREATE TABLE ev_sync_runs (
+                    id BIGSERIAL PRIMARY KEY,
+                    sync_type TEXT NOT NULL,
+                    state_filter TEXT,
+                    status TEXT NOT NULL,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    completed_at TIMESTAMPTZ,
+                    stations_imported INTEGER DEFAULT 0,
+                    stations_updated INTEGER DEFAULT 0,
+                    errors INTEGER DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            applied.append("Created ev_sync_runs table")
+
+        # Create indexes for charger tables
+        if _table_exists("ev_stations"):
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
+
+        if _table_exists("ev_charger_connectors"):
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)"
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
+
+        if _table_exists("ev_sync_runs"):
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
 
         if _table_exists("app_config") and applied:
             db.execute(
@@ -2261,6 +2351,13 @@ def create_app() -> Flask:
             developing = "on" if request.form.get("developing") == "on" else "off"
             _set_setting("developing", developing, "Disable startup delay for development")
 
+            # NLR API key (charger integration)
+            nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
+            if nlr_api_key:
+                nlr_chargers.set_nlr_api_key(nlr_api_key)
+                flash("NLR API key saved.", "success")
+                log.info("NLR API key updated")
+
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
             iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
@@ -2316,6 +2413,7 @@ def create_app() -> Flask:
             "conservative_polling": _get_setting("conservative_polling"),
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
+            "nlr_api_key": _get_setting("nlr_api_key") or "",
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -2331,8 +2429,12 @@ def create_app() -> Flask:
             else:
                 ssl_status["cert_valid"] = False
                 ssl_status["cert_message"] = "Certificate or key file not found on disk"
+        
+        # Get charger sync status
+        charger_status = nlr_chargers.get_sync_status()
+        
         return render_template("settings.html", settings=current, ssl=ssl_cfg,
-                               ssl_status=ssl_status)
+                               ssl_status=ssl_status, charger_status=charger_status)
 
     @app.route("/settings/upload-image", methods=["POST"])
     def upload_vehicle_image():
@@ -2514,6 +2616,7 @@ def create_app() -> Flask:
         "brake_state", "security_state", "environment_state",
         "vehicle_configuration", "departure_schedule",
         "polling_config", "collector_status", "app_config", "oauth_credentials",
+        "ev_stations", "ev_charger_connectors", "ev_sync_runs",
     ]
 
     @app.route("/db")
