@@ -102,6 +102,7 @@ def _ensure_charger_tables() -> None:
             state_filter TEXT,
             status TEXT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             completed_at TIMESTAMPTZ,
             stations_imported INTEGER DEFAULT 0,
             stations_updated INTEGER DEFAULT 0,
@@ -111,12 +112,33 @@ def _ensure_charger_tables() -> None:
         """
     )
 
+    db.execute(
+        "ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    )
+
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
+
+
+def _touch_sync_run(sync_run_id: Optional[int], updated_count: int, error_count: int) -> None:
+    """Persist lightweight progress heartbeat for a running sync job."""
+    if not sync_run_id:
+        return
+    db.execute(
+        """
+        UPDATE ev_sync_runs
+        SET stations_updated = %s,
+            errors = %s,
+            last_heartbeat_at = now()
+        WHERE id = %s
+        """,
+        (updated_count, error_count, sync_run_id),
+    )
 
 
 def get_nlr_api_key() -> Optional[str]:
@@ -376,8 +398,8 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
         # Create a sync run record
         sync_result = db.execute_returning(
             """
-            INSERT INTO ev_sync_runs (sync_type, state_filter, status, started_at)
-            VALUES (%s, %s, %s, now())
+            INSERT INTO ev_sync_runs (sync_type, state_filter, status, started_at, last_heartbeat_at)
+            VALUES (%s, %s, %s, now(), now())
             RETURNING id
             """,
             ("manual_import", state or "all", "in_progress"),
@@ -441,7 +463,8 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
                 """
                 UPDATE ev_sync_runs
                 SET status = %s, completed_at = now(),
-                    stations_imported = %s, stations_updated = %s, errors = %s
+                    stations_imported = %s, stations_updated = %s, errors = %s,
+                    last_heartbeat_at = now()
                 WHERE id = %s
                 """,
                 ("completed", imported_count, updated_count, error_count, sync_run_id),
@@ -463,7 +486,7 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
         log.error("Import failed: %s", e)
         if sync_run_id:
             db.execute(
-                "UPDATE ev_sync_runs SET status = %s, completed_at = now() WHERE id = %s",
+                "UPDATE ev_sync_runs SET status = %s, completed_at = now(), last_heartbeat_at = now() WHERE id = %s",
                 ("failed", sync_run_id),
             )
         raise
@@ -505,13 +528,14 @@ def import_ev_stations_with_strategy(
     try:
         sync_result = db.execute_returning(
             """
-            INSERT INTO ev_sync_runs (sync_type, state_filter, status, started_at)
-            VALUES (%s, %s, %s, now())
+            INSERT INTO ev_sync_runs (sync_type, state_filter, status, started_at, last_heartbeat_at)
+            VALUES (%s, %s, %s, now(), now())
             RETURNING id
             """,
             (f"manual_import_{strategy}", state or "all", "in_progress"),
         )
         sync_run_id = sync_result["id"] if sync_result else None
+        _touch_sync_run(sync_run_id, updated_count, error_count)
         log.info(
             "Starting charger import (sync_run_id=%s, strategy=%s, state=%s, page_size=%s)",
             sync_run_id,
@@ -559,11 +583,7 @@ def import_ev_stations_with_strategy(
                         error_count,
                         elapsed_s,
                     )
-                    if sync_run_id:
-                        db.execute(
-                            "UPDATE ev_sync_runs SET stations_updated = %s, errors = %s WHERE id = %s",
-                            (updated_count, error_count, sync_run_id),
-                        )
+                    _touch_sync_run(sync_run_id, updated_count, error_count)
 
                 for charging_unit in station.get("ev_charging_units", []):
                     _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
@@ -582,6 +602,7 @@ def import_ev_stations_with_strategy(
 
                 try:
                     chunk_started = datetime.now(timezone.utc)
+                    _touch_sync_run(sync_run_id, updated_count, error_count)
                     log.info(
                         "State step %d/%d start (state=%s)",
                         idx,
@@ -633,11 +654,7 @@ def import_ev_stations_with_strategy(
                                 error_count,
                                 elapsed_s,
                             )
-                            if sync_run_id:
-                                db.execute(
-                                    "UPDATE ev_sync_runs SET stations_updated = %s, errors = %s WHERE id = %s",
-                                    (updated_count, error_count, sync_run_id),
-                                )
+                            _touch_sync_run(sync_run_id, updated_count, error_count)
 
                         for charging_unit in station.get("ev_charging_units", []):
                             _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
@@ -651,10 +668,12 @@ def import_ev_stations_with_strategy(
                         error_count,
                         elapsed_s,
                     )
+                    _touch_sync_run(sync_run_id, updated_count, error_count)
                     chunks_seen += 1
                 except Exception as e:
                     log.error("State step %d/%d failed (state=%s): %s", idx, total_chunks, st, e)
                     error_count += 1
+                    _touch_sync_run(sync_run_id, updated_count, error_count)
                     chunks_seen += 1
 
             page = chunks_seen
@@ -664,7 +683,8 @@ def import_ev_stations_with_strategy(
                 """
                 UPDATE ev_sync_runs
                 SET status = %s, completed_at = now(),
-                    stations_imported = %s, stations_updated = %s, errors = %s
+                    stations_imported = %s, stations_updated = %s, errors = %s,
+                    last_heartbeat_at = now()
                 WHERE id = %s
                 """,
                 ("completed", imported_count, updated_count, error_count, sync_run_id),
@@ -689,7 +709,7 @@ def import_ev_stations_with_strategy(
         log.error("Import with strategy failed: %s", e)
         if sync_run_id:
             db.execute(
-                "UPDATE ev_sync_runs SET status = %s, completed_at = now() WHERE id = %s",
+                "UPDATE ev_sync_runs SET status = %s, completed_at = now(), last_heartbeat_at = now() WHERE id = %s",
                 ("failed", sync_run_id),
             )
         raise
@@ -700,8 +720,9 @@ def get_sync_status() -> Optional[Dict[str, Any]]:
     try:
         row = db.fetch_one(
             """
-            SELECT id, sync_type, state_filter, status, started_at, completed_at,
-                   stations_imported, stations_updated, errors
+             SELECT id, sync_type, state_filter, status, started_at, last_heartbeat_at, completed_at,
+                 stations_imported, stations_updated, errors,
+                 EXTRACT(EPOCH FROM (now() - COALESCE(last_heartbeat_at, started_at)))::BIGINT AS heartbeat_age_seconds
             FROM ev_sync_runs
             ORDER BY started_at DESC
             LIMIT 1
@@ -747,7 +768,7 @@ def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
             FROM ev_sync_runs
             WHERE status = 'in_progress'
               AND completed_at IS NULL
-              AND started_at < now() - (%s * interval '1 minute')
+                            AND COALESCE(last_heartbeat_at, started_at) < now() - (%s * interval '1 minute')
             """,
             (stale_after_minutes,),
         )
@@ -760,6 +781,7 @@ def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
                 UPDATE ev_sync_runs
                 SET status = %s,
                     completed_at = now(),
+                    last_heartbeat_at = now(),
                     errors = COALESCE(errors, 0) + 1
                 WHERE id = %s
                 """,
