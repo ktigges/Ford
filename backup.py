@@ -20,6 +20,8 @@ import subprocess
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from psycopg2.extras import Json
+
 import config
 import crypto
 import db
@@ -57,6 +59,17 @@ TABLES_ORDERED = [
 ]
 
 _SENSITIVE_OAUTH_FIELDS = ("client_secret", "refresh_token", "access_token")
+
+
+def _adapt_value_for_insert(value):
+    """Adapt Python values to PostgreSQL-friendly insert values.
+
+    psycopg2 cannot bind native dict/list directly; JSON/JSONB columns must
+    receive an adapted JSON object.
+    """
+    if isinstance(value, (dict, list)):
+        return Json(value)
+    return value
 
 
 def _ensure_backup_dir() -> str:
@@ -239,7 +252,7 @@ def restore_json(filepath: str) -> dict:
 
             # Use ON CONFLICT DO NOTHING to be safe with existing data
             sql = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
-            values = [row[c] for c in columns]
+            values = [_adapt_value_for_insert(row[c]) for c in columns]
 
             try:
                 db.execute(sql, tuple(values))
