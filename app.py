@@ -2639,9 +2639,14 @@ def create_app() -> Flask:
                 ssl_status["cert_valid"] = False
                 ssl_status["cert_message"] = "Certificate or key file not found on disk"
         
+        charger_job_running = _charger_import_is_running()
+        if not charger_job_running:
+            stale_count = nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
+            if stale_count:
+                log.warning("Detected and closed %d stale charger import run(s)", stale_count)
+
         # Get charger sync status
         charger_status = nlr_chargers.get_sync_status()
-        charger_job_running = _charger_import_is_running()
 
         seq_marker = db.fetch_one(
             "SELECT value FROM app_config WHERE key = %s",
@@ -2866,6 +2871,108 @@ def create_app() -> Flask:
             flash(f"Re-poll failed: {exc}", "error")
 
         return redirect(url_for("manage"))
+
+    @app.route("/chargers/public")
+    def public_chargers():
+        """Show summary analytics for imported public charger data."""
+        if not _table_exists("ev_stations"):
+            flash("Public charger table is missing. Run a charger import first.", "warning")
+            return redirect(url_for("settings"))
+
+        if _table_exists("ev_sync_runs"):
+            nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
+
+        totals = {
+            "stations": 0,
+            "connectors": 0,
+            "states": 0,
+            "networks": 0,
+        }
+
+        row = db.fetch_one("SELECT COUNT(*) AS cnt FROM ev_stations")
+        totals["stations"] = row["cnt"] if row else 0
+
+        row = db.fetch_one("SELECT COUNT(DISTINCT state) AS cnt FROM ev_stations WHERE state IS NOT NULL AND state <> ''")
+        totals["states"] = row["cnt"] if row else 0
+
+        row = db.fetch_one("SELECT COUNT(DISTINCT network_name) AS cnt FROM ev_stations WHERE network_name IS NOT NULL AND network_name <> ''")
+        totals["networks"] = row["cnt"] if row else 0
+
+        if _table_exists("ev_charger_connectors"):
+            row = db.fetch_one("SELECT COUNT(*) AS cnt FROM ev_charger_connectors")
+            totals["connectors"] = row["cnt"] if row else 0
+
+        by_state = db.fetch_all(
+            """
+            SELECT
+                COALESCE(state, 'UNKNOWN') AS state,
+                COUNT(*) AS station_count
+            FROM ev_stations
+            GROUP BY COALESCE(state, 'UNKNOWN')
+            ORDER BY station_count DESC, state ASC
+            """
+        )
+
+        connector_types = []
+        charging_levels = []
+        if _table_exists("ev_charger_connectors"):
+            connector_types = db.fetch_all(
+                """
+                SELECT
+                    COALESCE(NULLIF(connector_type, ''), 'UNKNOWN') AS connector_type,
+                    COUNT(*) AS connector_count,
+                    COUNT(DISTINCT station_id) AS station_count
+                FROM ev_charger_connectors
+                GROUP BY COALESCE(NULLIF(connector_type, ''), 'UNKNOWN')
+                ORDER BY connector_count DESC, connector_type ASC
+                """
+            )
+            charging_levels = db.fetch_all(
+                """
+                SELECT
+                    COALESCE(NULLIF(charging_level, ''), 'UNKNOWN') AS charging_level,
+                    COUNT(*) AS connector_count
+                FROM ev_charger_connectors
+                GROUP BY COALESCE(NULLIF(charging_level, ''), 'UNKNOWN')
+                ORDER BY connector_count DESC, charging_level ASC
+                """
+            )
+
+        network_breakdown = db.fetch_all(
+            """
+            SELECT
+                COALESCE(NULLIF(network_name, ''), 'UNKNOWN') AS network_name,
+                COUNT(*) AS station_count
+            FROM ev_stations
+            GROUP BY COALESCE(NULLIF(network_name, ''), 'UNKNOWN')
+            ORDER BY station_count DESC, network_name ASC
+            LIMIT 30
+            """
+        )
+
+        sync_status = nlr_chargers.get_sync_status()
+        recent_runs = []
+        if _table_exists("ev_sync_runs"):
+            recent_runs = db.fetch_all(
+                """
+                SELECT id, sync_type, state_filter, status, started_at, completed_at,
+                       stations_imported, stations_updated, errors
+                FROM ev_sync_runs
+                ORDER BY started_at DESC
+                LIMIT 10
+                """
+            )
+
+        return render_template(
+            "public_chargers.html",
+            totals=totals,
+            by_state=by_state,
+            connector_types=connector_types,
+            charging_levels=charging_levels,
+            network_breakdown=network_breakdown,
+            sync_status=sync_status,
+            recent_runs=recent_runs,
+        )
 
     # ── Database viewer ────────────────────────────────────────────
 
