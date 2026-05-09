@@ -16,6 +16,7 @@ import logging
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
+from requests.exceptions import Timeout
 
 import db
 import config
@@ -28,6 +29,9 @@ NLR_API_BASE = "https://developer.nrel.gov/api/alt-fuel-stations/v1.json"
 
 # Fuel type code for electric vehicles
 FUEL_TYPE_ELEC = "ELEC"
+
+NLR_HTTP_TIMEOUT_SEC = 45
+NLR_MAX_RETRIES = 2
 
 # US state codes (for validation)
 US_STATES = {
@@ -148,6 +152,8 @@ def _nlr_get(
     state: Optional[str] = None,
     limit: int | str = 1000,
     offset: int = 0,
+    timeout_sec: int = NLR_HTTP_TIMEOUT_SEC,
+    max_retries: int = NLR_MAX_RETRIES,
 ) -> Dict[str, Any]:
     """Fetch EV stations from NLR API with pagination.
 
@@ -180,17 +186,64 @@ def _nlr_get(
         "User-Agent": "Ford-Lightning-EV/1.0",
     }
 
-    try:
-        nlr_log.debug("NLR GET %s params=%s", NLR_API_BASE, params)
-        resp = requests.get(NLR_API_BASE, params=params, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        nlr_log.info("NLR response: %d total results, %d returned", 
-                     data.get("total_results", 0), len(data.get("fuel_stations", [])))
-        return data
-    except requests.exceptions.RequestException as e:
-        nlr_log.error("NLR API error: %s", e)
-        raise
+    last_exc = None
+    for attempt in range(1, max_retries + 2):
+        req_started = datetime.now(timezone.utc)
+        try:
+            nlr_log.info(
+                "NLR request start (attempt=%d/%d, state=%s, limit=%s, offset=%s)",
+                attempt,
+                max_retries + 1,
+                state or "all",
+                limit,
+                offset,
+            )
+            nlr_log.debug("NLR GET %s params=%s", NLR_API_BASE, params)
+            resp = requests.get(NLR_API_BASE, params=params, headers=headers, timeout=timeout_sec)
+            resp.raise_for_status()
+            data = resp.json()
+            elapsed_s = (datetime.now(timezone.utc) - req_started).total_seconds()
+            nlr_log.info(
+                "NLR request ok (state=%s, returned=%d, total=%d, elapsed_s=%.2f)",
+                state or "all",
+                len(data.get("fuel_stations", [])),
+                data.get("total_results", 0),
+                elapsed_s,
+            )
+            return data
+        except Timeout as e:
+            elapsed_s = (datetime.now(timezone.utc) - req_started).total_seconds()
+            nlr_log.warning(
+                "NLR request timeout (attempt=%d/%d, state=%s, limit=%s, offset=%s, elapsed_s=%.2f)",
+                attempt,
+                max_retries + 1,
+                state or "all",
+                limit,
+                offset,
+                elapsed_s,
+            )
+            last_exc = e
+            if attempt >= (max_retries + 1):
+                break
+        except requests.exceptions.RequestException as e:
+            nlr_log.error(
+                "NLR API request failed (attempt=%d/%d, state=%s, limit=%s, offset=%s): %s",
+                attempt,
+                max_retries + 1,
+                state or "all",
+                limit,
+                offset,
+                e,
+            )
+            raise
+
+    nlr_log.error(
+        "NLR request exhausted retries (state=%s, limit=%s, offset=%s)",
+        state or "all",
+        limit,
+        offset,
+    )
+    raise RuntimeError("NLR API request timed out after retries") from last_exc
 
 
 def _upsert_ev_station(station: Dict[str, Any]) -> Optional[int]:
@@ -442,6 +495,8 @@ def import_ev_stations_with_strategy(
     imported_count = 0
     updated_count = 0
     error_count = 0
+    processed_count = 0
+    started_at = datetime.now(timezone.utc)
     page = 0
     total_results = None
     sync_run_id = None
@@ -457,6 +512,13 @@ def import_ev_stations_with_strategy(
             (f"manual_import_{strategy}", state or "all", "in_progress"),
         )
         sync_run_id = sync_result["id"] if sync_result else None
+        log.info(
+            "Starting charger import (sync_run_id=%s, strategy=%s, state=%s, page_size=%s)",
+            sync_run_id,
+            strategy,
+            state or "all",
+            page_size,
+        )
 
         stations: list[dict[str, Any]] = []
         if strategy == "all_then_200":
@@ -486,6 +548,22 @@ def import_ev_stations_with_strategy(
                     error_count += 1
                     continue
                 updated_count += 1
+                processed_count += 1
+
+                if processed_count % 250 == 0:
+                    elapsed_s = int((datetime.now(timezone.utc) - started_at).total_seconds())
+                    log.info(
+                        "Charger import progress (sync_run_id=%s, mode=all, processed=%d, errors=%d, elapsed_s=%d)",
+                        sync_run_id,
+                        processed_count,
+                        error_count,
+                        elapsed_s,
+                    )
+                    if sync_run_id:
+                        db.execute(
+                            "UPDATE ev_sync_runs SET stations_updated = %s, errors = %s WHERE id = %s",
+                            (updated_count, error_count, sync_run_id),
+                        )
 
                 for charging_unit in station.get("ev_charging_units", []):
                     _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
@@ -495,13 +573,21 @@ def import_ev_stations_with_strategy(
             # so fallback uses state-by-state chunks instead of page offsets.
             states_to_fetch = [state] if state else sorted(US_STATES)
             chunks_seen = 0
+            total_chunks = len(states_to_fetch)
 
-            for st in states_to_fetch:
+            for idx, st in enumerate(states_to_fetch, start=1):
                 if limit_pages is not None and chunks_seen >= limit_pages:
                     log.info("Reached limit_pages=%d, stopping import", limit_pages)
                     break
 
                 try:
+                    chunk_started = datetime.now(timezone.utc)
+                    log.info(
+                        "State step %d/%d start (state=%s)",
+                        idx,
+                        total_chunks,
+                        st,
+                    )
                     data = _nlr_get(
                         fuel_type=FUEL_TYPE_ELEC,
                         state=st,
@@ -512,10 +598,18 @@ def import_ev_stations_with_strategy(
                     total_results = (total_results or 0) + len(batch)
 
                     if not batch:
+                        elapsed_s = int((datetime.now(timezone.utc) - chunk_started).total_seconds())
+                        log.info("State step %d/%d done (state=%s, stations=0, elapsed_s=%d)", idx, total_chunks, st, elapsed_s)
                         chunks_seen += 1
                         continue
 
-                    log.info("Processing state chunk %s (%d stations)", st, len(batch))
+                    log.info(
+                        "State step %d/%d fetched (state=%s, stations=%d)",
+                        idx,
+                        total_chunks,
+                        st,
+                        len(batch),
+                    )
                     for station in batch:
                         if station.get("fuel_type_code") != FUEL_TYPE_ELEC:
                             continue
@@ -527,12 +621,39 @@ def import_ev_stations_with_strategy(
                             error_count += 1
                             continue
                         updated_count += 1
+                        processed_count += 1
+
+                        if processed_count % 250 == 0:
+                            elapsed_s = int((datetime.now(timezone.utc) - started_at).total_seconds())
+                            log.info(
+                                "Charger import progress (sync_run_id=%s, mode=state_chunks, state=%s, processed=%d, errors=%d, elapsed_s=%d)",
+                                sync_run_id,
+                                st,
+                                processed_count,
+                                error_count,
+                                elapsed_s,
+                            )
+                            if sync_run_id:
+                                db.execute(
+                                    "UPDATE ev_sync_runs SET stations_updated = %s, errors = %s WHERE id = %s",
+                                    (updated_count, error_count, sync_run_id),
+                                )
 
                         for charging_unit in station.get("ev_charging_units", []):
                             _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
+                    elapsed_s = int((datetime.now(timezone.utc) - chunk_started).total_seconds())
+                    log.info(
+                        "State step %d/%d done (state=%s, processed_total=%d, errors=%d, elapsed_s=%d)",
+                        idx,
+                        total_chunks,
+                        st,
+                        processed_count,
+                        error_count,
+                        elapsed_s,
+                    )
                     chunks_seen += 1
                 except Exception as e:
-                    log.error("Error fetching state chunk %s: %s", st, e)
+                    log.error("State step %d/%d failed (state=%s): %s", idx, total_chunks, st, e)
                     error_count += 1
                     chunks_seen += 1
 
@@ -554,13 +675,15 @@ def import_ev_stations_with_strategy(
             "imported": imported_count,
             "updated": updated_count,
             "errors": error_count,
+            "processed": processed_count,
             "total_results": total_results,
             "pages_processed": page,
             "sync_run_id": sync_run_id,
             "fetch_mode_used": fetch_mode_used,
             "page_size": page_size,
         }
-        log.info("EV station import complete: %s", result)
+        elapsed_s = int((datetime.now(timezone.utc) - started_at).total_seconds())
+        log.info("EV station import complete (elapsed_s=%d): %s", elapsed_s, result)
         return result
     except Exception as e:
         log.error("Import with strategy failed: %s", e)
