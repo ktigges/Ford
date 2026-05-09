@@ -12,6 +12,7 @@ Date:        2026-05-09
 import logging
 import os
 import sys
+import threading
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -75,6 +76,8 @@ def _setup_logging() -> None:
         "oauth": "debug_oauth.log",
         "ford_api": "debug_api.log",
         "poller": "debug_poller.log",
+        "nlr_chargers": "debug_chargers.log",
+        "nlr_api": "debug_nlr_api.log",
     }
     for logger_name, filename in debug_files.items():
         fh = logging.FileHandler(os.path.join(log_dir, filename))
@@ -230,6 +233,39 @@ def create_app() -> Flask:
         "poll_interval_moving":   {"min": 15, "max": 3600},
         "poll_interval_charging": {"min": 60, "max": 3600},
     }
+
+    _charger_import_guard = threading.Lock()
+    _charger_import_thread: dict[str, threading.Thread | None] = {"thread": None}
+
+    def _charger_import_is_running() -> bool:
+        t = _charger_import_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _run_charger_import_background(state_for_import: str | None, fetch_strategy: str, page_size: int) -> None:
+        try:
+            log.info(
+                "Background charger import started (state=%s, strategy=%s, page_size=%s)",
+                state_for_import or "all",
+                fetch_strategy,
+                page_size,
+            )
+            result = nlr_chargers.import_ev_stations_with_strategy(
+                state=state_for_import,
+                strategy=fetch_strategy,
+                page_size=page_size,
+            )
+            log.info(
+                "Background charger import completed (sync_run_id=%s, mode=%s, processed=%s, errors=%s)",
+                result.get("sync_run_id"),
+                result.get("fetch_mode_used", "paged"),
+                result.get("processed", result.get("updated", 0)),
+                result.get("errors", 0),
+            )
+        except Exception as exc:
+            log.error("Background charger import failed: %s", exc)
+        finally:
+            with _charger_import_guard:
+                _charger_import_thread["thread"] = None
 
     def _clamp_interval(key: str, raw_value: str) -> int:
         """Clamp a polling interval to its configured min/max range."""
@@ -2467,21 +2503,32 @@ def create_app() -> Flask:
                     return redirect(url_for("settings"))
 
                 state_for_import = state_filter if charger_scope == "single_state" and state_filter else None
-                try:
-                    result = nlr_chargers.import_ev_stations_with_strategy(
-                        state=state_for_import,
-                        strategy=fetch_strategy,
-                        page_size=page_size,
+                with _charger_import_guard:
+                    already_running = _charger_import_is_running()
+                    if not already_running:
+                        t = threading.Thread(
+                            target=_run_charger_import_background,
+                            args=(state_for_import, fetch_strategy, page_size),
+                            name="charger-import-job",
+                            daemon=True,
+                        )
+                        _charger_import_thread["thread"] = t
+                        t.start()
+
+                if already_running:
+                    flash("A charger import is already running. Check Last Sync Status/logs for progress.", "warning")
+                else:
+                    log.info(
+                        "Manual charger import submitted as background job (scope=%s, state=%s, strategy=%s, page_size=%s)",
+                        charger_scope,
+                        state_for_import or "all",
+                        fetch_strategy,
+                        page_size,
                     )
                     flash(
-                        "Charger import complete: "
-                        f"{result.get('updated', 0)} upserted, {result.get('errors', 0)} errors, "
-                        f"mode={result.get('fetch_mode_used', 'paged')}, pages={result.get('pages_processed', 0)}",
+                        "Charger import started in background. You can leave this page; progress is logged and status updates below.",
                         "success",
                     )
-                except Exception as exc:
-                    log.error("Charger import failed: %s", exc)
-                    flash(f"Charger import failed: {exc}", "error")
                 return redirect(url_for("settings"))
 
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
@@ -2594,6 +2641,7 @@ def create_app() -> Flask:
         
         # Get charger sync status
         charger_status = nlr_chargers.get_sync_status()
+        charger_job_running = _charger_import_is_running()
 
         seq_marker = db.fetch_one(
             "SELECT value FROM app_config WHERE key = %s",
@@ -2613,7 +2661,8 @@ def create_app() -> Flask:
         
         return render_template("settings.html", settings=current, ssl=ssl_cfg,
                                ssl_status=ssl_status, charger_status=charger_status,
-                               sequence_alignment=sequence_alignment)
+                               sequence_alignment=sequence_alignment,
+                               charger_job_running=charger_job_running)
 
     @app.route("/settings/sequence-alignment", methods=["POST"])
     def sequence_alignment_settings():
@@ -3147,7 +3196,6 @@ def create_app() -> Flask:
 
 
     # ── Startup pause and UI suppression ──
-    import threading
     app.config["STARTUP_READY"] = False
 
     def _delayed_startup():
