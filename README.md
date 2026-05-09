@@ -330,6 +330,29 @@ Backups are stored in the `backups/` directory at the project root.
 
 The project now includes scripts to automate first install, memory tuning, persistent startup, and migration restore.
 
+### Host prerequisites (Debian/Ubuntu)
+
+Install Docker plus Python venv support before first install:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io python3 python3-pip python3-venv
+```
+
+If you see this error during install:
+
+```
+The virtual environment was not created successfully because ensurepip is not available
+```
+
+install the matching venv package and retry:
+
+```bash
+sudo apt install -y python3-venv python3.10-venv
+rm -rf venv
+./scripts/install.sh
+```
+
 ### First-time install (recommended)
 
 ```bash
@@ -349,6 +372,7 @@ What `scripts/install.sh` does:
    - `effective_cache_size` (default `1536MB`)
    - `max_wal_size` / `min_wal_size`
 6. Restarts DB container and verifies effective settings.
+7. Creates `./venv` if missing and installs `requirements.txt`.
 
 You can override memory values with env vars, for example:
 
@@ -425,10 +449,14 @@ This launches a temporary clean PostgreSQL container/volume, restores backup, ru
 ```bash
 # 1. Set up PostgreSQL (see "Database Setup" section above)
 
-# 2. Install Python dependencies
+# 2. Create/activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. Run the app
+# 4. Run the app
 python app.py
 ```
 
