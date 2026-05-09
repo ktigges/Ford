@@ -115,6 +115,75 @@
   </div>
 </form>
 
+<!-- EV Charger Integration -->
+<form method="post" class="card form-card">
+  <h2>EV Charger Network (NLR/NREL)</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Connect to the NREL Alt Fuel Stations API to import and maintain a database of EV charging stations.
+    This data is used for route planning and AI model training.
+  </p>
+
+  <div class="form-group">
+    <label for="nlr_api_key">NLR API Key</label>
+    <input type="password" name="nlr_api_key" id="nlr_api_key" class="form-input"
+           value="{{ settings.nlr_api_key }}" placeholder="HIlQvDzVPbVZquZZbwKu6cvGDouAmcMoKyZnlYyK">
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      Get your free API key from <a href="https://developer.nrel.gov/signup/" target="_blank" rel="noopener">NREL Developer Portal</a>.
+      Currently supports US chargers only.
+    </p>
+  </div>
+
+  {% if charger_status %}
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.75rem; margin-bottom:0.75rem;">
+    <h3 style="margin-top:0; font-size:0.95rem; color:var(--text);">Last Sync Status</h3>
+    <table style="width:100%; font-size:0.85rem;">
+      <tr>
+        <td style="padding:0.25rem 0;">Status:</td>
+        <td style="padding:0.25rem 0; text-align:right;">
+          <span style="display:inline-block; padding:0.2rem 0.5rem; border-radius:3px; 
+                       background:{% if charger_status.status == 'completed' %}var(--accent-green){% elif charger_status.status == 'in_progress' %}var(--accent-blue){% else %}var(--accent-red){% endif %}; 
+                       color:white; font-weight:bold;">
+            {{ charger_status.status }}
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Type:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ charger_status.sync_type }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Started:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ charger_status.started_at.strftime('%Y-%m-%d %H:%M:%S') if charger_status.started_at else 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Completed:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ charger_status.completed_at.strftime('%Y-%m-%d %H:%M:%S') if charger_status.completed_at else 'In progress...' }}</td>
+      </tr>
+      {% if charger_status.status == 'completed' %}
+      <tr>
+        <td style="padding:0.25rem 0;">Stations:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ charger_status.stations_imported + charger_status.stations_updated }} total ({{ charger_status.stations_imported }} new, {{ charger_status.stations_updated }} updated)</td>
+      </tr>
+      {% endif %}
+      {% if charger_status.errors > 0 %}
+      <tr>
+        <td style="padding:0.25rem 0; color:var(--accent-red);">Errors:</td>
+        <td style="padding:0.25rem 0; text-align:right; color:var(--accent-red);">{{ charger_status.errors }}</td>
+      </tr>
+      {% endif %}
+    </table>
+  </div>
+  {% else %}
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.75rem; margin-bottom:0.75rem; font-size:0.85rem; color:var(--muted);">
+    No sync history yet. Import chargers to get started.
+  </div>
+  {% endif %}
+
+  <div class="btn-group">
+    <button type="submit" class="btn">Save API Key</button>
+  </div>
+</form>
+
 <form method="post" action="{{ url_for('ssl_settings') }}" enctype="multipart/form-data" class="card form-card">
   <h2>SSL / TLS (HTTPS)</h2>
   <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">

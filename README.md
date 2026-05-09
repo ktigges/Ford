@@ -1,7 +1,7 @@
 # ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.5.2  
+**Version:** 0.6.0.0  
 **Date:** 2026-05-08
 
 ---

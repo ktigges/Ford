@@ -444,3 +444,97 @@ CREATE INDEX idx_charging_history_vin_time ON charging_history (vin, polled_at D
 CREATE INDEX idx_charging_history_session_uuid ON charging_history (charging_session_uuid);
 CREATE INDEX idx_charging_sessions_vin_start ON charging_sessions (vin, started_at DESC);
 CREATE INDEX idx_charging_sessions_open ON charging_sessions (vin) WHERE in_progress = TRUE;
+
+-- =========================
+-- EV Charger Network (NLR)
+-- =========================
+CREATE TABLE ev_stations (
+    id BIGSERIAL PRIMARY KEY,
+    nlr_station_id BIGINT NOT NULL UNIQUE,
+    
+    station_name TEXT NOT NULL,
+    street_address TEXT,
+    city TEXT,
+    state TEXT,
+    zip TEXT,
+    country TEXT DEFAULT 'US',
+    
+    -- Geo (for route planning and nearest-charger queries)
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    
+    -- Status and access
+    status_code TEXT,  -- 'E' = operational
+    fuel_type_code TEXT DEFAULT 'ELEC',
+    access_code TEXT,  -- 'public', 'private', etc.
+    access_detail TEXT,
+    owner_type_code TEXT,
+    facility_type TEXT,
+    
+    -- Network operator info
+    network_name TEXT,  -- e.g., 'SHELL_RECHARGE', 'Non-Networked'
+    
+    -- Timestamps
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    nlr_updated_at TIMESTAMPTZ,  -- Last update from NLR API
+    created_at TIMESTAMPTZ DEFAULT now(),
+    
+    -- Raw data for future schema evolution
+    raw_data JSONB,
+    
+    UNIQUE (nlr_station_id)
+);
+
+CREATE TABLE ev_charger_connectors (
+    id BIGSERIAL PRIMARY KEY,
+    station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
+    nlr_station_id BIGINT NOT NULL,
+    
+    -- Connector type (J1772, CHADEMO, J1772COMBO, etc.)
+    connector_type TEXT NOT NULL,
+    
+    -- Network / charging level
+    network TEXT,  -- 'SHELL_RECHARGE', 'Non-Networked', etc.
+    charging_level TEXT,  -- 'level_1', 'level_2', 'dc_fast', etc.
+    
+    -- Power capacity
+    power_kw REAL,  -- Max power output in kW
+    port_count INTEGER,  -- Number of ports for this connector type
+    
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (station_id, connector_type, network),
+    UNIQUE (station_id, connector_type, network)
+);
+
+-- Track import/sync operations for audit trail and delta updates
+CREATE TABLE ev_sync_runs (
+    id BIGSERIAL PRIMARY KEY,
+    sync_type TEXT NOT NULL,  -- 'manual_import', 'scheduled_sync', etc.
+    state_filter TEXT,  -- US state code or 'all'
+    status TEXT NOT NULL,  -- 'in_progress', 'completed', 'failed'
+    
+    -- Timestamps
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    
+    -- Statistics
+    stations_imported INTEGER DEFAULT 0,
+    stations_updated INTEGER DEFAULT 0,
+    errors INTEGER DEFAULT 0,
+    
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- =========================
+-- Indexes for charger queries
+-- =========================
+CREATE INDEX idx_ev_stations_state ON ev_stations (state) WHERE country = 'US';
+CREATE INDEX idx_ev_stations_location ON ev_stations USING GIST (
+    ll_to_earth(latitude, longitude)
+);
+CREATE INDEX idx_ev_connectors_network ON ev_charger_connectors (network);
+CREATE INDEX idx_ev_connectors_charging_level ON ev_charger_connectors (charging_level);
+CREATE INDEX idx_ev_sync_runs_status ON ev_sync_runs (status);
+CREATE INDEX idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC);
