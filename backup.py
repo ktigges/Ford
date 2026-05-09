@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -216,7 +217,11 @@ def backup_json(label: str = "") -> str:
     return filepath
 
 
-def restore_json(filepath: str) -> dict:
+def restore_json(
+    filepath: str,
+    progress_cb: Callable[[str, int, int, int], None] | None = None,
+    progress_every: int = 500,
+) -> dict:
     """Restore all tables from a JSON backup file.
 
     Uses INSERT ... ON CONFLICT DO NOTHING to avoid overwriting
@@ -239,7 +244,11 @@ def restore_json(filepath: str) -> dict:
             continue
 
         restored = 0
-        for row in rows:
+        total_rows = len(rows)
+        if progress_cb:
+            progress_cb(table, 0, total_rows, restored)
+
+        for idx, row in enumerate(rows, start=1):
             # Re-encrypt sensitive fields with this host's key
             if table == "oauth_credentials":
                 for field in _SENSITIVE_OAUTH_FIELDS:
@@ -259,6 +268,9 @@ def restore_json(filepath: str) -> dict:
                 restored += 1
             except Exception as exc:
                 log.warning("  %s: row insert failed: %s", table, exc)
+
+            if progress_cb and (idx % max(1, progress_every) == 0 or idx == total_rows):
+                progress_cb(table, idx, total_rows, restored)
 
         summary[table] = restored
         log.info("  %s: %d/%d rows restored", table, restored, len(rows))

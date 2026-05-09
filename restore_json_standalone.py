@@ -9,6 +9,7 @@ If no path is provided, the script restores the newest JSON file in backups/.
 
 import os
 import sys
+import time
 
 import config
 import db
@@ -48,14 +49,27 @@ def main() -> int:
 
     config.load()
     db.init_pool()
+    start = time.time()
+
+    def _progress(table: str, processed: int, total: int, restored: int) -> None:
+        if processed == 0:
+            print(f"[{table}] starting ({total} rows)", flush=True)
+            return
+        print(
+            f"[{table}] {processed}/{total} processed, {restored} inserted",
+            flush=True,
+        )
+
     try:
-        summary = backup.restore_json(filepath)
+        summary = backup.restore_json(filepath, progress_cb=_progress, progress_every=250)
     finally:
         db.close_pool()
 
     total = sum(summary.values())
+    elapsed = time.time() - start
     print(f"JSON restore complete from: {filepath}")
     print(f"Total rows restored: {total}")
+    print(f"Elapsed: {elapsed:.1f}s")
     for table, count in summary.items():
         print(f"  {table}: {count}")
 
