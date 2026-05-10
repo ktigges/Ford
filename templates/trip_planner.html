@@ -11,42 +11,27 @@
     }
 
     .weather-card {
-        border: 1px solid #d8e2ec;
+        border: 1px solid #dde3ea;
         border-radius: 10px;
-        background: linear-gradient(180deg, #f7fbff 0%, #eef5fb 100%);
+        background: linear-gradient(180deg, #fbfcfd 0%, #f4f7fa 100%);
         padding: 8px 9px;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
     }
 
-    .wx-sun {
-        background: linear-gradient(180deg, #fff9df 0%, #fff3bf 100%);
-        border-color: #efd47a;
-    }
-
-    .wx-cloud {
-        background: linear-gradient(180deg, #eef4ff 0%, #e2eaf8 100%);
-        border-color: #b6c4df;
-    }
-
-    .wx-rain {
-        background: linear-gradient(180deg, #d9e7ff 0%, #b7cff5 100%);
-        border-color: #6d91d8;
-    }
-
-    .wx-snow {
-        background: linear-gradient(180deg, #eef8ff 0%, #dff0ff 100%);
-        border-color: #8eb8de;
-    }
-
-    .wx-storm {
-        background: linear-gradient(180deg, #d6dcf3 0%, #bdc7e8 100%);
-        border-color: #6a79af;
-    }
-
     .weather-icon {
-        font-size: 1.1rem;
+        font-size: 1.15rem;
         line-height: 1;
     }
+
+    .icon-clear { color: #f4b400; }
+    .icon-cloud { color: #7a8796; }
+    .icon-rain { color: #6b7280; }
+    .icon-snow {
+        color: #ffffff;
+        text-shadow: 0 0 2px #6f7f8f, 0 0 1px #6f7f8f;
+    }
+    .icon-storm { color: #556789; }
+    .icon-night { color: #8aa3c7; }
 
     .wx-temp {
         font-weight: 700;
@@ -57,6 +42,19 @@
         color: #5a6a7a;
         font-size: 0.78rem;
     }
+
+    .metric-pill {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        margin-left: 4px;
+    }
+
+    .severity-low { background: #dff5d7; color: #1c6b2f; }
+    .severity-medium { background: #fff1c9; color: #8a6500; }
+    .severity-high { background: #ffd8d8; color: #a11a1a; }
 
     .wind-badge {
         display: inline-block;
@@ -376,17 +374,46 @@
                     <div class="weather-strip">
                         {% for wx in plan.route_weather %}
                         {% set w = (wx.weather or '')|lower %}
-                        {% set wx_class = 'wx-sun' %}
-                        {% if 'thunder' in w %}
-                            {% set wx_class = 'wx-storm' %}
-                        {% elif 'snow' in w %}
-                            {% set wx_class = 'wx-snow' %}
-                        {% elif 'rain' in w or 'drizzle' in w %}
-                            {% set wx_class = 'wx-rain' %}
-                        {% elif 'cloud' in w or 'overcast' in w or 'fog' in w %}
-                            {% set wx_class = 'wx-cloud' %}
+                        {% set icon_name = 'bi-sun-fill' %}
+                        {% set icon_class = 'icon-clear' %}
+                        {% if wx.is_day is sameas false %}
+                            {% set icon_name = 'bi-moon-stars-fill' %}
+                            {% set icon_class = 'icon-night' %}
                         {% endif %}
-                        <div class="weather-card {{ wx_class }}">
+                        {% if 'thunder' in w %}
+                            {% set icon_name = 'bi-cloud-lightning-rain-fill' %}
+                            {% set icon_class = 'icon-storm' %}
+                        {% elif 'snow' in w %}
+                            {% set icon_name = 'bi-snow' %}
+                            {% set icon_class = 'icon-snow' %}
+                        {% elif 'rain' in w or 'drizzle' in w %}
+                            {% set icon_name = 'bi-cloud-rain-heavy-fill' %}
+                            {% set icon_class = 'icon-rain' %}
+                        {% elif 'cloud' in w or 'overcast' in w or 'fog' in w %}
+                            {% set icon_name = 'bi-cloud-fill' %}
+                            {% set icon_class = 'icon-cloud' %}
+                        {% elif wx.is_day is sameas false %}
+                            {% set icon_name = 'bi-moon-stars-fill' %}
+                            {% set icon_class = 'icon-night' %}
+                        {% endif %}
+
+                        {% set weather_severity = 'severity-low' %}
+                        {% if 'thunder' in w or 'snow' in w %}
+                            {% set weather_severity = 'severity-high' %}
+                        {% elif 'rain' in w or 'drizzle' in w or 'fog' in w or (wx.precipitation_pct is not none and wx.precipitation_pct >= 35) %}
+                            {% set weather_severity = 'severity-medium' %}
+                        {% endif %}
+
+                        {% set temp_severity = 'severity-low' %}
+                        {% if wx.temp_c is not none %}
+                            {% if wx.temp_c <= 0 or wx.temp_c >= 35 %}
+                                {% set temp_severity = 'severity-high' %}
+                            {% elif wx.temp_c <= 7 or wx.temp_c >= 30 %}
+                                {% set temp_severity = 'severity-medium' %}
+                            {% endif %}
+                        {% endif %}
+
+                        <div class="weather-card">
                             <div class="d-flex justify-content-between align-items-start mb-1">
                                 <div>
                                     <div class="fw-semibold">{{ wx.label }}</div>
@@ -399,7 +426,7 @@
                                     </div>
                                 </div>
                                 <span class="weather-icon">
-                                    {% if 'thunder' in w %}⛈{% elif 'snow' in w %}❄{% elif 'rain' in w or 'drizzle' in w %}🌧{% elif 'cloud' in w or 'overcast' in w or 'fog' in w %}☁{% else %}☀{% endif %}
+                                    <i class="bi {{ icon_name }} {{ icon_class }}"></i>
                                 </span>
                             </div>
                             <div class="wx-temp mb-1">
@@ -409,11 +436,12 @@
                                     {% else %}
                                     {{ "%.1f"|format(wx.temp_c) }}°C
                                     {% endif %}
+                                    <span class="metric-pill {{ temp_severity }}">temp</span>
                                 {% else %}
                                     --
                                 {% endif %}
                             </div>
-                            <div class="wx-meta mb-2">{{ wx.weather }} • ETA {{ wx.eta_local or wx.eta_utc }}{% if timezone_name %} {{ timezone_name }}{% endif %}</div>
+                            <div class="wx-meta mb-2">{{ wx.weather }} <span class="metric-pill {{ weather_severity }}">weather</span> • ETA {{ wx.eta_local or wx.eta_utc }}{% if timezone_name %} {{ timezone_name }}{% endif %}</div>
                             <div class="wx-meta mb-1">Precip {{ wx.precipitation_pct if wx.precipitation_pct is not none else 0 }}%</div>
                             <div class="precip-track mb-2">
                                 <div class="precip-fill" style="width: {{ wx.precipitation_pct if wx.precipitation_pct is not none else 0 }}%;"></div>
