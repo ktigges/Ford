@@ -13,6 +13,16 @@
              placeholder="City, state, ZIP, station, address">
     </div>
     <div>
+      <label for="origin">Origin (for distance)</label>
+      <input type="text" id="origin" name="origin" class="form-input" value="{{ filters.origin }}"
+             placeholder="Denver, CO or ZIP">
+    </div>
+    <div>
+      <label for="radius_miles">Radius (miles)</label>
+      <input type="number" id="radius_miles" name="radius_miles" class="form-input" min="1" step="1"
+             value="{{ filters.radius_miles }}" placeholder="25">
+    </div>
+    <div>
       <label for="network">Network</label>
       <select id="network" name="network" class="form-select">
         <option value="">Any network</option>
@@ -42,6 +52,12 @@
   <p class="muted" style="margin-top:0.5rem;">
     Matched stations: {{ filtered_total }}{% if filtered_total > filters.limit %} (showing top {{ filters.limit }}){% endif %}
   </p>
+  {% if origin_geo %}
+  <p class="muted" style="margin-top:0.25rem;">
+    Distance origin resolved to: {{ origin_geo.label }}
+  </p>
+  {% endif %}
+  <div id="chargers-map" style="height:420px; border:1px solid var(--border); border-radius:var(--radius); margin-bottom:0.75rem;"></div>
   <div class="table-scroll" style="max-height:420px; overflow-y:auto;">
     <table>
       <thead>
@@ -49,6 +65,7 @@
           <th>Station</th>
           <th>Location</th>
           <th>Network</th>
+          <th>Distance (mi)</th>
           <th>Max kW</th>
           <th>Connector Types</th>
           <th>Ports</th>
@@ -60,6 +77,7 @@
           <td>{{ row.station_name }}</td>
           <td>{{ row.city }}, {{ row.state }} {{ row.zip }}</td>
           <td>{{ row.network_name }}</td>
+          <td>{% if row.distance_miles is not none %}{{ '%.1f'|format(row.distance_miles) }}{% else %}--{% endif %}</td>
           <td>{{ '%.1f'|format(row.max_power_kw) if row.max_power_kw is not none else '0.0' }}</td>
           <td>{{ row.connector_types or 'UNKNOWN' }}</td>
           <td>{{ row.connector_count }}</td>
@@ -233,4 +251,53 @@
   <p class="muted">No sync history available.</p>
   {% endif %}
 </div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  (function () {
+    const points = {{ map_points | tojson }};
+    const origin = {{ origin_geo | tojson }};
+    const mapEl = document.getElementById("chargers-map");
+    if (!mapEl) return;
+
+    const map = L.map("chargers-map");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    const bounds = [];
+    for (const p of points) {
+      if (p.lat == null || p.lon == null) continue;
+      const marker = L.marker([p.lat, p.lon]).addTo(map);
+      const locationText = [p.city, p.state, p.zip].filter(Boolean).join(", ");
+      const distanceText = p.distance_miles == null ? "" : `<br>Distance: ${p.distance_miles.toFixed(1)} mi`;
+      marker.bindPopup(
+        `<strong>${p.name || "Station"}</strong><br>${locationText}<br>` +
+        `Network: ${p.network || "UNKNOWN"}<br>Max kW: ${(p.max_kw || 0).toFixed(1)}${distanceText}`
+      );
+      bounds.push([p.lat, p.lon]);
+    }
+
+    if (origin && origin.lat != null && origin.lon != null) {
+      const originMarker = L.circleMarker([origin.lat, origin.lon], {
+        radius: 7,
+        color: "#214a78",
+        fillColor: "#2d5f9a",
+        fillOpacity: 0.8,
+      }).addTo(map);
+      originMarker.bindPopup(`<strong>Origin</strong><br>${origin.label || ""}`);
+      bounds.push([origin.lat, origin.lon]);
+    }
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [24, 24] });
+    } else {
+      map.setView([39.5, -98.35], 4);
+    }
+  })();
+</script>
 {% endblock %}

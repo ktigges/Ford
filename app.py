@@ -11,12 +11,14 @@ Date:        2026-05-09
 
 import logging
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file
+import requests
 from werkzeug.utils import secure_filename
 
 import config
@@ -3094,6 +3096,8 @@ def create_app() -> Flask:
             nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
 
         location_query = (request.args.get("location") or "").strip()
+        origin_query = (request.args.get("origin") or "").strip()
+        radius_miles_raw = (request.args.get("radius_miles") or "").strip()
         network_filter = (request.args.get("network") or "").strip()
         min_kw_raw = (request.args.get("min_kw") or "").strip()
         result_limit = request.args.get("limit", 100, type=int)
@@ -3105,6 +3109,48 @@ def create_app() -> Flask:
                 min_kw = float(min_kw_raw)
             except (TypeError, ValueError):
                 min_kw = None
+
+        radius_miles = None
+        if radius_miles_raw:
+            try:
+                radius_miles = float(radius_miles_raw)
+            except (TypeError, ValueError):
+                radius_miles = None
+
+        def _geocode_location(query: str) -> dict[str, object] | None:
+            """Geocode free-form location text into lat/lon for distance filtering."""
+            q = (query or "").strip()
+            if not q:
+                return None
+            try:
+                resp = requests.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": q,
+                        "format": "json",
+                        "limit": 1,
+                        "countrycodes": "us",
+                    },
+                    headers={"User-Agent": "Ford-Lightning-EV/1.0"},
+                    timeout=8,
+                )
+                resp.raise_for_status()
+                rows = resp.json() or []
+                if not rows:
+                    return None
+                top = rows[0]
+                return {
+                    "lat": float(top.get("lat")),
+                    "lon": float(top.get("lon")),
+                    "label": str(top.get("display_name") or q),
+                }
+            except Exception as exc:
+                log.warning("Location geocode failed for '%s': %s", q, exc)
+                return None
+
+        origin_geo = _geocode_location(origin_query) if origin_query else None
+        if origin_query and not origin_geo:
+            flash("Could not resolve origin location for distance filter. Showing non-distance results.", "warning")
 
         totals = {
             "stations": 0,
@@ -3203,19 +3249,29 @@ def create_app() -> Flask:
 
         where_clauses: list[str] = []
         where_params: list[object] = []
+        distance_expr = """
+            (3958.7613 * 2 * ASIN(SQRT(
+                POWER(SIN(RADIANS(s.latitude - %s) / 2), 2)
+                + COS(RADIANS(%s)) * COS(RADIANS(s.latitude))
+                * POWER(SIN(RADIANS(s.longitude - %s) / 2), 2)
+            )))
+        """
+        distance_select_sql = "NULL::DOUBLE PRECISION AS distance_miles"
+        select_params: list[object] = []
 
         if location_query:
-            token = f"%{location_query}%"
-            where_clauses.append(
-                "(" 
-                "s.station_name ILIKE %s OR "
-                "COALESCE(s.street_address, '') ILIKE %s OR "
-                "COALESCE(s.city, '') ILIKE %s OR "
-                "COALESCE(s.state, '') ILIKE %s OR "
-                "COALESCE(s.zip, '') ILIKE %s"
-                ")"
-            )
-            where_params.extend([token, token, token, token, token])
+            tokens = [tok for tok in re.split(r"[\s,]+", location_query) if tok]
+            for token in tokens:
+                where_clauses.append(
+                    "concat_ws(' ', "
+                    "COALESCE(s.station_name, ''), "
+                    "COALESCE(s.street_address, ''), "
+                    "COALESCE(s.city, ''), "
+                    "COALESCE(s.state, ''), "
+                    "COALESCE(s.zip, '')"
+                    ") ILIKE %s"
+                )
+                where_params.append(f"%{token}%")
 
         if network_filter:
             where_clauses.append("COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') = %s")
@@ -3227,6 +3283,15 @@ def create_app() -> Flask:
                 where_params.append(min_kw)
             else:
                 where_clauses.append("1 = 0")
+
+        if origin_geo:
+            lat = float(origin_geo["lat"])
+            lon = float(origin_geo["lon"])
+            distance_select_sql = f"{distance_expr} AS distance_miles"
+            select_params.extend([lat, lat, lon])
+            if radius_miles is not None and radius_miles > 0:
+                where_clauses.append(f"{distance_expr} <= %s")
+                where_params.extend([lat, lat, lon, radius_miles])
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         connector_select = (
@@ -3257,16 +3322,40 @@ def create_app() -> Flask:
                 s.city,
                 s.state,
                 s.zip,
+                s.latitude,
+                s.longitude,
                 COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') AS network_name,
+                {distance_select_sql},
                 {connector_select}
             FROM ev_stations s
             {connector_join}
             {where_sql}
-            ORDER BY max_power_kw DESC, s.state ASC, s.city ASC, s.station_name ASC
+            ORDER BY
+                distance_miles ASC NULLS LAST,
+                max_power_kw DESC,
+                s.state ASC,
+                s.city ASC,
+                s.station_name ASC
             LIMIT %s
             """,
-            tuple([*where_params, result_limit]),
+            tuple([*select_params, *where_params, result_limit]),
         )
+
+        map_points = [
+            {
+                "name": row.get("station_name"),
+                "city": row.get("city"),
+                "state": row.get("state"),
+                "zip": row.get("zip"),
+                "network": row.get("network_name"),
+                "max_kw": float(row.get("max_power_kw") or 0),
+                "distance_miles": float(row.get("distance_miles")) if row.get("distance_miles") is not None else None,
+                "lat": float(row.get("latitude")) if row.get("latitude") is not None else None,
+                "lon": float(row.get("longitude")) if row.get("longitude") is not None else None,
+            }
+            for row in filtered_stations
+            if row.get("latitude") is not None and row.get("longitude") is not None
+        ]
 
         sync_status = nlr_chargers.get_sync_status()
         recent_runs = []
@@ -3286,10 +3375,14 @@ def create_app() -> Flask:
             totals=totals,
             filters={
                 "location": location_query,
+                "origin": origin_query,
+                "radius_miles": radius_miles_raw,
                 "network": network_filter,
                 "min_kw": min_kw_raw,
                 "limit": result_limit,
             },
+            origin_geo=origin_geo,
+            map_points=map_points,
             network_options=network_options,
             filtered_stations=filtered_stations,
             filtered_total=filtered_total,
