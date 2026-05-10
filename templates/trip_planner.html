@@ -24,8 +24,22 @@
                                    name="source" 
                                    value="{{ form.source }}"
                                    placeholder="City, State or Lat,Lon (e.g., Denver, CO or 39.7392,-104.9903)"
-                                   required>
+                                   {% if not form.use_current_source %}required{% endif %}>
                             <small class="form-text text-muted">Enter a place name or coordinates</small>
+                        </div>
+
+                        <div class="mb-3 form-check">
+                            <input type="checkbox"
+                                   class="form-check-input"
+                                   id="use_current_source"
+                                   name="use_current_source"
+                                   {% if form.use_current_source %}checked{% endif %}>
+                            <label class="form-check-label" for="use_current_source">
+                                Use current vehicle location as source
+                            </label>
+                            <small class="form-text text-muted d-block">
+                                Uses latest coordinates from vehicle telemetry and skips source geocoding.
+                            </small>
                         </div>
 
                         <div class="mb-3">
@@ -280,6 +294,36 @@ document.addEventListener('DOMContentLoaded', function() {
 document.getElementById('start_soc').addEventListener('input', function() {
     document.getElementById('socValue').textContent = this.value + '%';
 });
+
+// Optional source toggle: use latest vehicle location instead of geocoding source text.
+(function () {
+    const sourceInput = document.getElementById('source');
+    const toggle = document.getElementById('use_current_source');
+
+    if (!sourceInput || !toggle) {
+        return;
+    }
+
+    function syncSourceMode() {
+        if (toggle.checked) {
+            sourceInput.dataset.userValue = sourceInput.value;
+            sourceInput.value = '';
+            sourceInput.placeholder = 'Using current vehicle location';
+            sourceInput.disabled = true;
+            sourceInput.required = false;
+        } else {
+            sourceInput.disabled = false;
+            sourceInput.placeholder = 'City, State or Lat,Lon (e.g., Denver, CO or 39.7392,-104.9903)';
+            sourceInput.required = true;
+            if (sourceInput.dataset.userValue) {
+                sourceInput.value = sourceInput.dataset.userValue;
+            }
+        }
+    }
+
+    toggle.addEventListener('change', syncSourceMode);
+    syncSourceMode();
+})();
 </script>
 
 {% endblock %}
