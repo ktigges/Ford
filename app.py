@@ -32,7 +32,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify
+from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify, session
 import requests
 from werkzeug.utils import secure_filename
 
@@ -4216,6 +4216,12 @@ def create_app():
                                     wx["eta_local"] = dt_utc.astimezone(display_tz).strftime("%Y-%m-%d %I:%M %p")
                                 except Exception:
                                     wx["eta_local"] = eta_utc
+                            # Store plan in session for trip detail view
+                            from dataclasses import asdict
+                            plan_dict = asdict(plan)
+                            # Serialize charging stops properly
+                            plan_dict["charging_stops"] = [asdict(stop) for stop in plan.charging_stops]
+                            session["last_trip_plan"] = plan_dict
                     except Exception as exc:
                         log.exception(f"Trip planning failed: {exc}")
                         flash(f"Trip planning failed: {exc}", "error")
@@ -4282,6 +4288,44 @@ def create_app():
             timezone_name=timezone_name,
             baseline_energy_kwh=baseline_kwh,
             ml_energy_kwh=ml_kwh,
+        )
+
+    @app.route("/trip-detail", methods=["GET"])
+    def trip_detail():
+        """Detailed trip analysis view comparing baseline and ML estimates."""
+        plan = session.get("last_trip_plan")
+        if not plan:
+            flash("No trip plan available. Please calculate a trip first.", "warning")
+            return redirect(url_for("trip_planner"))
+        
+        unit_system = _get_setting("units") if db.is_available() else "imperial"
+        
+        # Get ML training status for context
+        ml_baseline_drives = _ml_last_trained_drive_count()
+        ml_completed_drives = _count_completed_training_drives()
+        ml_new_drives = max(0, ml_completed_drives - ml_baseline_drives)
+        ml_schema = _read_model_schema()
+        ml_retrain_status = {
+            "status": _get_setting("ml_retrain_status") or "idle",
+            "last_started_at": _get_setting("ml_retrain_last_started_at") or "",
+            "last_completed_at": _get_setting("ml_retrain_last_completed_at") or "",
+            "last_trigger": _get_setting("ml_retrain_last_trigger") or "",
+            "last_error": _get_setting("ml_retrain_last_error") or "",
+            "last_duration_sec": _get_setting("ml_retrain_last_duration_sec") or "",
+            "last_exit_code": _get_setting("ml_retrain_last_exit_code") or "",
+            "baseline_drives": ml_baseline_drives,
+            "completed_drives": ml_completed_drives,
+            "new_drives_since_last_train": ml_new_drives,
+            "schema_training_date": str(ml_schema.get("training_date") or ""),
+            "schema_num_training_drives": ml_schema.get("num_training_drives"),
+            "scheduler_running": _ml_retrain_scheduler_is_running(),
+        }
+        
+        return render_template(
+            "trip_detail.html",
+            plan=plan,
+            unit_system=unit_system,
+            ml_retrain_status=ml_retrain_status,
         )
 
     @app.route("/api/predict/trip", methods=["POST"])
