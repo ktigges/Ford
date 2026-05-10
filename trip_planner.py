@@ -1436,6 +1436,31 @@ def _can_complete_with_stops(
     return True, arrival_soc
 
 
+def _attach_weather_to_route_steps(route_steps: list[dict], route_weather: list[dict]) -> list[dict]:
+    """Attach nearest weather checkpoint stats to each route step for compact turn-level context."""
+    if not route_steps or not route_weather:
+        return route_steps
+
+    cumulative_km = 0.0
+    for step in route_steps:
+        step_km = float(step.get("distance_km") or 0.0)
+        cumulative_km += max(0.0, step_km)
+        target_miles = cumulative_km * 0.621371
+
+        nearest = min(
+            route_weather,
+            key=lambda wx: abs(float(wx.get("distance_miles") or 0.0) - target_miles),
+        )
+
+        step["step_weather"] = nearest.get("weather")
+        step["step_temp_c"] = nearest.get("temp_c")
+        step["step_wind_kmh"] = nearest.get("wind_kmh")
+        step["step_precipitation_pct"] = nearest.get("precipitation_pct")
+        step["step_is_day"] = nearest.get("is_day")
+
+    return route_steps
+
+
 # ── Main Trip Planning ─────────────────────────────────────────────
 
 def plan_trip(
@@ -1529,6 +1554,7 @@ def plan_trip(
     t_weather = time.perf_counter()
     route_weather = get_route_weather_timeline(polyline, distance_km, duration_sec)
     weather_elapsed = time.perf_counter() - t_weather
+    route_steps = _attach_weather_to_route_steps(route_steps, route_weather)
 
     if route_weather:
         start_weather = route_weather[0]
