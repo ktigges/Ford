@@ -171,7 +171,10 @@ class TripPlan:
     estimated_duration_min: int
     start_soc_percent: float
     arrival_soc_percent: float
-    energy_needed_kwh: float
+    # Both estimates for comparison
+    baseline_energy_needed_kwh: float
+    ml_energy_needed_kwh: float
+    energy_needed_kwh: float  # For backward compatibility (use ML if available, else baseline)
     charging_stops: list[ChargingStop]
     feasible: bool
     feasibility_reason: str
@@ -1603,17 +1606,18 @@ def plan_trip(
     else:
         weather_summary = "Route weather unavailable"
     
+
     # Baseline estimate: distance + fixed efficiency.
     baseline_energy_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
-
     min_plausible_kwh = distance_km * MIN_EFFICIENCY_KWH_PER_KM
     max_plausible_kwh = distance_km * MAX_EFFICIENCY_KWH_PER_KM
-    energy_needed_kwh = max(min_plausible_kwh, min(max_plausible_kwh, baseline_energy_kwh))
+    baseline_energy_kwh = max(min_plausible_kwh, min(max_plausible_kwh, baseline_energy_kwh))
 
+    ml_energy_kwh = None
     estimate_source = "Baseline"
     estimate_confidence = "n/a"
 
-    # Step 1: Re-introduce ML prediction in trip calculations with safe fallback.
+    # Step 1: ML prediction (if available)
     try:
         if energy_model.is_available():
             avg_speed_kmh = (distance_km / (duration_sec / 3600.0)) if duration_sec > 0 else 0.0
@@ -1628,14 +1632,15 @@ def plan_trip(
                 duration_min=max(1.0, duration_sec / 60.0),
             )
 
-            ml_energy_kwh = float(ml_pred.get("energy_used_kwh", energy_needed_kwh))
+            ml_energy_kwh = float(ml_pred.get("energy_used_kwh", baseline_energy_kwh))
             ml_energy_kwh = max(min_plausible_kwh, min(max_plausible_kwh, ml_energy_kwh))
-
-            energy_needed_kwh = ml_energy_kwh
             estimate_source = "ML"
             estimate_confidence = str(ml_pred.get("confidence") or "unknown")
     except Exception as exc:
         log.warning("ML prediction unavailable, using baseline estimate: %s", exc)
+
+    # Use ML if available, else baseline
+    energy_needed_kwh = ml_energy_kwh if ml_energy_kwh is not None else baseline_energy_kwh
 
     feasible_direct = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
 
@@ -1687,6 +1692,8 @@ def plan_trip(
         estimated_duration_min=int(duration_sec / 60),
         start_soc_percent=current_soc_percent,
         arrival_soc_percent=arrival_soc,
+        baseline_energy_needed_kwh=baseline_energy_kwh,
+        ml_energy_needed_kwh=ml_energy_kwh if ml_energy_kwh is not None else 0.0,
         energy_needed_kwh=energy_needed_kwh,
         charging_stops=charging_stops,
         feasible=feasible,
