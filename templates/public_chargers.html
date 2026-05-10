@@ -4,6 +4,72 @@
 <h1>Public Chargers</h1>
 <p class="muted">Summary of imported public charging data.</p>
 
+<div class="card">
+  <h2>Find Chargers</h2>
+  <form method="get" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:0.75rem; align-items:end;">
+    <div>
+      <label for="location">Location</label>
+      <input type="text" id="location" name="location" class="form-input" value="{{ filters.location }}"
+             placeholder="City, state, ZIP, station, address">
+    </div>
+    <div>
+      <label for="network">Network</label>
+      <select id="network" name="network" class="form-select">
+        <option value="">Any network</option>
+        {% for net in network_options %}
+        <option value="{{ net.network_name }}" {% if filters.network == net.network_name %}selected{% endif %}>{{ net.network_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="min_kw">Minimum Speed (kW)</label>
+      <input type="number" id="min_kw" name="min_kw" class="form-input" min="0" step="1"
+             value="{{ filters.min_kw }}" placeholder="50">
+    </div>
+    <div>
+      <label for="limit">Rows</label>
+      <select id="limit" name="limit" class="form-select">
+        {% for n in [50, 100, 200, 500] %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="display:flex; gap:0.5rem;">
+      <button type="submit" class="btn">Search</button>
+      <a href="{{ url_for('public_chargers') }}" class="btn" style="text-decoration:none; text-align:center;">Reset</a>
+    </div>
+  </form>
+  <p class="muted" style="margin-top:0.5rem;">
+    Matched stations: {{ filtered_total }}{% if filtered_total > filters.limit %} (showing top {{ filters.limit }}){% endif %}
+  </p>
+  <div class="table-scroll" style="max-height:420px; overflow-y:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Station</th>
+          <th>Location</th>
+          <th>Network</th>
+          <th>Max kW</th>
+          <th>Connector Types</th>
+          <th>Ports</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in filtered_stations %}
+        <tr>
+          <td>{{ row.station_name }}</td>
+          <td>{{ row.city }}, {{ row.state }} {{ row.zip }}</td>
+          <td>{{ row.network_name }}</td>
+          <td>{{ '%.1f'|format(row.max_power_kw) if row.max_power_kw is not none else '0.0' }}</td>
+          <td>{{ row.connector_types or 'UNKNOWN' }}</td>
+          <td>{{ row.connector_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <div class="card-grid">
   <div class="card">
     <h2>Stations</h2>

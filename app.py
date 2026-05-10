@@ -224,6 +224,8 @@ def create_app() -> Flask:
         "charger_state_filter": "",  # two-letter state when scope=single_state
         "charger_fetch_strategy": "all_then_200",  # all_then_200 or paged_200
         "charger_page_size": "200",  # page size for paged mode / fallback
+        "charger_auto_update": "off",  # on/off for periodic background charger refresh
+        "charger_auto_update_hours": "24",  # refresh interval in hours
     }
 
     # Safety limits for polling intervals (seconds)
@@ -236,6 +238,8 @@ def create_app() -> Flask:
 
     _charger_import_guard = threading.Lock()
     _charger_import_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _charger_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _charger_scheduler_stop_event = threading.Event()
 
     def _charger_import_is_running() -> bool:
         t = _charger_import_thread.get("thread")
@@ -272,6 +276,167 @@ def create_app() -> Flask:
         finally:
             with _charger_import_guard:
                 _charger_import_thread["thread"] = None
+
+    def _charger_import_db_in_progress() -> bool:
+        """Return True if the DB has an active in-progress charger sync run."""
+        try:
+            if not _table_exists("ev_sync_runs"):
+                return False
+            row = db.fetch_one(
+                """
+                SELECT 1 AS active
+                FROM ev_sync_runs
+                WHERE status = 'in_progress' AND completed_at IS NULL
+                LIMIT 1
+                """
+            )
+            return bool(row)
+        except Exception as exc:
+            log.warning("Failed checking in-progress charger runs: %s", exc)
+            return False
+
+    def _start_charger_import_job(
+        state_for_import: str | None,
+        fetch_strategy: str,
+        page_size: int,
+        trigger: str,
+    ) -> tuple[bool, str]:
+        """Start a charger import background thread if nothing else is already running."""
+        with _charger_import_guard:
+            if _charger_import_is_running():
+                return False, "thread_running"
+
+            try:
+                stale_count = nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
+                if stale_count:
+                    log.warning("Detected and closed %d stale charger import run(s)", stale_count)
+            except Exception as exc:
+                log.warning("Failed stale-run cleanup before charger import start: %s", exc)
+
+            if _charger_import_db_in_progress():
+                return False, "db_run_in_progress"
+
+            t = threading.Thread(
+                target=_run_charger_import_background,
+                args=(state_for_import, fetch_strategy, page_size),
+                name="charger-import-job",
+                daemon=True,
+            )
+            _charger_import_thread["thread"] = t
+            t.start()
+
+        log.info(
+            "Charger import submitted (trigger=%s, state=%s, strategy=%s, page_size=%s)",
+            trigger,
+            state_for_import or "all",
+            fetch_strategy,
+            page_size,
+        )
+        return True, "started"
+
+    def _charger_scheduler_is_running() -> bool:
+        t = _charger_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _int_setting(key: str, default: int, min_value: int, max_value: int) -> int:
+        """Read a numeric app setting with min/max clamping and fallback."""
+        try:
+            value = int((_get_setting(key) or str(default)).strip())
+        except (ValueError, TypeError, AttributeError):
+            value = default
+        return max(min_value, min(max_value, value))
+
+    def _run_charger_auto_sync_loop() -> None:
+        """Periodic charger sync scheduler loop."""
+        while not _charger_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _charger_scheduler_stop_event.wait(60)
+                    continue
+
+                enabled = (_get_setting("charger_auto_update") or "off").strip().lower() == "on"
+                if not enabled:
+                    _charger_scheduler_stop_event.wait(60)
+                    continue
+
+                interval_hours = _int_setting("charger_auto_update_hours", 24, 1, 168)
+
+                if _charger_import_is_running() or _charger_import_db_in_progress():
+                    _charger_scheduler_stop_event.wait(60)
+                    continue
+
+                last_completed = None
+                if _table_exists("ev_sync_runs"):
+                    row = db.fetch_one(
+                        """
+                        SELECT completed_at
+                        FROM ev_sync_runs
+                        WHERE status = 'completed' AND completed_at IS NOT NULL
+                        ORDER BY completed_at DESC
+                        LIMIT 1
+                        """
+                    )
+                    if row:
+                        last_completed = row.get("completed_at")
+
+                now_utc = datetime.now(timezone.utc)
+                due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
+                if due:
+                    scope = (_get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"]).strip()
+                    if scope not in ("all_us", "single_state"):
+                        scope = "all_us"
+
+                    state_filter = (_get_setting("charger_state_filter") or "").strip().upper()
+                    if scope != "single_state":
+                        state_filter = ""
+                    if scope == "single_state" and state_filter not in nlr_chargers.US_STATES:
+                        state_filter = ""
+                        scope = "all_us"
+
+                    fetch_strategy = (
+                        (_get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"])
+                        .strip()
+                    )
+                    if fetch_strategy not in ("all_then_200", "paged_200"):
+                        fetch_strategy = "all_then_200"
+
+                    page_size = _int_setting("charger_page_size", 200, 50, 1000)
+                    state_for_import = state_filter if scope == "single_state" and state_filter else None
+
+                    started, reason = _start_charger_import_job(
+                        state_for_import,
+                        fetch_strategy,
+                        page_size,
+                        trigger=f"auto_{interval_hours}h",
+                    )
+                    if started:
+                        log.info(
+                            "Auto charger sync started (interval_hours=%s, scope=%s, state=%s, strategy=%s)",
+                            interval_hours,
+                            scope,
+                            state_for_import or "all",
+                            fetch_strategy,
+                        )
+                    else:
+                        log.info("Auto charger sync skipped (%s)", reason)
+            except Exception as exc:
+                log.exception("Charger auto-sync loop error: %s", exc)
+
+            _charger_scheduler_stop_event.wait(60)
+
+    def _start_charger_auto_sync_scheduler() -> None:
+        """Ensure the periodic charger sync scheduler is running."""
+        if _charger_scheduler_is_running():
+            return
+
+        t = threading.Thread(
+            target=_run_charger_auto_sync_loop,
+            name="charger-auto-sync",
+            daemon=True,
+        )
+        _charger_scheduler_thread["thread"] = t
+        t.start()
+        log.info("Charger auto-sync scheduler thread started")
 
     def _clamp_interval(key: str, raw_value: str) -> int:
         """Clamp a polling interval to its configured min/max range."""
@@ -2475,7 +2640,7 @@ def create_app() -> Flask:
         if request.method == "POST":
             action = (request.form.get("action") or "save_settings").strip()
 
-            if action in ("save_charger_api_key", "save_charger_options", "run_charger_import"):
+            if action in ("save_charger_api_key", "save_charger_options", "save_charger_schedule", "run_charger_import"):
                 nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
                 if nlr_api_key:
                     nlr_chargers.set_nlr_api_key(nlr_api_key)
@@ -2486,6 +2651,8 @@ def create_app() -> Flask:
                     charger_scope = "all_us"
 
                 state_filter = (request.form.get("charger_state_filter", "") or "").strip().upper()
+                if charger_scope != "single_state":
+                    state_filter = ""
                 if charger_scope == "single_state" and state_filter and state_filter not in nlr_chargers.US_STATES:
                     flash(f"Invalid state code '{state_filter}'. Falling back to all US.", "warning")
                     charger_scope = "all_us"
@@ -2502,14 +2669,36 @@ def create_app() -> Flask:
                     page_size = 200
                 page_size = max(50, min(1000, page_size))
 
-                _set_setting("charger_scope", charger_scope, "Charger import scope: all_us or single_state")
-                _set_setting("charger_state_filter", state_filter, "State code filter for charger import")
-                _set_setting(
-                    "charger_fetch_strategy",
-                    fetch_strategy,
-                    "Charger import strategy: all_then_200 or paged_200",
-                )
-                _set_setting("charger_page_size", str(page_size), "Charger import page size")
+                if action == "save_charger_options":
+                    _set_setting("charger_scope", charger_scope, "Charger import scope: all_us or single_state")
+                    _set_setting("charger_state_filter", state_filter, "State code filter for charger import")
+                    _set_setting(
+                        "charger_fetch_strategy",
+                        fetch_strategy,
+                        "Charger import strategy: all_then_200 or paged_200",
+                    )
+                    _set_setting("charger_page_size", str(page_size), "Charger import page size")
+
+                auto_update = "on" if request.form.get("charger_auto_update") == "on" else "off"
+                auto_hours_raw = (request.form.get("charger_auto_update_hours", "24") or "24").strip()
+                try:
+                    auto_hours = int(auto_hours_raw)
+                except (ValueError, TypeError):
+                    auto_hours = 24
+                auto_hours = max(1, min(168, auto_hours))
+
+                if action == "save_charger_schedule":
+                    _set_setting("charger_auto_update", auto_update, "Enable periodic charger sync scheduler")
+                    _set_setting(
+                        "charger_auto_update_hours",
+                        str(auto_hours),
+                        "Periodic charger sync interval in hours",
+                    )
+                    flash(
+                        f"Charger auto-update schedule saved ({'enabled' if auto_update == 'on' else 'disabled'}, every {auto_hours}h).",
+                        "success",
+                    )
+                    return redirect(url_for("settings"))
 
                 if action == "save_charger_api_key":
                     flash("NIL/NLR API key saved.", "success")
@@ -2520,20 +2709,16 @@ def create_app() -> Flask:
                     return redirect(url_for("settings"))
 
                 state_for_import = state_filter if charger_scope == "single_state" and state_filter else None
-                with _charger_import_guard:
-                    already_running = _charger_import_is_running()
-                    if not already_running:
-                        t = threading.Thread(
-                            target=_run_charger_import_background,
-                            args=(state_for_import, fetch_strategy, page_size),
-                            name="charger-import-job",
-                            daemon=True,
-                        )
-                        _charger_import_thread["thread"] = t
-                        t.start()
+                started, reason = _start_charger_import_job(
+                    state_for_import,
+                    fetch_strategy,
+                    page_size,
+                    trigger="manual_settings",
+                )
 
-                if already_running:
+                if not started:
                     flash("A charger import is already running. Check Last Sync Status/logs for progress.", "warning")
+                    log.info("Manual charger import skipped (%s)", reason)
                 else:
                     log.info(
                         "Manual charger import submitted as background job (scope=%s, state=%s, strategy=%s, page_size=%s)",
@@ -2640,6 +2825,8 @@ def create_app() -> Flask:
             "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
             "charger_fetch_strategy": _get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"],
             "charger_page_size": _get_setting("charger_page_size") or _SETTINGS_DEFAULTS["charger_page_size"],
+            "charger_auto_update": _get_setting("charger_auto_update") or _SETTINGS_DEFAULTS["charger_auto_update"],
+            "charger_auto_update_hours": _get_setting("charger_auto_update_hours") or _SETTINGS_DEFAULTS["charger_auto_update_hours"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -2906,6 +3093,19 @@ def create_app() -> Flask:
         if _table_exists("ev_sync_runs"):
             nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
 
+        location_query = (request.args.get("location") or "").strip()
+        network_filter = (request.args.get("network") or "").strip()
+        min_kw_raw = (request.args.get("min_kw") or "").strip()
+        result_limit = request.args.get("limit", 100, type=int)
+        result_limit = max(25, min(500, result_limit))
+
+        min_kw = None
+        if min_kw_raw:
+            try:
+                min_kw = float(min_kw_raw)
+            except (TypeError, ValueError):
+                min_kw = None
+
         totals = {
             "stations": 0,
             "connectors": 0,
@@ -2980,6 +3180,94 @@ def create_app() -> Flask:
             """
         )
 
+        network_options = db.fetch_all(
+            """
+            SELECT DISTINCT COALESCE(NULLIF(network_name, ''), 'UNKNOWN') AS network_name
+            FROM ev_stations
+            ORDER BY network_name ASC
+            """
+        )
+
+        has_connectors = _table_exists("ev_charger_connectors")
+        connector_join = """
+            LEFT JOIN (
+                SELECT
+                    station_id,
+                    MAX(COALESCE(power_kw, 0)) AS max_power_kw,
+                    STRING_AGG(DISTINCT COALESCE(NULLIF(connector_type, ''), 'UNKNOWN'), ', ') AS connector_types,
+                    SUM(CASE WHEN COALESCE(port_count, 0) > 0 THEN port_count ELSE 1 END) AS connector_count
+                FROM ev_charger_connectors
+                GROUP BY station_id
+            ) conn ON conn.station_id = s.id
+        """ if has_connectors else ""
+
+        where_clauses: list[str] = []
+        where_params: list[object] = []
+
+        if location_query:
+            token = f"%{location_query}%"
+            where_clauses.append(
+                "(" 
+                "s.station_name ILIKE %s OR "
+                "COALESCE(s.street_address, '') ILIKE %s OR "
+                "COALESCE(s.city, '') ILIKE %s OR "
+                "COALESCE(s.state, '') ILIKE %s OR "
+                "COALESCE(s.zip, '') ILIKE %s"
+                ")"
+            )
+            where_params.extend([token, token, token, token, token])
+
+        if network_filter:
+            where_clauses.append("COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') = %s")
+            where_params.append(network_filter)
+
+        if min_kw is not None:
+            if has_connectors:
+                where_clauses.append("COALESCE(conn.max_power_kw, 0) >= %s")
+                where_params.append(min_kw)
+            else:
+                where_clauses.append("1 = 0")
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        connector_select = (
+            "COALESCE(conn.max_power_kw, 0) AS max_power_kw, "
+            "COALESCE(conn.connector_types, '') AS connector_types, "
+            "COALESCE(conn.connector_count, 0) AS connector_count"
+        ) if has_connectors else (
+            "0::REAL AS max_power_kw, ''::TEXT AS connector_types, 0::BIGINT AS connector_count"
+        )
+
+        filtered_total_row = db.fetch_one(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM ev_stations s
+            {connector_join}
+            {where_sql}
+            """,
+            tuple(where_params),
+        )
+        filtered_total = filtered_total_row["cnt"] if filtered_total_row else 0
+
+        filtered_stations = db.fetch_all(
+            f"""
+            SELECT
+                s.id,
+                s.station_name,
+                s.street_address,
+                s.city,
+                s.state,
+                s.zip,
+                COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') AS network_name,
+                {connector_select}
+            FROM ev_stations s
+            {connector_join}
+            {where_sql}
+            ORDER BY max_power_kw DESC, s.state ASC, s.city ASC, s.station_name ASC
+            LIMIT %s
+            """,
+            tuple([*where_params, result_limit]),
+        )
+
         sync_status = nlr_chargers.get_sync_status()
         recent_runs = []
         if _table_exists("ev_sync_runs"):
@@ -2996,6 +3284,15 @@ def create_app() -> Flask:
         return render_template(
             "public_chargers.html",
             totals=totals,
+            filters={
+                "location": location_query,
+                "network": network_filter,
+                "min_kw": min_kw_raw,
+                "limit": result_limit,
+            },
+            network_options=network_options,
+            filtered_stations=filtered_stations,
+            filtered_total=filtered_total,
             by_state=by_state,
             all_states_counts=all_states_counts,
             connector_types=connector_types,
@@ -3362,6 +3659,12 @@ def create_app() -> Flask:
                     log.info("Autostart poller enabled, but poller already running")
         except Exception as exc:
             log.warning("Autostart poller check failed: %s", exc)
+
+        try:
+            if db.is_available():
+                _start_charger_auto_sync_scheduler()
+        except Exception as exc:
+            log.warning("Charger auto-sync scheduler startup failed: %s", exc)
 
     threading.Thread(target=_delayed_startup, daemon=True).start()
 

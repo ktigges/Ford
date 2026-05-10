@@ -612,7 +612,15 @@ def import_ev_stations_with_strategy(
         stations: list[dict[str, Any]] = []
         if strategy == "all_then_200":
             try:
-                one_shot = _nlr_get(fuel_type=FUEL_TYPE_ELEC, state=state, limit="all", offset=0)
+                # Full-US one-shot responses can be much larger and slower than state-level calls.
+                one_shot_timeout_sec = 120 if state is None else NLR_HTTP_TIMEOUT_SEC
+                one_shot = _nlr_get(
+                    fuel_type=FUEL_TYPE_ELEC,
+                    state=state,
+                    limit="all",
+                    offset=0,
+                    timeout_sec=one_shot_timeout_sec,
+                )
                 total_results = one_shot.get("total_results", 0)
                 stations = one_shot.get("fuel_stations", [])
                 # Use one-shot result only if it appears complete.
