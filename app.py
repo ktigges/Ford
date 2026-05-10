@@ -3849,6 +3849,27 @@ def create_app() -> Flask:
 
     def _reverse_geocode_label(lat: float, lon: float) -> str:
         """Resolve a user-friendly address label for coordinates."""
+        # Try ArcGIS first because Nominatim may be temporarily rate-limited.
+        try:
+            response = requests.get(
+                "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode",
+                params={
+                    "location": f"{lon},{lat}",
+                    "f": "json",
+                    "langCode": "EN",
+                },
+                headers={"User-Agent": "MLLighting-Trip-Planner/1.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            data = response.json() or {}
+            address = data.get("address") or {}
+            label = (address.get("Match_addr") or address.get("LongLabel") or "").strip()
+            if label:
+                return label
+        except Exception as exc:
+            log.warning("ArcGIS reverse geocode failed for %s,%s: %s", lat, lon, exc)
+
         try:
             response = requests.get(
                 "https://nominatim.openstreetmap.org/reverse",

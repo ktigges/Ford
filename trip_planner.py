@@ -233,25 +233,41 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
         def _extract_us_hint(query: str) -> dict:
             q = (query or "").strip()
             if not q:
-                return {"city": None, "state": None, "zip": None, "is_state_only": False}
+                return {
+                    "street": None,
+                    "city": None,
+                    "state": None,
+                    "zip": None,
+                    "is_state_only": False,
+                }
 
             q_clean = re.sub(r"\s+", " ", q)
             parts = [p.strip() for p in q_clean.split(",") if p.strip()]
             zip_match = re.search(r"\b(\d{5})(?:-\d{4})?\b", q_clean)
             zip_code = zip_match.group(1) if zip_match else None
 
+            street = None
             city = None
             state = None
 
-            if len(parts) >= 2:
-                state = _normalize_state_token(parts[-1])
-                if not state:
-                    # Handle "City, ST ZIP"
-                    trailing_tokens = [t for t in re.split(r"\s+", parts[-1]) if t]
-                    if trailing_tokens:
-                        state = _normalize_state_token(trailing_tokens[0])
+            if len(parts) >= 3:
+                # Most common address format: "street, city, ST ZIP"
+                street = parts[0]
+                city = parts[1]
+                trailing_tokens = [t for t in re.split(r"\s+", parts[-1]) if t]
+                if trailing_tokens:
+                    state = _normalize_state_token(trailing_tokens[0])
+            elif len(parts) == 2:
+                trailing_tokens = [t for t in re.split(r"\s+", parts[-1]) if t]
+                if trailing_tokens:
+                    state = _normalize_state_token(trailing_tokens[0])
 
-                if state:
+                # If first segment looks like an address (starts with house number), treat it as street.
+                if re.match(r"^\d+\s+", parts[0]):
+                    street = parts[0]
+                    if state and len(trailing_tokens) > 1:
+                        city = " ".join(trailing_tokens[1:])
+                else:
                     city = parts[0]
             else:
                 tokens = [t for t in re.split(r"\s+", q_clean) if t]
@@ -268,19 +284,29 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                     if maybe_state:
                         state = maybe_state
 
+            if street:
+                street = street.strip().strip(",")
             if city:
                 city = city.strip().strip(",")
-                # If city looks like an address, keep free-form mode only.
+                # If parsed city still looks like an address, move it to street.
                 if re.match(r"^\d+\s+", city):
+                    street = city
                     city = None
 
             is_state_only = bool(state and not city and not zip_code)
             return {
+                "street": street,
                 "city": city,
                 "state": state,
                 "zip": zip_code,
                 "is_state_only": is_state_only,
             }
+
+        def _normalize_text_for_match(text: str) -> str:
+            t = (text or "").lower()
+            t = re.sub(r"\bgrey\b", "gray", t)
+            t = re.sub(r"\s+", " ", t).strip()
+            return t
 
         def _state_from_nominatim_address(address: dict) -> str | None:
             if not isinstance(address, dict):
@@ -324,10 +350,25 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
             expected_city = (us_hint.get("city") or "").lower()
             if expected_city:
                 actual_city = _city_from_nominatim_address(address)
-                if actual_city and actual_city == expected_city:
+                if actual_city and _normalize_text_for_match(actual_city) == _normalize_text_for_match(expected_city):
                     score += 100
                 elif actual_city:
                     score -= 60
+
+            expected_street = us_hint.get("street") or ""
+            if expected_street:
+                expected_street_norm = _normalize_text_for_match(expected_street)
+                road = _normalize_text_for_match(str(address.get("road", "")))
+                display_name = _normalize_text_for_match(str((result or {}).get("display_name", "")))
+                if road and road in expected_street_norm:
+                    score += 90
+                elif road and expected_street_norm in road:
+                    score += 90
+                elif road:
+                    score -= 70
+
+                if expected_street_norm and expected_street_norm in display_name:
+                    score += 70
 
             expected_zip = us_hint.get("zip")
             if expected_zip:
@@ -349,45 +390,71 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
 
         def _build_query_variants(query: str) -> list[str]:
             variants = [query]
+
+            # Common US spelling alternations (e.g., Gray/Grey) for street names.
+            q_gray = re.sub(r"\bgray\b", "grey", query, flags=re.IGNORECASE)
+            q_grey = re.sub(r"\bgrey\b", "gray", query, flags=re.IGNORECASE)
+            for alt in (q_gray, q_grey):
+                if alt and alt not in variants:
+                    variants.append(alt)
+
             lower_query = query.lower()
             if _looks_like_us_location(query) and not any(s in lower_query for s in ("usa", "united states", "us")):
-                variants.insert(0, f"{query}, USA")
+                variants = [f"{v}, USA" for v in variants] + variants
+
+            # Keep deterministic order without duplicates.
+            deduped = []
+            seen = set()
+            for v in variants:
+                if v not in seen:
+                    deduped.append(v)
+                    seen.add(v)
+            variants = deduped
             return variants
 
         query_variants = _build_query_variants(location_query)
         looks_us = _looks_like_us_location(location_query)
         us_hint = _extract_us_hint(location_query)
         
+        def _is_rate_limited_error(err: requests.RequestException) -> bool:
+            response = getattr(err, "response", None)
+            return bool(response is not None and response.status_code == 429)
+
         # Primary provider: Nominatim with a short retry window.
         nominatim_url = "https://nominatim.openstreetmap.org/search"
         headers = {
             "User-Agent": "MLLighting-Trip-Planner/1.0"
         }
+        nominatim_rate_limited = False
 
         for query in query_variants:
             # Structured search is more reliable for city/state/zip lookups.
             structured_params = None
-            if us_hint.get("state") and not re.match(r"^\d+\s+", query.strip()):
+            if us_hint.get("state"):
                 structured_params = {
                     "format": "json",
-                    "limit": 10,
+                    "limit": 6,
                     "addressdetails": 1,
                     "countrycodes": "us",
                     "state": us_hint["state"],
                 }
+                if us_hint.get("street"):
+                    structured_params["street"] = us_hint["street"]
                 if us_hint.get("city"):
                     structured_params["city"] = us_hint["city"]
                 if us_hint.get("zip"):
                     structured_params["postalcode"] = us_hint["zip"]
 
             structured_candidates = []
-            if structured_params:
+            if structured_params and not nominatim_rate_limited:
                 try:
                     response = requests.get(nominatim_url, params=structured_params, headers=headers, timeout=10)
                     response.raise_for_status()
                     structured_candidates = response.json() or []
                 except requests.RequestException as e:
                     log.warning("Structured geocode failed for '%s': %s", location_query, e)
+                    if _is_rate_limited_error(e):
+                        nominatim_rate_limited = True
 
                 if structured_candidates:
                     best = max(
@@ -409,7 +476,7 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                 {
                     "q": query,
                     "format": "json",
-                    "limit": 10,
+                    "limit": 6,
                     "addressdetails": 1,
                     "accept-language": "en",
                 }
@@ -420,7 +487,7 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                     {
                         "q": query,
                         "format": "json",
-                        "limit": 10,
+                        "limit": 6,
                         "addressdetails": 1,
                         "countrycodes": "us",
                         "accept-language": "en",
@@ -428,6 +495,8 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                 )
 
             for nominatim_params in search_attempts:
+                if nominatim_rate_limited:
+                    break
                 try:
                     response = requests.get(nominatim_url, params=nominatim_params, headers=headers, timeout=10)
                     response.raise_for_status()
@@ -451,6 +520,134 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                         return (lat, lon)
                 except requests.RequestException as e:
                     log.warning("Nominatim geocode failed for '%s' query '%s': %s", location_query, query, e)
+                    if _is_rate_limited_error(e):
+                        nominatim_rate_limited = True
+            if nominatim_rate_limited:
+                break
+
+        # Fallback provider for US addresses: US Census Geocoder.
+        # Useful when Nominatim throttles and for precise house-number matching.
+        if looks_us and (us_hint.get("street") or us_hint.get("city") or us_hint.get("zip")):
+            census_url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+
+            census_queries = []
+            if us_hint.get("street") and us_hint.get("city") and us_hint.get("state"):
+                if us_hint.get("zip"):
+                    census_queries.append(
+                        f"{us_hint['street']}, {us_hint['city']}, {us_hint['state']} {us_hint['zip']}"
+                    )
+                census_queries.append(
+                    f"{us_hint['street']}, {us_hint['city']}, {us_hint['state']}"
+                )
+
+            census_queries.extend(query_variants)
+
+            seen_census = set()
+            for c_query in census_queries:
+                c_query = (c_query or "").strip()
+                if not c_query or c_query in seen_census:
+                    continue
+                seen_census.add(c_query)
+                try:
+                    response = requests.get(
+                        census_url,
+                        params={
+                            "address": c_query,
+                            "benchmark": "Public_AR_Current",
+                            "format": "json",
+                        },
+                        headers=headers,
+                        timeout=10,
+                    )
+                    response.raise_for_status()
+                    data = response.json() or {}
+                    matches = (
+                        data.get("result", {})
+                        .get("addressMatches", [])
+                    )
+                    if matches:
+                        match = matches[0]
+                        coords = (match.get("coordinates") or {})
+                        if "y" in coords and "x" in coords:
+                            lat = float(coords["y"])
+                            lon = float(coords["x"])
+                            log.info(
+                                "Geocoded '%s' via Census (%s) to %s, %s (%s)",
+                                location_query,
+                                c_query,
+                                lat,
+                                lon,
+                                match.get("matchedAddress", ""),
+                            )
+                            return (lat, lon)
+                except requests.RequestException as e:
+                    log.warning("Census geocode failed for '%s' query '%s': %s", location_query, c_query, e)
+
+        # Fallback provider: ArcGIS World Geocoder (no key required for low-volume usage).
+        arcgis_url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
+        seen_arcgis = set()
+        for query in query_variants:
+            query = (query or "").strip()
+            if not query or query in seen_arcgis:
+                continue
+            seen_arcgis.add(query)
+            try:
+                response = requests.get(
+                    arcgis_url,
+                    params={
+                        "SingleLine": query,
+                        "f": "json",
+                        "maxLocations": 5,
+                        "outFields": "Match_addr,Addr_type,City,Region,Country",
+                    },
+                    headers=headers,
+                    timeout=10,
+                )
+                response.raise_for_status()
+                data = response.json() or {}
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    continue
+
+                # Prefer high-score candidates and expected US state when available.
+                expected_state = us_hint.get("state")
+                best = None
+                best_score = -10_000.0
+                for cand in candidates:
+                    score = float(cand.get("score") or 0.0)
+                    attrs = cand.get("attributes") or {}
+                    region = str(attrs.get("Region") or "").upper()
+                    country = str(attrs.get("Country") or "").upper()
+                    if looks_us:
+                        if country in {"USA", "US", "UNITED STATES"}:
+                            score += 20
+                        else:
+                            score -= 80
+                    if expected_state:
+                        if region == expected_state:
+                            score += 30
+                        elif region:
+                            score -= 25
+                    if score > best_score:
+                        best_score = score
+                        best = cand
+
+                if best and best_score >= 70:
+                    location = best.get("location") or {}
+                    if "y" in location and "x" in location:
+                        lat = float(location["y"])
+                        lon = float(location["x"])
+                        log.info(
+                            "Geocoded '%s' via ArcGIS (%s) to %s, %s (%s)",
+                            location_query,
+                            query,
+                            lat,
+                            lon,
+                            best.get("address", ""),
+                        )
+                        return (lat, lon)
+            except requests.RequestException as e:
+                log.warning("ArcGIS geocode failed for '%s' query '%s': %s", location_query, query, e)
 
         # Fallback provider: Photon
         photon_url = "https://photon.komoot.io/api/"
