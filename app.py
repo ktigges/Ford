@@ -3932,6 +3932,12 @@ def create_app() -> Flask:
             "use_current_source": False,
         }
         unit_system = _get_setting("units") if db.is_available() else "imperial"
+        timezone_name = _get_setting("timezone") if db.is_available() else "UTC"
+        try:
+            display_tz = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            timezone_name = "UTC"
+            display_tz = timezone.utc
 
         if request.method == "POST":
             form_data["source"] = request.form.get("source", "").strip()
@@ -3978,6 +3984,15 @@ def create_app() -> Flask:
                         if plan:
                             plan.source_name = source_label
                             plan.destination_name = destination_label
+                            for wx in (plan.route_weather or []):
+                                eta_utc = str(wx.get("eta_utc") or "").strip()
+                                if not eta_utc:
+                                    continue
+                                try:
+                                    dt_utc = datetime.strptime(eta_utc, "%Y-%m-%d %H:%M UTC").replace(tzinfo=timezone.utc)
+                                    wx["eta_local"] = dt_utc.astimezone(display_tz).strftime("%Y-%m-%d %I:%M %p")
+                                except Exception:
+                                    wx["eta_local"] = eta_utc
                     except Exception as exc:
                         log.exception(f"Trip planning failed: {exc}")
                         flash(f"Trip planning failed: {exc}", "error")
@@ -4036,6 +4051,7 @@ def create_app() -> Flask:
             plan=plan,
             preview=preview,
             unit_system=unit_system,
+            timezone_name=timezone_name,
         )
 
     @app.route("/api/predict/trip", methods=["POST"])
