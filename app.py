@@ -1835,21 +1835,55 @@ def create_app():
                 files.append({"name": name, "size": size, "size_fmt": backup._format_size(size)})
         return files
 
-    @app.route("/setup", methods=["GET", "POST"])
-    def db_setup():
-        """Database setup page — shown when PostgreSQL is unreachable."""
-        db_cfg = config.database()
-        if request.method == "POST":
-            posted_password = request.form.get("password", "")
-            if posted_password is None:
-                posted_password = ""
-            posted_password = posted_password.strip()
 
-            new_cfg = {
-                "host": request.form.get("host", "localhost").strip(),
-                "port": int(request.form.get("port", 5432)),
-                "name": request.form.get("name", "lightning").strip(),
-                "user": request.form.get("user", "lightning").strip(),
+    # Main settings landing page (navigation only)
+    @app.route("/settings", methods=["GET"])
+    def settings():
+        return render_template("settings.html")
+
+    # General Options sub-page
+    @app.route("/settings/options", methods=["GET", "POST"])
+    def settings_options_page():
+        # ...existing settings context logic...
+        return render_template(
+            "settings_options_page.html",
+            settings=settings,
+            sequence_alignment=sequence_alignment,
+            ssl=ssl,
+            ssl_status=ssl_status,
+        )
+
+    # Charger Networks sub-page
+    @app.route("/settings/chargers", methods=["GET", "POST"])
+    def settings_chargers_page():
+        # ...existing charger context logic...
+        return render_template(
+            "settings_chargers_page.html",
+            settings=settings,
+            charger_status=charger_status,
+            charger_failure_class=charger_failure_class,
+            charger_job_running=charger_job_running,
+        )
+
+    # AI / ML sub-page
+    @app.route("/settings/ai", methods=["GET", "POST"])
+    def settings_ai_page():
+        # ...existing ML retrain context logic...
+        return render_template(
+            "settings_ai_page.html",
+            settings=settings,
+            ml_retrain_status=ml_retrain_status,
+            ml_retrain_job_running=ml_retrain_job_running,
+        )
+
+    # Backup sub-page
+    @app.route("/settings/backup", methods=["GET", "POST"])
+    def settings_backup_page():
+        # ...existing backup context logic...
+        return render_template(
+            "settings_backup_page.html",
+            settings=settings,
+        )
                 "password": posted_password or db_cfg.get("password", ""),
                 "connect_timeout": int(request.form.get("connect_timeout", 10)),
             }
