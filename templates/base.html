@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Lightning{% endblock %}</title>
+  <title>{% block title %}MLLighting{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <div class="prototype-banner">** PROTOTYPE ** v{{ config.get('APP_VERSION', '0.4.0') }} | Build {{ config.get('APP_BUILD_TIME', 'unknown') }}</div>
   <nav>
-    <div class="nav-brand">⚡ Lightning</div>
+    <div class="nav-brand">🧠 MLLighting</div>
     <ul>
       <li><a href="{{ url_for('dashboard') }}" class="nav-btn">Dashboard</a></li>
       <li><a href="{{ url_for('vehicle_state') }}" class="nav-btn">Vehicle State</a></li>

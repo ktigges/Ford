@@ -1,23 +1,25 @@
-"""Flask application for Ford Lightning telemetry dashboard.
+"""Flask application for MLLighting telemetry dashboard.
 
 Serves the web UI for vehicle state monitoring, OAuth configuration,
 poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.6.0.0
+Version:     0.8.0
 Date:        2026-05-09
 """
 
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
+import json
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Flask, redirect, render_template, request, url_for, flash, send_file
+from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify
 import requests
 from werkzeug.utils import secure_filename
 
@@ -29,6 +31,8 @@ import units
 import backup
 import crypto
 import nlr_chargers
+import trip_planner as tp_service
+import energy_model
 
 # ── Logging setup ──────────────────────────────────────────────────
 
@@ -132,7 +136,7 @@ def create_app() -> Flask:
     _setup_logging()
 
     log = logging.getLogger(__name__)
-    log.info("Starting Lightning app (env=%s)", config.environment())
+    log.info("Starting MLLighting app (env=%s)", config.environment())
 
     # Attempt database connection – enter setup mode if unavailable
     try:
@@ -193,7 +197,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.6.0.0"
+    app.config["APP_VERSION"] = "0.8.0"
     app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     app.config["STARTUP_DB_NOTICE"] = None
 
@@ -228,6 +232,18 @@ def create_app() -> Flask:
         "charger_page_size": "200",  # page size for paged mode / fallback
         "charger_auto_update": "off",  # on/off for periodic background charger refresh
         "charger_auto_update_hours": "24",  # refresh interval in hours
+        "ml_retrain_schedule_enabled": "off",  # on/off for periodic model retraining
+        "ml_retrain_schedule_hours": "24",  # periodic retrain interval in hours
+        "ml_retrain_after_x_drives_enabled": "off",  # on/off for drive-count trigger
+        "ml_retrain_after_x_drives": "10",  # retrain after this many new drives
+        "ml_retrain_last_trained_drive_count": "0",  # baseline drive count from last successful retrain
+        "ml_retrain_status": "idle",  # idle, in_progress, completed, failed
+        "ml_retrain_last_started_at": "",
+        "ml_retrain_last_completed_at": "",
+        "ml_retrain_last_trigger": "",
+        "ml_retrain_last_error": "",
+        "ml_retrain_last_duration_sec": "",
+        "ml_retrain_last_exit_code": "",
     }
 
     # Safety limits for polling intervals (seconds)
@@ -242,6 +258,10 @@ def create_app() -> Flask:
     _charger_import_thread: dict[str, threading.Thread | None] = {"thread": None}
     _charger_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
     _charger_scheduler_stop_event = threading.Event()
+    _ml_retrain_guard = threading.Lock()
+    _ml_retrain_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _ml_retrain_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _ml_retrain_scheduler_stop_event = threading.Event()
 
     def _charger_import_is_running() -> bool:
         t = _charger_import_thread.get("thread")
@@ -439,6 +459,230 @@ def create_app() -> Flask:
         _charger_scheduler_thread["thread"] = t
         t.start()
         log.info("Charger auto-sync scheduler thread started")
+
+    def _ml_retrain_is_running() -> bool:
+        t = _ml_retrain_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _ml_retrain_scheduler_is_running() -> bool:
+        t = _ml_retrain_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _parse_utc_iso(value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _read_model_schema() -> dict:
+        schema_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "models",
+            "energy_model_schema.json",
+        )
+        if not os.path.isfile(schema_path):
+            return {}
+        try:
+            with open(schema_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            log.warning("Failed reading model schema: %s", exc)
+            return {}
+
+    def _count_completed_training_drives() -> int:
+        try:
+            if not _table_exists("drives"):
+                return 0
+            row = db.fetch_one(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM drives
+                WHERE in_progress = FALSE
+                  AND energy_used_kwh > 0
+                  AND distance_km > 5
+                """
+            )
+            return int(row["cnt"]) if row and row.get("cnt") is not None else 0
+        except Exception as exc:
+            log.warning("Failed counting completed drives for retraining: %s", exc)
+            return 0
+
+    def _ml_last_trained_drive_count() -> int:
+        raw = (_get_setting("ml_retrain_last_trained_drive_count") or "").strip()
+        if raw:
+            try:
+                value = int(raw)
+                if value >= 0:
+                    return value
+            except (TypeError, ValueError):
+                pass
+
+        schema = _read_model_schema()
+        schema_count = schema.get("num_training_drives")
+        if isinstance(schema_count, int) and schema_count >= 0:
+            return schema_count
+
+        return _count_completed_training_drives()
+
+    def _run_ml_retrain_background(trigger: str) -> None:
+        started_at = datetime.now(timezone.utc)
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        python_bin = os.path.join(project_dir, "venv", "bin", "python")
+        if not os.path.isfile(python_bin):
+            python_bin = sys.executable
+
+        train_script = os.path.join(project_dir, "train_energy_model.py")
+        retrain_log_path = os.path.join(project_dir, "logs", "ml_retrain.log")
+
+        _set_setting("ml_retrain_status", "in_progress", "ML retraining job status")
+        _set_setting("ml_retrain_last_started_at", started_at.isoformat(), "ML retraining last start timestamp")
+        _set_setting("ml_retrain_last_trigger", trigger, "ML retraining trigger source")
+        _set_setting("ml_retrain_last_error", "", "ML retraining last error message")
+
+        try:
+            os.makedirs(os.path.dirname(retrain_log_path), exist_ok=True)
+            with open(retrain_log_path, "a", encoding="utf-8") as retrain_log:
+                retrain_log.write(
+                    f"\n=== ML retrain start {started_at.isoformat()} trigger={trigger} ===\n"
+                )
+                result = subprocess.run(
+                    [python_bin, train_script],
+                    cwd=project_dir,
+                    stdout=retrain_log,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+
+            completed_at = datetime.now(timezone.utc)
+            duration_sec = max(0, int((completed_at - started_at).total_seconds()))
+            _set_setting("ml_retrain_last_completed_at", completed_at.isoformat(), "ML retraining last completion timestamp")
+            _set_setting("ml_retrain_last_duration_sec", str(duration_sec), "ML retraining duration in seconds")
+            _set_setting("ml_retrain_last_exit_code", str(result.returncode), "ML retraining process exit code")
+
+            if result.returncode == 0:
+                schema = _read_model_schema()
+                trained_count = schema.get("num_training_drives")
+                if not isinstance(trained_count, int) or trained_count < 0:
+                    trained_count = _count_completed_training_drives()
+                _set_setting(
+                    "ml_retrain_last_trained_drive_count",
+                    str(trained_count),
+                    "Completed drive baseline count from last successful ML retraining",
+                )
+                _set_setting("ml_retrain_status", "completed", "ML retraining job status")
+                _set_setting("ml_retrain_last_error", "", "ML retraining last error message")
+
+                # Reset lazy-loaded model cache so new predictions use fresh artifacts.
+                for attr in ("_model", "_scaler", "_schema"):
+                    if hasattr(energy_model, attr):
+                        setattr(energy_model, attr, None)
+
+                log.info(
+                    "ML retraining completed successfully (trigger=%s, duration=%ss, trained_drives=%s)",
+                    trigger,
+                    duration_sec,
+                    trained_count,
+                )
+            else:
+                err_msg = (
+                    f"Retraining failed with exit code {result.returncode}. "
+                    "See logs/ml_retrain.log"
+                )
+                _set_setting("ml_retrain_status", "failed", "ML retraining job status")
+                _set_setting("ml_retrain_last_error", err_msg, "ML retraining last error message")
+                log.warning("%s (trigger=%s)", err_msg, trigger)
+
+        except Exception as exc:
+            _set_setting("ml_retrain_status", "failed", "ML retraining job status")
+            _set_setting("ml_retrain_last_error", str(exc), "ML retraining last error message")
+            _set_setting("ml_retrain_last_exit_code", "", "ML retraining process exit code")
+            log.exception("ML retraining background job failed (trigger=%s): %s", trigger, exc)
+        finally:
+            with _ml_retrain_guard:
+                _ml_retrain_thread["thread"] = None
+
+    def _start_ml_retrain_job(trigger: str) -> tuple[bool, str]:
+        with _ml_retrain_guard:
+            if _ml_retrain_is_running():
+                return False, "thread_running"
+
+            t = threading.Thread(
+                target=_run_ml_retrain_background,
+                args=(trigger,),
+                name="ml-retrain-job",
+                daemon=True,
+            )
+            _ml_retrain_thread["thread"] = t
+            t.start()
+
+        log.info("ML retraining submitted (trigger=%s)", trigger)
+        return True, "started"
+
+    def _run_ml_retrain_scheduler_loop() -> None:
+        while not _ml_retrain_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _ml_retrain_scheduler_stop_event.wait(60)
+                    continue
+
+                if _ml_retrain_is_running():
+                    _ml_retrain_scheduler_stop_event.wait(60)
+                    continue
+
+                now_utc = datetime.now(timezone.utc)
+                due = False
+                trigger = ""
+
+                schedule_enabled = (_get_setting("ml_retrain_schedule_enabled") or "off").strip().lower() == "on"
+                if schedule_enabled:
+                    interval_hours = _int_setting("ml_retrain_schedule_hours", 24, 1, 168)
+                    last_completed = _parse_utc_iso((_get_setting("ml_retrain_last_completed_at") or "").strip())
+                    if last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours):
+                        due = True
+                        trigger = f"schedule_{interval_hours}h"
+
+                if not due:
+                    after_x_enabled = (
+                        (_get_setting("ml_retrain_after_x_drives_enabled") or "off").strip().lower() == "on"
+                    )
+                    if after_x_enabled:
+                        threshold = _int_setting("ml_retrain_after_x_drives", 10, 1, 500)
+                        current_count = _count_completed_training_drives()
+                        baseline_count = _ml_last_trained_drive_count()
+                        new_drives = max(0, current_count - baseline_count)
+                        if new_drives >= threshold:
+                            due = True
+                            trigger = f"after_{threshold}_drives"
+
+                if due:
+                    started, reason = _start_ml_retrain_job(trigger)
+                    if started:
+                        log.info("Auto ML retraining started (trigger=%s)", trigger)
+                    else:
+                        log.info("Auto ML retraining skipped (%s)", reason)
+
+            except Exception as exc:
+                log.exception("ML retraining scheduler loop error: %s", exc)
+
+            _ml_retrain_scheduler_stop_event.wait(60)
+
+    def _start_ml_retrain_scheduler() -> None:
+        if _ml_retrain_scheduler_is_running():
+            return
+
+        t = threading.Thread(
+            target=_run_ml_retrain_scheduler_loop,
+            name="ml-retrain-scheduler",
+            daemon=True,
+        )
+        _ml_retrain_scheduler_thread["thread"] = t
+        t.start()
+        log.info("ML retraining scheduler thread started")
 
     def _clamp_interval(key: str, raw_value: str) -> int:
         """Clamp a polling interval to its configured min/max range."""
@@ -2669,6 +2913,79 @@ def create_app() -> Flask:
         if request.method == "POST":
             action = (request.form.get("action") or "save_settings").strip()
 
+            if action in ("save_retrain_options", "run_retrain_now"):
+                retrain_schedule_enabled = (
+                    "on" if request.form.get("ml_retrain_schedule_enabled") == "on" else "off"
+                )
+                retrain_schedule_hours_raw = (request.form.get("ml_retrain_schedule_hours", "24") or "24").strip()
+                try:
+                    retrain_schedule_hours = int(retrain_schedule_hours_raw)
+                except (ValueError, TypeError):
+                    retrain_schedule_hours = 24
+                retrain_schedule_hours = max(1, min(168, retrain_schedule_hours))
+
+                retrain_after_x_enabled = (
+                    "on" if request.form.get("ml_retrain_after_x_drives_enabled") == "on" else "off"
+                )
+                retrain_after_x_raw = (request.form.get("ml_retrain_after_x_drives", "10") or "10").strip()
+                try:
+                    retrain_after_x = int(retrain_after_x_raw)
+                except (ValueError, TypeError):
+                    retrain_after_x = 10
+                retrain_after_x = max(1, min(500, retrain_after_x))
+
+                if action == "save_retrain_options":
+                    _set_setting(
+                        "ml_retrain_schedule_enabled",
+                        retrain_schedule_enabled,
+                        "Enable periodic ML retraining scheduler",
+                    )
+                    _set_setting(
+                        "ml_retrain_schedule_hours",
+                        str(retrain_schedule_hours),
+                        "Periodic ML retraining interval in hours",
+                    )
+                    _set_setting(
+                        "ml_retrain_after_x_drives_enabled",
+                        retrain_after_x_enabled,
+                        "Enable ML retraining after X new drives",
+                    )
+                    _set_setting(
+                        "ml_retrain_after_x_drives",
+                        str(retrain_after_x),
+                        "Retrain ML model after this many new completed drives",
+                    )
+
+                    baseline_raw = (_get_setting("ml_retrain_last_trained_drive_count") or "").strip()
+                    if not baseline_raw:
+                        _set_setting(
+                            "ml_retrain_last_trained_drive_count",
+                            str(_ml_last_trained_drive_count()),
+                            "Completed drive baseline count from last successful ML retraining",
+                        )
+
+                    flash(
+                        "ML retraining settings saved. "
+                        f"Schedule: {'enabled' if retrain_schedule_enabled == 'on' else 'disabled'} "
+                        f"({retrain_schedule_hours}h), "
+                        f"After-X: {'enabled' if retrain_after_x_enabled == 'on' else 'disabled'} "
+                        f"({retrain_after_x} drives).",
+                        "success",
+                    )
+                    return redirect(url_for("settings"))
+
+                started, reason = _start_ml_retrain_job(trigger="manual_settings")
+                if not started:
+                    flash("Model retraining is already running in the background.", "warning")
+                    log.info("Manual ML retraining skipped (%s)", reason)
+                else:
+                    flash(
+                        "Model retraining started in background. "
+                        "You can leave this page; status updates below.",
+                        "success",
+                    )
+                return redirect(url_for("settings"))
+
             if action in ("save_charger_api_key", "save_charger_options", "save_charger_schedule", "run_charger_import"):
                 nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
                 if nlr_api_key:
@@ -2856,6 +3173,10 @@ def create_app() -> Flask:
             "charger_page_size": _get_setting("charger_page_size") or _SETTINGS_DEFAULTS["charger_page_size"],
             "charger_auto_update": _get_setting("charger_auto_update") or _SETTINGS_DEFAULTS["charger_auto_update"],
             "charger_auto_update_hours": _get_setting("charger_auto_update_hours") or _SETTINGS_DEFAULTS["charger_auto_update_hours"],
+            "ml_retrain_schedule_enabled": _get_setting("ml_retrain_schedule_enabled") or _SETTINGS_DEFAULTS["ml_retrain_schedule_enabled"],
+            "ml_retrain_schedule_hours": _get_setting("ml_retrain_schedule_hours") or _SETTINGS_DEFAULTS["ml_retrain_schedule_hours"],
+            "ml_retrain_after_x_drives_enabled": _get_setting("ml_retrain_after_x_drives_enabled") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives_enabled"],
+            "ml_retrain_after_x_drives": _get_setting("ml_retrain_after_x_drives") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -2888,6 +3209,29 @@ def create_app() -> Flask:
             except (TypeError, ValueError):
                 charger_heartbeat_stale = False
 
+        ml_retrain_job_running = _ml_retrain_is_running()
+        ml_baseline_drives = _ml_last_trained_drive_count()
+        ml_completed_drives = _count_completed_training_drives()
+        ml_new_drives = max(0, ml_completed_drives - ml_baseline_drives)
+        ml_schema = _read_model_schema()
+        ml_retrain_status = {
+            "status": _get_setting("ml_retrain_status") or "idle",
+            "last_started_at": _get_setting("ml_retrain_last_started_at") or "",
+            "last_completed_at": _get_setting("ml_retrain_last_completed_at") or "",
+            "last_trigger": _get_setting("ml_retrain_last_trigger") or "",
+            "last_error": _get_setting("ml_retrain_last_error") or "",
+            "last_duration_sec": _get_setting("ml_retrain_last_duration_sec") or "",
+            "last_exit_code": _get_setting("ml_retrain_last_exit_code") or "",
+            "baseline_drives": ml_baseline_drives,
+            "completed_drives": ml_completed_drives,
+            "new_drives_since_last_train": ml_new_drives,
+            "schema_training_date": str(ml_schema.get("training_date") or ""),
+            "schema_num_training_drives": ml_schema.get("num_training_drives"),
+            "scheduler_running": _ml_retrain_scheduler_is_running(),
+        }
+        if ml_retrain_job_running:
+            ml_retrain_status["status"] = "in_progress"
+
         seq_marker = db.fetch_one(
             "SELECT value FROM app_config WHERE key = %s",
             (_SEQUENCE_ALIGNMENT_MARKER_KEY,),
@@ -2909,7 +3253,9 @@ def create_app() -> Flask:
                                charger_failure_class=charger_failure_class,
                                sequence_alignment=sequence_alignment,
                                charger_job_running=charger_job_running,
-                               charger_heartbeat_stale=charger_heartbeat_stale)
+                               charger_heartbeat_stale=charger_heartbeat_stale,
+                               ml_retrain_status=ml_retrain_status,
+                               ml_retrain_job_running=ml_retrain_job_running)
 
     @app.route("/settings/sequence-alignment", methods=["POST"])
     def sequence_alignment_settings():
@@ -3443,6 +3789,131 @@ def create_app() -> Flask:
             recent_runs=recent_runs_view,
         )
 
+    # ── Trip Planner (Phase 2: ML routing) ─────────────────────────
+
+    @app.route("/trip-planner", methods=["GET", "POST"])
+    def trip_planner():
+        """Interactive trip planner for EV routing with charger recommendations."""
+        if not energy_model.is_available():
+            flash("Trip planner requires trained energy model. Run training first.", "warning")
+            return redirect(url_for("settings"))
+
+        plan = None
+        form_data = {
+            "source": "",
+            "destination": "",
+            "start_soc": 85,
+        }
+
+        if request.method == "POST":
+            form_data["source"] = request.form.get("source", "").strip()
+            form_data["destination"] = request.form.get("destination", "").strip()
+            try:
+                form_data["start_soc"] = int(request.form.get("start_soc", 85))
+            except (ValueError, TypeError):
+                form_data["start_soc"] = 85
+
+            form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
+
+            if not form_data["source"] or not form_data["destination"]:
+                flash("Please enter both source and destination.", "warning")
+            else:
+                try:
+                    plan = tp_service.plan_trip(
+                        source=form_data["source"],
+                        destination=form_data["destination"],
+                        current_soc_percent=form_data["start_soc"],
+                    )
+                except Exception as exc:
+                    log.exception(f"Trip planning failed: {exc}")
+                    flash(f"Trip planning failed: {exc}", "error")
+
+        return render_template(
+            "trip_planner.html",
+            form=form_data,
+            plan=plan,
+        )
+
+    @app.route("/api/predict/trip", methods=["POST"])
+    def api_predict_trip():
+        """API endpoint for trip planning (JSON).
+        
+        POST /api/predict/trip
+        {
+            "source": "40.7128,-74.0060",
+            "destination": "39.7392,-104.9903",
+            "current_soc_percent": 85
+        }
+        
+        Returns: TripPlan as JSON
+        """
+        try:
+            data = request.get_json() or {}
+            
+            source = data.get("source", "").strip()
+            destination = data.get("destination", "").strip()
+            current_soc = data.get("current_soc_percent", 85)
+            
+            if not source or not destination:
+                return jsonify({"error": "source and destination required"}), 400
+            
+            try:
+                current_soc = int(current_soc)
+            except (ValueError, TypeError):
+                current_soc = 85
+            
+            current_soc = max(0, min(100, current_soc))
+            
+            plan = tp_service.plan_trip(
+                source=source,
+                destination=destination,
+                current_soc_percent=current_soc,
+            )
+            
+            # Convert dataclass to dict for JSON serialization
+            from dataclasses import asdict
+            plan_dict = asdict(plan)
+            
+            # Serialize charging stops
+            plan_dict["charging_stops"] = [
+                asdict(stop) for stop in plan.charging_stops
+            ]
+            
+            return jsonify(plan_dict), 200
+        
+        except Exception as exc:
+            log.exception(f"API trip planning failed: {exc}")
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/api/predict/energy", methods=["POST"])
+    def api_predict_energy():
+        """API endpoint for energy prediction (JSON).
+        
+        POST /api/predict/energy
+        {
+            "distance_km": 100,
+            "avg_speed_kmh": 80,
+            "avg_ambient_temp_c": 15
+        }
+        
+        Returns: Energy prediction with confidence
+        """
+        try:
+            data = request.get_json() or {}
+            
+            result = energy_model.predict_energy(
+                distance_km=data.get("distance_km", 50),
+                avg_speed_kmh=data.get("avg_speed_kmh", 80),
+                avg_ambient_temp_c=data.get("avg_ambient_temp_c", 20),
+                avg_outside_temp_c=data.get("avg_outside_temp_c", 20),
+            )
+            
+            return jsonify(result), 200
+        
+        except Exception as exc:
+            log.exception(f"API energy prediction failed: {exc}")
+            return jsonify({"error": str(exc)}), 500
+
     # ── Database viewer ────────────────────────────────────────────
 
     # Whitelist of tables the viewer can display
@@ -3806,6 +4277,12 @@ def create_app() -> Flask:
                 _start_charger_auto_sync_scheduler()
         except Exception as exc:
             log.warning("Charger auto-sync scheduler startup failed: %s", exc)
+
+        try:
+            if db.is_available():
+                _start_ml_retrain_scheduler()
+        except Exception as exc:
+            log.warning("ML retraining scheduler startup failed: %s", exc)
 
     threading.Thread(target=_delayed_startup, daemon=True).start()
 
