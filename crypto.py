@@ -5,11 +5,6 @@ The encryption key is stored in a local file (``secret.key``) which is
 generated automatically on first use.
 
 Also provides self-signed certificate generation for SSL recovery mode.
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
 """
 
 import logging

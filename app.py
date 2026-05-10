@@ -5,8 +5,20 @@ poller control, database browsing, settings, and vehicle management.
 
 Author:      Kevin Tigges
 Description: Ford Lightning EV Tool Prototype
-Version:     0.8.0
+Version:     0.7
 Date:        2026-05-09
+
+3rd Party APIs (Trip Planner):
+- Nominatim (OpenStreetMap): Geocoding - NO KEY REQUIRED
+- US Census Bureau Geocoder: US address geocoding - NO KEY REQUIRED
+- ArcGIS World Geocoder: Geocoding fallback - NO KEY REQUIRED
+- Photon: OSM-based geocoding fallback - NO KEY REQUIRED
+- OSRM: Open Source Routing Machine - NO KEY REQUIRED
+- OpenRouteService: Routing fallback - REQUIRES API KEY (optional)
+- Open-Meteo: Weather forecasting - NO KEY REQUIRED
+
+3rd Party APIs (Core):
+- Ford Connected Vehicle API: Vehicle telemetry - REQUIRES OAUTH CREDENTIALS
 """
 
 import logging
@@ -197,7 +209,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.8.0"
+    app.config["APP_VERSION"] = "0.7"
     app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     app.config["STARTUP_DB_NOTICE"] = None
 
@@ -3919,6 +3931,7 @@ def create_app() -> Flask:
             "start_soc": 85,
             "use_current_source": False,
         }
+        unit_system = _get_setting("units") if db.is_available() else "imperial"
 
         if request.method == "POST":
             form_data["source"] = request.form.get("source", "").strip()
@@ -4022,6 +4035,7 @@ def create_app() -> Flask:
             form=form_data,
             plan=plan,
             preview=preview,
+            unit_system=unit_system,
         )
 
     @app.route("/api/predict/trip", methods=["POST"])

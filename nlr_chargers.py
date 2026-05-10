@@ -4,11 +4,6 @@ Fetches EV charging station data for route planning and AI model training.
 - Manual import via /chargers/sync route
 - Scheduled delta syncs (optional)
 - Stores connector inventory normalized for ML feature engineering
-
-Author:      Kevin Tigges
-Description: MLLighting EV Tool - Charger Integration
-Version:     0.8.0
-Date:        2026-05-09
 """
 
 import json

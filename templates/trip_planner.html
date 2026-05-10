@@ -150,7 +150,11 @@
                         <div class="col-md-6">
                             <div class="mb-3">
                                 <small class="text-muted">Distance</small>
-                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km * 0.621371) }} mi <small class="text-muted">({{ "%.1f"|format(plan.total_distance_km) }} km)</small></h5>
+                                {% if unit_system == 'imperial' %}
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km * 0.621371) }} mi</h5>
+                                {% else %}
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km) }} km</h5>
+                                {% endif %}
                             </div>
                             <div class="mb-3">
                                 <small class="text-muted">Duration</small>
@@ -214,7 +218,7 @@
                     <h6>Recommended Charging Stops</h6>
                     <div class="list-group">
                         {% for stop in plan.charging_stops %}
-                        <div class="list-group-item">
+                            <div class="list-group-item">
                             <div class="d-flex justify-content-between">
                                 <div>
                                     <h6 class="mb-1">{{ stop.charger_name }}</h6>
@@ -224,7 +228,7 @@
                                     </small>
                                 </div>
                                 <div class="text-end">
-                                    <small><strong>km {{ "%.0f"|format(stop.distance_km_from_start) }}</strong></small><br>
+                                    <small><strong>{% if unit_system == 'imperial' %}{{ "%.0f"|format(stop.distance_km_from_start * 0.621371) }} mi{% else %}km {{ "%.0f"|format(stop.distance_km_from_start) }}{% endif %}</strong></small><br>
                                     <small>Arrive: {{ stop.arrival_soc_percent|int }}%</small><br>
                                     <small>Charge to: {{ stop.charge_to_soc_percent|int }}%</small><br>
                                     <small class="text-muted">{{ stop.charge_time_min }} min</small>
@@ -238,17 +242,71 @@
                     <p class="text-success"><strong>Baseline estimate complete.</strong></p>
                     {% endif %}
 
+                    {% if plan.route_weather %}
+                    <hr>
+                    <h6>Route Weather Timeline (every ~20 miles)</h6>
+                    <div class="list-group list-group-flush">
+                        {% for wx in plan.route_weather %}
+                        <div class="list-group-item px-0">
+                            <div class="d-flex justify-content-between flex-wrap">
+                                <div>
+                                    <strong>{{ wx.label }}</strong>
+                                    {% if unit_system == 'imperial' %}
+                                    <span class="text-muted ms-2">Mile {{ "%.1f"|format(wx.distance_miles) }}</span>
+                                    {% else %}
+                                    <span class="text-muted ms-2">{{ "%.1f"|format(wx.distance_miles * 1.60934) }} km</span>
+                                    {% endif %}
+                                </div>
+                                <small class="text-muted">ETA {{ wx.eta_utc }}</small>
+                            </div>
+                            <div class="small mt-1">
+                                <span class="badge bg-info text-dark me-2">{{ wx.weather }}</span>
+                                {% if wx.temp_c is not none %}
+                                {% if unit_system == 'imperial' %}
+                                <span class="me-2">{{ "%.1f"|format((wx.temp_c * 9/5) + 32) }}°F</span>
+                                {% else %}
+                                <span class="me-2">{{ "%.1f"|format(wx.temp_c) }}°C</span>
+                                {% endif %}
+                                {% endif %}
+                                {% if wx.precipitation_pct is not none %}
+                                <span class="text-muted me-2">Precip {{ wx.precipitation_pct }}%</span>
+                                {% endif %}
+                                {% if wx.wind_kmh is not none %}
+                                {% if unit_system == 'imperial' %}
+                                <span class="text-muted">Wind {{ "%.1f"|format(wx.wind_kmh * 0.621371) }} mph</span>
+                                {% else %}
+                                <span class="text-muted">Wind {{ "%.1f"|format(wx.wind_kmh) }} km/h</span>
+                                {% endif %}
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
                     {% if plan.route_steps %}
                     <hr>
                     <h6>Turn-by-Turn Directions</h6>
-                    <ol class="small ps-3">
+                    <div class="list-group list-group-flush small">
                         {% for step in plan.route_steps %}
-                        <li class="mb-2">
-                            <div><strong>{{ step.instruction }}</strong></div>
-                            <div class="text-muted">{{ "%.2f"|format(step.distance_km) }} km • {{ step.duration_min }} min</div>
-                        </li>
+                        {% set text = (step.instruction or '')|lower %}
+                        <div class="list-group-item px-0">
+                            <div class="d-flex justify-content-between flex-wrap">
+                                <div class="me-2">
+                                    <span class="me-1">
+                                        {% if 'left' in text %}⬅{% elif 'right' in text %}➡{% elif 'arrive' in text %}🏁{% elif 'depart' in text %}🚗{% else %}⬆{% endif %}
+                                    </span>
+                                    <strong>{{ step.instruction }}</strong>
+                                </div>
+                                {% if unit_system == 'imperial' %}
+                                <span class="text-muted">{{ "%.2f"|format(step.distance_km * 0.621371) }} mi • {{ step.duration_min }} min</span>
+                                {% else %}
+                                <span class="text-muted">{{ "%.2f"|format(step.distance_km) }} km • {{ step.duration_min }} min</span>
+                                {% endif %}
+                            </div>
+                        </div>
                         {% endfor %}
-                    </ol>
+                    </div>
                     {% endif %}
                 </div>
             </div>

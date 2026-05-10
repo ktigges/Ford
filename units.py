@@ -7,11 +7,6 @@ and convert only at presentation time.
 Usage in templates via Jinja globals:
     {{ convert(value, 'km', 'mi') }}
     {{ unit_label('distance') }}
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.3.0
-Date:        2026-04-28
 """
 
 

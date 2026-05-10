@@ -2,11 +2,6 @@
 
 Maps common timezone identifiers to ISO 3166-1 alpha-2 country codes.
 Used for geo-based features (charger region, route planning bounds).
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool - Geo Utils
-Version:     0.6.0.0
-Date:        2026-05-09
 """
 
 from typing import Optional
