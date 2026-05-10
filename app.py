@@ -227,85 +227,91 @@ def create_app() -> Flask:
         return "UTC"
 
     _SETTINGS_DEFAULTS = {
-            "backup_schedule_enabled": "off",  # on/off for periodic backup
-            "backup_schedule_hours": "24",     # periodic backup interval in hours
-            "backup_last_completed_at": "",
-            "backup_last_error": "",
-            _backup_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
-            _backup_scheduler_stop_event = threading.Event()
-            def _backup_scheduler_is_running() -> bool:
-                t = _backup_scheduler_thread.get("thread")
-                return bool(t and t.is_alive())
+        "backup_schedule_enabled": "off",  # on/off for periodic backup
+        "backup_schedule_hours": "24",     # periodic backup interval in hours
+        "backup_last_completed_at": "",
+        "backup_last_error": "",
+        # ...existing settings...
+    }
 
-            def _run_backup_scheduler_loop() -> None:
-                while not _backup_scheduler_stop_event.is_set():
+    # Backup scheduler thread and functions (moved out of _SETTINGS_DEFAULTS)
+    _backup_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _backup_scheduler_stop_event = threading.Event()
+
+    def _backup_scheduler_is_running() -> bool:
+        t = _backup_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _run_backup_scheduler_loop() -> None:
+        while not _backup_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _backup_scheduler_stop_event.wait(60)
+                    continue
+
+                enabled = (_get_setting("backup_schedule_enabled") or "off").strip().lower() == "on"
+                if not enabled:
+                    _backup_scheduler_stop_event.wait(60)
+                    continue
+
+                interval_hours = _int_setting("backup_schedule_hours", 24, 1, 168)
+                last_completed = _parse_utc_iso((_get_setting("backup_last_completed_at") or "").strip())
+                now_utc = datetime.now(timezone.utc)
+                due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
+                if due:
                     try:
-                        if not db.is_available():
-                            _backup_scheduler_stop_event.wait(60)
-                            continue
-
-                        enabled = (_get_setting("backup_schedule_enabled") or "off").strip().lower() == "on"
-                        if not enabled:
-                            _backup_scheduler_stop_event.wait(60)
-                            continue
-
-                        interval_hours = _int_setting("backup_schedule_hours", 24, 1, 168)
-                        last_completed = _parse_utc_iso((_get_setting("backup_last_completed_at") or "").strip())
-                        now_utc = datetime.now(timezone.utc)
-                        due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
-                        if due:
-                            try:
-                                backup_path = backup.backup_sql()
-                                _set_setting("backup_last_completed_at", now_utc.isoformat(), "Last scheduled backup time")
-                                _set_setting("backup_last_error", "", "Last backup error")
-                                _cleanup_old_backups()
-                                log.info(f"Scheduled backup completed: {backup_path}")
-                            except Exception as exc:
-                                _set_setting("backup_last_error", str(exc), "Last backup error")
-                                log.warning(f"Scheduled backup failed: {exc}")
-                        _backup_scheduler_stop_event.wait(60)
+                        backup_path = backup.backup_sql()
+                        _set_setting("backup_last_completed_at", now_utc.isoformat(), "Last scheduled backup time")
+                        _set_setting("backup_last_error", "", "Last backup error")
+                        _cleanup_old_backups()
+                        log.info(f"Scheduled backup completed: {backup_path}")
                     except Exception as exc:
-                        log.exception("Backup scheduler loop error: %s", exc)
-                        _backup_scheduler_stop_event.wait(60)
+                        _set_setting("backup_last_error", str(exc), "Last backup error")
+                        log.warning(f"Scheduled backup failed: {exc}")
+                _backup_scheduler_stop_event.wait(60)
+            except Exception as exc:
+                log.exception("Backup scheduler loop error: %s", exc)
+                _backup_scheduler_stop_event.wait(60)
 
-            def _start_backup_scheduler() -> None:
-                if _backup_scheduler_is_running():
-                    return
-                t = threading.Thread(
-                    target=_run_backup_scheduler_loop,
-                    name="backup-scheduler",
-                    daemon=True,
-                )
-                _backup_scheduler_thread["thread"] = t
-                t.start()
-                log.info("Backup scheduler thread started")
+    def _start_backup_scheduler() -> None:
+        if _backup_scheduler_is_running():
+            return
+        t = threading.Thread(
+            target=_run_backup_scheduler_loop,
+            name="backup-scheduler",
+            daemon=True,
+        )
+        _backup_scheduler_thread["thread"] = t
+        t.start()
+        log.info("Backup scheduler thread started")
 
-            def _cleanup_old_backups():
-                """Keep only the 5 most recent backup files and associated model files."""
-                backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
-                files = [f for f in os.listdir(backup_dir) if f.startswith("lightning_backup_") and f.endswith(".sql")]
-                files.sort(reverse=True)  # newest first
-                to_remove = files[5:]
-                for fname in to_remove:
-                    fpath = os.path.join(backup_dir, fname)
+    def _cleanup_old_backups():
+        """Keep only the 5 most recent backup files and associated model files."""
+        backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
+        files = [f for f in os.listdir(backup_dir) if f.startswith("lightning_backup_") and f.endswith(".sql")]
+        files.sort(reverse=True)  # newest first
+        to_remove = files[5:]
+        for fname in to_remove:
+            fpath = os.path.join(backup_dir, fname)
+            try:
+                os.remove(fpath)
+                log.info(f"Deleted old backup: {fname}")
+            except Exception as exc:
+                log.warning(f"Failed to delete old backup {fname}: {exc}")
+            # Remove associated model files with same timestamp
+            ts = fname.split("_")[2].split(".")[0]
+            for model_file in ["energy_model.pkl", "energy_scaler.pkl", "energy_model_schema.json"]:
+                mpath = os.path.join(backup_dir, f"{model_file}.{ts}")
+                if os.path.exists(mpath):
                     try:
-                        os.remove(fpath)
-                        log.info(f"Deleted old backup: {fname}")
+                        os.remove(mpath)
+                        log.info(f"Deleted old model file: {mpath}")
                     except Exception as exc:
-                        log.warning(f"Failed to delete old backup {fname}: {exc}")
-                    # Remove associated model files with same timestamp
-                    ts = fname.split("_")[2].split(".")[0]
-                    for model_file in ["energy_model.pkl", "energy_scaler.pkl", "energy_model_schema.json"]:
-                        mpath = os.path.join(backup_dir, f"{model_file}.{ts}")
-                        if os.path.exists(mpath):
-                            try:
-                                os.remove(mpath)
-                                log.info(f"Deleted old model file: {mpath}")
-                            except Exception as exc:
-                                log.warning(f"Failed to delete old model file {mpath}: {exc}")
-            # Start schedulers on app startup
-            _start_ml_retrain_scheduler()
-            _start_backup_scheduler()
+                        log.warning(f"Failed to delete old model file {mpath}: {exc}")
+
+    # Start schedulers on app startup
+    _start_ml_retrain_scheduler()
+    _start_backup_scheduler()
         "units": "imperial",
         "timezone": _default_timezone_name(),
         "poll_interval_off": "120",
