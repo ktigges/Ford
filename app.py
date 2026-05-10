@@ -465,6 +465,33 @@ def create_app() -> Flask:
             (key, value, description),
         )
 
+    def _charger_failure_class(run: dict | None) -> str:
+        """Classify charger sync failures into clearer user-facing categories."""
+        if not run:
+            return "N/A"
+
+        status = str(run.get("status") or "").strip().lower()
+        if status != "failed":
+            return "N/A"
+
+        err = str(run.get("last_error") or "").strip().lower()
+        if not err:
+            return "Unknown failure"
+
+        if "heartbeat" in err and ("stale" in err or "timeout" in err or "no heartbeat" in err):
+            return "Stale heartbeat timeout"
+
+        if "api key" in err or "not configured" in err or "config" in err:
+            return "Configuration error"
+
+        if "request failed" in err or "http" in err or "api" in err:
+            return "API request failure"
+
+        if "timeout" in err:
+            return "Request timeout"
+
+        return "Other failure"
+
     def _table_exists(table_name: str) -> bool:
         """Return True when a table exists in the current PostgreSQL schema."""
         row = db.fetch_one(
@@ -2853,6 +2880,7 @@ def create_app() -> Flask:
 
         # Get charger sync status
         charger_status = nlr_chargers.get_sync_status()
+        charger_failure_class = _charger_failure_class(charger_status)
         charger_heartbeat_stale = False
         if charger_status and charger_status.get("status") == "in_progress":
             try:
@@ -2878,6 +2906,7 @@ def create_app() -> Flask:
         
         return render_template("settings.html", settings=current, ssl=ssl_cfg,
                                ssl_status=ssl_status, charger_status=charger_status,
+                               charger_failure_class=charger_failure_class,
                                sequence_alignment=sequence_alignment,
                                charger_job_running=charger_job_running,
                                charger_heartbeat_stale=charger_heartbeat_stale)
@@ -3241,6 +3270,7 @@ def create_app() -> Flask:
                     station_id,
                     MAX(COALESCE(power_kw, 0)) AS max_power_kw,
                     STRING_AGG(DISTINCT COALESCE(NULLIF(connector_type, ''), 'UNKNOWN'), ', ') AS connector_types,
+                    STRING_AGG(DISTINCT COALESCE(NULLIF(charging_level, ''), 'UNKNOWN'), ', ') AS charging_levels,
                     SUM(CASE WHEN COALESCE(port_count, 0) > 0 THEN port_count ELSE 1 END) AS connector_count
                 FROM ev_charger_connectors
                 GROUP BY station_id
@@ -3297,9 +3327,10 @@ def create_app() -> Flask:
         connector_select = (
             "COALESCE(conn.max_power_kw, 0) AS max_power_kw, "
             "COALESCE(conn.connector_types, '') AS connector_types, "
+            "COALESCE(conn.charging_levels, '') AS charging_levels, "
             "COALESCE(conn.connector_count, 0) AS connector_count"
         ) if has_connectors else (
-            "0::REAL AS max_power_kw, ''::TEXT AS connector_types, 0::BIGINT AS connector_count"
+            "0::REAL AS max_power_kw, ''::TEXT AS connector_types, ''::TEXT AS charging_levels, 0::BIGINT AS connector_count"
         )
 
         filtered_total_row = db.fetch_one(
@@ -3322,8 +3353,17 @@ def create_app() -> Flask:
                 s.city,
                 s.state,
                 s.zip,
+                s.country,
                 s.latitude,
                 s.longitude,
+                s.status_code,
+                s.fuel_type_code,
+                s.access_code,
+                s.access_detail,
+                s.owner_type_code,
+                s.facility_type,
+                s.nlr_station_id,
+                s.updated_at,
                 COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') AS network_name,
                 {distance_select_sql},
                 {connector_select}
@@ -3370,6 +3410,13 @@ def create_app() -> Flask:
                 """
             )
 
+        sync_status_failure_class = _charger_failure_class(sync_status)
+        recent_runs_view = []
+        for run in recent_runs:
+            run_view = dict(run)
+            run_view["failure_class"] = _charger_failure_class(run_view)
+            recent_runs_view.append(run_view)
+
         return render_template(
             "public_chargers.html",
             totals=totals,
@@ -3392,7 +3439,8 @@ def create_app() -> Flask:
             charging_levels=charging_levels,
             network_breakdown=network_breakdown,
             sync_status=sync_status,
-            recent_runs=recent_runs,
+            sync_status_failure_class=sync_status_failure_class,
+            recent_runs=recent_runs_view,
         )
 
     # ── Database viewer ────────────────────────────────────────────
