@@ -3791,6 +3791,45 @@ def create_app() -> Flask:
 
     # ── Trip Planner (Phase 2: ML routing) ─────────────────────────
 
+    def _current_vehicle_location_coords() -> tuple[float, float] | None:
+        """Return latest known vehicle coordinates for active VIN, if available."""
+        vin = _active_vin()
+        if not vin:
+            return None
+
+        row = db.fetch_one(
+            """
+            SELECT latitude, longitude
+            FROM location_state
+            WHERE vin = %s
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL
+            LIMIT 1
+            """,
+            (vin,),
+        )
+        if row:
+            return (float(row["latitude"]), float(row["longitude"]))
+
+        # Fallback: latest recorded drive point when location_state is unavailable.
+        row = db.fetch_one(
+            """
+            SELECT dp.latitude, dp.longitude
+            FROM drive_points dp
+            JOIN drives d ON d.id = dp.drive_id
+            WHERE d.vin = %s
+              AND dp.latitude IS NOT NULL
+              AND dp.longitude IS NOT NULL
+            ORDER BY dp.recorded_at DESC
+            LIMIT 1
+            """,
+            (vin,),
+        )
+        if row:
+            return (float(row["latitude"]), float(row["longitude"]))
+
+        return None
+
     @app.route("/trip-planner", methods=["GET", "POST"])
     def trip_planner():
         """Interactive trip planner for EV routing with charger recommendations."""
@@ -3803,11 +3842,13 @@ def create_app() -> Flask:
             "source": "",
             "destination": "",
             "start_soc": 85,
+            "use_current_source": False,
         }
 
         if request.method == "POST":
             form_data["source"] = request.form.get("source", "").strip()
             form_data["destination"] = request.form.get("destination", "").strip()
+            form_data["use_current_source"] = request.form.get("use_current_source") == "on"
             try:
                 form_data["start_soc"] = int(request.form.get("start_soc", 85))
             except (ValueError, TypeError):
@@ -3815,15 +3856,34 @@ def create_app() -> Flask:
 
             form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
 
-            if not form_data["source"] or not form_data["destination"]:
-                flash("Please enter both source and destination.", "warning")
+            source_for_plan = form_data["source"]
+            if form_data["use_current_source"]:
+                current_coords = _current_vehicle_location_coords()
+                if not current_coords:
+                    flash(
+                        "Current vehicle location is unavailable. Poll the vehicle first or enter a source manually.",
+                        "warning",
+                    )
+                    current_coords = None
+                if current_coords:
+                    source_for_plan = f"{current_coords[0]:.6f},{current_coords[1]:.6f}"
+
+            if not form_data["destination"]:
+                flash("Please enter a destination.", "warning")
+            elif not form_data["use_current_source"] and not form_data["source"]:
+                flash("Please enter a source or enable current vehicle location.", "warning")
+            elif form_data["use_current_source"] and not source_for_plan:
+                # Current location toggle was selected but no coordinates were available.
+                pass
             else:
                 try:
                     plan = tp_service.plan_trip(
-                        source=form_data["source"],
+                        source=source_for_plan,
                         destination=form_data["destination"],
                         current_soc_percent=form_data["start_soc"],
                     )
+                    if plan and form_data["use_current_source"]:
+                        plan.source_name = "Current Vehicle Location"
                 except Exception as exc:
                     log.exception(f"Trip planning failed: {exc}")
                     flash(f"Trip planning failed: {exc}", "error")
@@ -3842,7 +3902,8 @@ def create_app() -> Flask:
         {
             "source": "40.7128,-74.0060",
             "destination": "39.7392,-104.9903",
-            "current_soc_percent": 85
+            "current_soc_percent": 85,
+            "use_current_vehicle_location": false
         }
         
         Returns: TripPlan as JSON
@@ -3852,10 +3913,19 @@ def create_app() -> Flask:
             
             source = data.get("source", "").strip()
             destination = data.get("destination", "").strip()
+            use_current = bool(data.get("use_current_vehicle_location", False))
             current_soc = data.get("current_soc_percent", 85)
-            
-            if not source or not destination:
-                return jsonify({"error": "source and destination required"}), 400
+
+            if not destination:
+                return jsonify({"error": "destination required"}), 400
+
+            if use_current:
+                current_coords = _current_vehicle_location_coords()
+                if not current_coords:
+                    return jsonify({"error": "current vehicle location unavailable"}), 400
+                source = f"{current_coords[0]:.6f},{current_coords[1]:.6f}"
+            elif not source:
+                return jsonify({"error": "source required unless use_current_vehicle_location=true"}), 400
             
             try:
                 current_soc = int(current_soc)
@@ -3869,6 +3939,8 @@ def create_app() -> Flask:
                 destination=destination,
                 current_soc_percent=current_soc,
             )
+            if use_current:
+                plan.source_name = "Current Vehicle Location"
             
             # Convert dataclass to dict for JSON serialization
             from dataclasses import asdict

@@ -46,6 +46,9 @@ AC_CHARGER_KW = 11          # Home charger power (Level 2)
 
 # Route optimization
 MAX_DISTANCE_BETWEEN_CHARGERS_KM = 400  # Don't plan stops > 400km apart
+MIN_EFFICIENCY_KWH_PER_KM = 0.12
+MAX_EFFICIENCY_KWH_PER_KM = 0.60
+DEFAULT_EFFICIENCY_KWH_PER_KM = 0.28
 
 
 # ── Data Structures ────────────────────────────────────────────────
@@ -108,6 +111,13 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
     Returns:
         (latitude, longitude) or None if not found
     """
+    location_query = (location_query or "").strip()
+    if not location_query:
+        return None
+
+    # Normalize accidental extra whitespace and wrapping quotes from pasted inputs.
+    location_query = " ".join(location_query.strip("\"'").split())
+
     try:
         # Try parsing as coordinates first
         if "," in location_query:
@@ -121,34 +131,55 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                 except ValueError:
                     pass
         
-        # Use Nominatim for geocoding
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {
+        # Primary provider: Nominatim with a short retry window.
+        nominatim_url = "https://nominatim.openstreetmap.org/search"
+        nominatim_params = {
             "q": location_query,
             "format": "json",
             "limit": 1,
             "addressdetails": 1,
-            "timeout": 10
         }
         headers = {
-            "User-Agent": "Ford-EV-Trip-Planner/1.0"
+            "User-Agent": "MLLighting-Trip-Planner/1.0"
         }
-        
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+
+        for attempt in (1, 2):
+            try:
+                response = requests.get(nominatim_url, params=nominatim_params, headers=headers, timeout=10)
+                response.raise_for_status()
+                results = response.json()
+                if results:
+                    lat = float(results[0]["lat"])
+                    lon = float(results[0]["lon"])
+                    log.info(f"Geocoded '{location_query}' via Nominatim to {lat}, {lon}")
+                    return (lat, lon)
+            except requests.RequestException as e:
+                if attempt == 2:
+                    log.warning("Nominatim geocode failed for '%s': %s", location_query, e)
+
+        # Fallback provider: Photon
+        photon_url = "https://photon.komoot.io/api/"
+        photon_params = {
+            "q": location_query,
+            "limit": 1,
+        }
+        response = requests.get(photon_url, params=photon_params, headers=headers, timeout=10)
         response.raise_for_status()
-        results = response.json()
-        
-        if results:
-            lat = float(results[0]["lat"])
-            lon = float(results[0]["lon"])
-            log.info(f"Geocoded '{location_query}' to {lat}, {lon}")
-            return (lat, lon)
-        else:
-            log.warning(f"Could not geocode location: {location_query}")
-            return None
-    
+        data = response.json()
+        features = data.get("features") or []
+        if features:
+            coords = features[0].get("geometry", {}).get("coordinates") or []
+            if len(coords) >= 2:
+                lon = float(coords[0])
+                lat = float(coords[1])
+                log.info(f"Geocoded '{location_query}' via Photon to {lat}, {lon}")
+                return (lat, lon)
+
+        log.warning(f"Could not geocode location: {location_query}")
+        return None
+
     except requests.RequestException as e:
-        log.error(f"Geocoding API error: {e}")
+        log.error(f"Geocoding API error for '{location_query}': {e}")
         return None
 
 
@@ -316,8 +347,15 @@ def find_nearby_chargers(
     try:
         chargers = db.fetch_all("""
             SELECT 
-                s.id, s.name, s.latitude, s.longitude, s.city, s.state, s.address,
-                c.network, c.max_power_kw, c.connector_type,
+                s.id,
+                s.station_name AS name,
+                s.latitude,
+                s.longitude,
+                s.city,
+                s.state,
+                s.street_address AS address,
+                COALESCE(MAX(NULLIF(c.network, '')), s.network_name, 'Unknown') AS network,
+                COALESCE(MAX(c.power_kw), %s) AS max_power_kw,
                 SQRT(
                     POW(s.latitude - %s, 2) + 
                     POW(s.longitude - %s, 2)
@@ -329,9 +367,18 @@ def find_nearby_chargers(
                     POW(s.latitude - %s, 2) + 
                     POW(s.longitude - %s, 2)
                 ) * 111 < %s
+            GROUP BY
+                s.id,
+                s.station_name,
+                s.latitude,
+                s.longitude,
+                s.city,
+                s.state,
+                s.street_address,
+                s.network_name
             ORDER BY distance_km ASC
             LIMIT %s
-        """, (lat, lon, lat, lon, radius_km, limit))
+        """, (DC_FAST_CHARGER_KW, lat, lon, lat, lon, radius_km, limit))
         
         return chargers if chargers else []
     
@@ -354,61 +401,68 @@ def optimize_charging_stops(
     - Charge-to SOC
     - Charging time
     """
-    stops = []
-    
-    # Energy consumption per km (from model prediction)
-    kwh_per_km = energy_needed_kwh / total_distance_km if total_distance_km > 0 else 0
-    
-    # Available energy (from current SOC to minimum safe SOC)
-    available_kwh = (current_soc_percent - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH
-    
-    # Maximum distance before needing to charge
-    max_range_km = available_kwh / kwh_per_km if kwh_per_km > 0 else 1000
-    
-    log.info(f"Trip energy: {energy_needed_kwh:.1f} kWh, Available: {available_kwh:.1f} kWh, "
-             f"Max range: {max_range_km:.0f} km")
-    
-    if max_range_km >= total_distance_km:
-        # Can make it without charging
-        return []
-    
-    # Need to charge - find stops
-    distance_traveled = 0
-    current_soc = current_soc_percent
-    
-    while distance_traveled < total_distance_km:
-        # How far can we go?
-        can_travel_km = (current_soc - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH / kwh_per_km
-        stop_location_km = distance_traveled + can_travel_km * 0.8  # Stop at 80% of range
-        
-        if stop_location_km >= total_distance_km:
-            break  # Can reach destination
-        
-        # Find chargers near stop location
-        segment_idx = min(int(stop_location_km / total_distance_km * len(polyline)), len(polyline) - 1)
-        stop_lat, stop_lon = polyline[segment_idx]
-        
-        nearby = find_nearby_chargers(stop_lat, stop_lon, radius_km=25, limit=3)
-        if not nearby:
-            log.warning(f"No chargers found near {stop_lat}, {stop_lon}")
+    stops: list[ChargingStop] = []
+
+    if total_distance_km <= 0:
+        return stops
+
+    kwh_per_km = energy_needed_kwh / total_distance_km if energy_needed_kwh > 0 else DEFAULT_EFFICIENCY_KWH_PER_KM
+    distance_traveled = 0.0
+    current_soc = float(current_soc_percent)
+    max_stops = 8
+
+    for _ in range(max_stops):
+        usable_kwh = max(0.0, (current_soc - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH)
+        reachable_km = usable_kwh / kwh_per_km if kwh_per_km > 0 else total_distance_km
+        remaining_km = total_distance_km - distance_traveled
+
+        if reachable_km >= remaining_km:
             break
-        
-        # Pick first (closest) charger
-        charger = nearby[0]
-        
-        # Calculate arrival SOC
+
+        # Place the next stop well before empty to reduce edge-case failures.
+        stop_location_km = distance_traveled + max(5.0, min(reachable_km * 0.75, remaining_km - 1.0))
+        segment_idx = min(int(stop_location_km / total_distance_km * max(1, len(polyline) - 1)), len(polyline) - 1)
+        stop_lat, stop_lon = polyline[segment_idx]
+
+        nearby: list[dict] = []
+        for radius in (25, 40, 60):
+            nearby = find_nearby_chargers(stop_lat, stop_lon, radius_km=radius, limit=10)
+            if nearby:
+                break
+
+        if not nearby:
+            log.warning("No chargers found near route km %.1f (lat=%.4f lon=%.4f)", stop_location_km, stop_lat, stop_lon)
+            break
+
+        # Prefer high-power chargers among nearest options.
+        charger = max(
+            nearby,
+            key=lambda c: (
+                float(c.get("max_power_kw") or 0),
+                -float(c.get("distance_km") or 0),
+            ),
+        )
+
         distance_to_stop = stop_location_km - distance_traveled
         energy_to_stop = distance_to_stop * kwh_per_km
         arrival_soc = current_soc - (energy_to_stop / BATTERY_CAPACITY_KWH * 100)
-        
-        # Charge to 80% for next segment
-        charge_to_soc = 80
-        energy_to_add = (charge_to_soc - arrival_soc) / 100 * BATTERY_CAPACITY_KWH
-        
-        # Calculate charge time
-        charger_power = charger.get("max_power_kw", DC_FAST_CHARGER_KW)
-        charge_time_min = int(energy_to_add / charger_power * 60)
-        
+        if arrival_soc < MIN_SAFE_SOC_PERCENT:
+            arrival_soc = MIN_SAFE_SOC_PERCENT
+
+        remaining_after_stop_km = total_distance_km - stop_location_km
+        target_soc_for_destination = (
+            MIN_SAFE_SOC_PERCENT
+            + ((remaining_after_stop_km * kwh_per_km) / BATTERY_CAPACITY_KWH * 100)
+            + 5
+        )
+        charge_to_soc = max(70.0, min(90.0, target_soc_for_destination))
+        if charge_to_soc <= arrival_soc:
+            charge_to_soc = min(90.0, arrival_soc + 10.0)
+
+        energy_to_add = max(0.0, (charge_to_soc - arrival_soc) / 100 * BATTERY_CAPACITY_KWH)
+        charger_power = max(float(charger.get("max_power_kw") or DC_FAST_CHARGER_KW), 25.0)
+        charge_time_min = int(round((energy_to_add / charger_power) * 60))
+
         stop = ChargingStop(
             charger_id=charger["id"],
             charger_name=charger["name"],
@@ -418,20 +472,72 @@ def optimize_charging_stops(
             arrival_soc_percent=arrival_soc,
             charge_to_soc_percent=charge_to_soc,
             charger_power_kw=charger_power,
-            charge_time_min=charge_time_min,
+            charge_time_min=max(1, charge_time_min),
             network=charger.get("network", "Unknown"),
-            address=charger.get("address", "")
+            address=charger.get("address", ""),
         )
-        
+
         stops.append(stop)
-        
         distance_traveled = stop_location_km
         current_soc = charge_to_soc
-        
-        log.info(f"Stop {len(stops)}: {charger['name']} at {stop_location_km:.0f} km, "
-                 f"arrive at {arrival_soc:.0f}%, charge to {charge_to_soc}% ({charge_time_min} min)")
-    
+
+        log.info(
+            "Stop %s: %s at km %.0f, arrive %.0f%%, charge to %.0f%% (%s min)",
+            len(stops),
+            charger["name"],
+            stop_location_km,
+            arrival_soc,
+            charge_to_soc,
+            stop.charge_time_min,
+        )
+
     return stops
+
+
+def _is_direct_trip_feasible(start_soc_percent: float, energy_needed_kwh: float) -> bool:
+    usable_kwh = max(0.0, (start_soc_percent - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH)
+    return usable_kwh >= max(0.0, energy_needed_kwh)
+
+
+def _estimate_arrival_soc(start_soc_percent: float, energy_used_kwh: float) -> float:
+    soc_drop = (energy_used_kwh / BATTERY_CAPACITY_KWH) * 100 if BATTERY_CAPACITY_KWH > 0 else 100
+    return max(0.0, min(100.0, start_soc_percent - soc_drop))
+
+
+def _can_complete_with_stops(
+    total_distance_km: float,
+    start_soc_percent: float,
+    energy_needed_kwh: float,
+    stops: list[ChargingStop],
+) -> tuple[bool, float]:
+    if total_distance_km <= 0:
+        return False, 0.0
+
+    kwh_per_km = energy_needed_kwh / total_distance_km if energy_needed_kwh > 0 else DEFAULT_EFFICIENCY_KWH_PER_KM
+    distance_traveled = 0.0
+    current_soc = float(start_soc_percent)
+
+    for stop in sorted(stops, key=lambda s: s.distance_km_from_start):
+        leg_km = max(0.0, stop.distance_km_from_start - distance_traveled)
+        leg_kwh = leg_km * kwh_per_km
+        usable_kwh = max(0.0, (current_soc - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH)
+        if leg_kwh > usable_kwh + 1e-6:
+            return False, 0.0
+        current_soc = max(MIN_SAFE_SOC_PERCENT, current_soc - (leg_kwh / BATTERY_CAPACITY_KWH * 100))
+        current_soc = max(current_soc, float(stop.charge_to_soc_percent))
+        distance_traveled = stop.distance_km_from_start
+
+    final_leg_km = max(0.0, total_distance_km - distance_traveled)
+    final_leg_kwh = final_leg_km * kwh_per_km
+    final_usable_kwh = max(0.0, (current_soc - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH)
+    if final_leg_kwh > final_usable_kwh + 1e-6:
+        return False, 0.0
+
+    arrival_soc = max(
+        0.0,
+        current_soc - (final_leg_kwh / BATTERY_CAPACITY_KWH * 100),
+    )
+    return True, arrival_soc
 
 
 # ── Main Trip Planning ─────────────────────────────────────────────
@@ -461,6 +567,12 @@ def plan_trip(
     end_coords = geocode_location(destination)
     
     if not start_coords or not end_coords:
+        missing = []
+        if not start_coords:
+            missing.append(f"source '{source}'")
+        if not end_coords:
+            missing.append(f"destination '{destination}'")
+        missing_text = " and ".join(missing) if missing else "source/destination"
         return TripPlan(
             source_name=source,
             destination_name=destination,
@@ -471,7 +583,9 @@ def plan_trip(
             energy_needed_kwh=0,
             charging_stops=[],
             feasible=False,
-            feasibility_reason="Could not geocode locations",
+            feasibility_reason=(
+                f"Could not geolocate {missing_text}. Try 'City, ST' or 'lat,lon' format."
+            ),
             polyline=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
@@ -518,37 +632,35 @@ def plan_trip(
         avg_outside_temp_c=avg_temp,
     )
     
-    energy_needed_kwh = energy_result["energy_used_kwh"]
-    
-    # Calculate if feasible
-    available_energy_kwh = (current_soc_percent / 100) * BATTERY_CAPACITY_KWH
-    feasible = available_energy_kwh >= energy_needed_kwh
+    model_energy_kwh = float(energy_result["energy_used_kwh"])
+    baseline_energy_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
+
+    if energy_result.get("confidence") == "low":
+        # Blend model output with a physics-based baseline when extrapolating.
+        energy_needed_kwh = (model_energy_kwh * 0.7) + (baseline_energy_kwh * 0.3)
+    else:
+        energy_needed_kwh = model_energy_kwh
+
+    min_plausible_kwh = distance_km * MIN_EFFICIENCY_KWH_PER_KM
+    max_plausible_kwh = distance_km * MAX_EFFICIENCY_KWH_PER_KM
+    energy_needed_kwh = max(min_plausible_kwh, min(max_plausible_kwh, energy_needed_kwh))
+
+    feasible = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
     
     # Find charging stops
     if not feasible:
         charging_stops = optimize_charging_stops(
             polyline, distance_km, current_soc_percent, energy_needed_kwh
         )
-        # Recalculate feasibility with charging
-        total_energy_available = (
-            available_energy_kwh + 
-            len(charging_stops) * (80 - 10) / 100 * BATTERY_CAPACITY_KWH
+        feasible, arrival_soc = _can_complete_with_stops(
+            distance_km,
+            current_soc_percent,
+            energy_needed_kwh,
+            charging_stops,
         )
-        feasible = total_energy_available >= energy_needed_kwh
     else:
         charging_stops = []
-    
-    # Calculate arrival SOC
-    if charging_stops:
-        # After last charger, travel to destination
-        last_stop_distance = charging_stops[-1].distance_km_from_start
-        remaining_distance = distance_km - last_stop_distance
-        energy_to_dest = remaining_distance * (energy_needed_kwh / distance_km)
-        arrival_soc = charging_stops[-1].charge_to_soc_percent - (energy_to_dest / BATTERY_CAPACITY_KWH * 100)
-    else:
-        arrival_soc = current_soc_percent - (energy_needed_kwh / BATTERY_CAPACITY_KWH * 100)
-    
-    arrival_soc = max(0, min(100, arrival_soc))
+        arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
     
     plan = TripPlan(
         source_name=source,
@@ -561,9 +673,9 @@ def plan_trip(
         charging_stops=charging_stops,
         feasible=feasible,
         feasibility_reason=(
-            "Direct route, no charging needed" if not charging_stops
+            "Direct route, no charging needed" if feasible and not charging_stops
             else f"Requires {len(charging_stops)} charging stop(s)" if feasible
-            else f"Not feasible even with {len(charging_stops)} stop(s) - insufficient chargers"
+            else "Trip currently not feasible with available SOC and nearby chargers"
         ),
         polyline=polyline,
         weather_summary=f"{weather['condition']}, {weather['avg_temp_c']:.0f}°C",
