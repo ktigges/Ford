@@ -19,6 +19,8 @@ import logging
 import math
 import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Optional
@@ -49,6 +51,11 @@ MAX_EFFICIENCY_KWH_PER_KM = 0.60
 DEFAULT_EFFICIENCY_KWH_PER_KM = 0.28
 WEATHER_SAMPLE_INTERVAL_MILES = 20
 WEATHER_MAX_CHECKPOINTS = 10
+HTTP_TIMEOUT_GEOCODE_SEC = 6
+HTTP_TIMEOUT_ROUTE_SEC = 8
+HTTP_TIMEOUT_WEATHER_SEC = 4
+WEATHER_FETCH_WORKERS = 4
+MAX_ROUTE_POLYLINE_POINTS = 1200
 
 US_STATE_ABBREVIATIONS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
@@ -482,7 +489,12 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
             structured_candidates = []
             if structured_params and not nominatim_rate_limited:
                 try:
-                    response = requests.get(nominatim_url, params=structured_params, headers=headers, timeout=10)
+                    response = requests.get(
+                        nominatim_url,
+                        params=structured_params,
+                        headers=headers,
+                        timeout=HTTP_TIMEOUT_GEOCODE_SEC,
+                    )
                     response.raise_for_status()
                     structured_candidates = response.json() or []
                 except requests.RequestException as e:
@@ -532,7 +544,12 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                 if nominatim_rate_limited:
                     break
                 try:
-                    response = requests.get(nominatim_url, params=nominatim_params, headers=headers, timeout=10)
+                    response = requests.get(
+                        nominatim_url,
+                        params=nominatim_params,
+                        headers=headers,
+                        timeout=HTTP_TIMEOUT_GEOCODE_SEC,
+                    )
                     response.raise_for_status()
                     results = response.json() or []
                     if results:
@@ -591,7 +608,7 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                             "format": "json",
                         },
                         headers=headers,
-                        timeout=10,
+                        timeout=HTTP_TIMEOUT_GEOCODE_SEC,
                     )
                     response.raise_for_status()
                     data = response.json() or {}
@@ -635,7 +652,7 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                         "outFields": "Match_addr,Addr_type,City,Region,Country",
                     },
                     headers=headers,
-                    timeout=10,
+                    timeout=HTTP_TIMEOUT_GEOCODE_SEC,
                 )
                 response.raise_for_status()
                 data = response.json() or {}
@@ -691,7 +708,12 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                 "limit": 3,
                 "lang": "en",
             }
-            response = requests.get(photon_url, params=photon_params, headers=headers, timeout=10)
+            response = requests.get(
+                photon_url,
+                params=photon_params,
+                headers=headers,
+                timeout=HTTP_TIMEOUT_GEOCODE_SEC,
+            )
             response.raise_for_status()
             data = response.json()
             features = data.get("features") or []
@@ -733,6 +755,21 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2 * math.asin(math.sqrt(a))
     
     return R * c
+
+
+def _downsample_polyline(polyline: list[tuple[float, float]], max_points: int = MAX_ROUTE_POLYLINE_POINTS) -> list[tuple[float, float]]:
+    """Reduce route payload size while preserving start/end and overall shape."""
+    if not polyline or len(polyline) <= max_points:
+        return polyline
+
+    stride = (len(polyline) - 1) / float(max_points - 1)
+    reduced = []
+    for i in range(max_points):
+        reduced.append(polyline[int(round(i * stride))])
+
+    reduced[0] = polyline[0]
+    reduced[-1] = polyline[-1]
+    return reduced
 
 
 def _point_along_polyline(polyline: list[tuple[float, float]], target_km: float) -> tuple[float, float]:
@@ -812,29 +849,33 @@ def get_route_weather_timeline(
         elif idx > 0:
             label = f"Mile {int(round(km_mark * 0.621371))}"
 
-        entry = {
-            "label": label,
-            "distance_miles": round(km_mark * 0.621371, 1),
-            "eta_utc": eta.strftime("%Y-%m-%d %H:%M UTC"),
-            "lat": round(lat, 5),
-            "lon": round(lon, 5),
-            "temp_c": None,
-            "weather": "Unknown",
-            "wind_kmh": None,
-            "precipitation_pct": None,
-        }
+        timeline.append(
+            {
+                "label": label,
+                "distance_miles": round(km_mark * 0.621371, 1),
+                "eta_utc": eta.strftime("%Y-%m-%d %H:%M UTC"),
+                "eta_iso": eta.replace(minute=0, second=0, microsecond=0).isoformat(),
+                "lat": round(lat, 5),
+                "lon": round(lon, 5),
+                "temp_c": None,
+                "weather": "Unknown",
+                "wind_kmh": None,
+                "precipitation_pct": None,
+            }
+        )
 
+    def _enrich_weather(entry: dict) -> None:
         try:
             response = requests.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
-                    "latitude": lat,
-                    "longitude": lon,
+                    "latitude": entry["lat"],
+                    "longitude": entry["lon"],
                     "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m",
                     "forecast_days": 3,
                     "timezone": "UTC",
                 },
-                timeout=8,
+                timeout=HTTP_TIMEOUT_WEATHER_SEC,
             )
             response.raise_for_status()
             data = response.json() or {}
@@ -846,33 +887,40 @@ def get_route_weather_timeline(
             precips = hourly.get("precipitation_probability") or []
             winds = hourly.get("wind_speed_10m") or []
 
-            if times:
-                target_hour = eta.replace(minute=0, second=0, microsecond=0)
-                best_idx = 0
-                best_delta = None
-                for i, t in enumerate(times):
-                    try:
-                        dt = datetime.fromisoformat(t)
-                    except ValueError:
-                        continue
-                    delta = abs((dt - target_hour).total_seconds())
-                    if best_delta is None or delta < best_delta:
-                        best_delta = delta
-                        best_idx = i
+            if not times:
+                return
 
-                temp_val = temps[best_idx] if best_idx < len(temps) else None
-                code_val = codes[best_idx] if best_idx < len(codes) else None
-                precip_val = precips[best_idx] if best_idx < len(precips) else None
-                wind_val = winds[best_idx] if best_idx < len(winds) else None
+            target_hour = datetime.fromisoformat(entry["eta_iso"])
+            best_idx = 0
+            best_delta = None
+            for i, t in enumerate(times):
+                try:
+                    dt = datetime.fromisoformat(t)
+                except ValueError:
+                    continue
+                delta = abs((dt - target_hour).total_seconds())
+                if best_delta is None or delta < best_delta:
+                    best_delta = delta
+                    best_idx = i
 
-                entry["temp_c"] = round(float(temp_val), 1) if temp_val is not None else None
-                entry["weather"] = _weather_label_from_code(code_val)
-                entry["precipitation_pct"] = int(round(float(precip_val))) if precip_val is not None else None
-                entry["wind_kmh"] = round(float(wind_val), 1) if wind_val is not None else None
+            temp_val = temps[best_idx] if best_idx < len(temps) else None
+            code_val = codes[best_idx] if best_idx < len(codes) else None
+            precip_val = precips[best_idx] if best_idx < len(precips) else None
+            wind_val = winds[best_idx] if best_idx < len(winds) else None
+
+            entry["temp_c"] = round(float(temp_val), 1) if temp_val is not None else None
+            entry["weather"] = _weather_label_from_code(code_val)
+            entry["precipitation_pct"] = int(round(float(precip_val))) if precip_val is not None else None
+            entry["wind_kmh"] = round(float(wind_val), 1) if wind_val is not None else None
         except Exception as exc:
-            log.warning("Route weather fetch failed at %.4f,%.4f: %s", lat, lon, exc)
+            log.warning("Route weather fetch failed at %.4f,%.4f: %s", entry["lat"], entry["lon"], exc)
 
-        timeline.append(entry)
+    worker_count = max(1, min(WEATHER_FETCH_WORKERS, len(timeline)))
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        list(pool.map(_enrich_weather, timeline))
+
+    for entry in timeline:
+        entry.pop("eta_iso", None)
 
     return timeline
 
@@ -923,7 +971,7 @@ def get_route(
             "steps": "true",
         }
 
-        response = requests.get(url, params=params, timeout=12)
+        response = requests.get(url, params=params, timeout=HTTP_TIMEOUT_ROUTE_SEC)
         response.raise_for_status()
         data = response.json()
 
@@ -931,7 +979,7 @@ def get_route(
         if routes:
             route = routes[0]
             coords = (route.get("geometry") or {}).get("coordinates") or []
-            polyline = [(lat, lon) for lon, lat in coords]
+            polyline = _downsample_polyline([(lat, lon) for lon, lat in coords])
 
             distance_km = float(route.get("distance", 0)) / 1000
             duration_sec = int(route.get("duration", 0))
@@ -971,14 +1019,14 @@ def get_route(
                 "geometry_format": "geojson",
             }
 
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=HTTP_TIMEOUT_ROUTE_SEC)
             response.raise_for_status()
             data = response.json()
 
             if "features" in data and data["features"]:
                 route = data["features"][0]
                 coords = route["geometry"]["coordinates"]
-                polyline = [(lat, lon) for lon, lat in coords]
+                polyline = _downsample_polyline([(lat, lon) for lon, lat in coords])
 
                 segment = route["properties"]["segments"][0]
                 distance_km = float(segment.get("distance", 0)) / 1000
@@ -1321,10 +1369,14 @@ def plan_trip(
     """
     
     log.info(f"Planning trip: {source} → {destination} (SOC: {current_soc_percent}%)")
+
+    t0 = time.perf_counter()
     
     # Geocode locations
+    t_geocode = time.perf_counter()
     start_coords = geocode_location(source)
     end_coords = geocode_location(destination)
+    geocode_elapsed = time.perf_counter() - t_geocode
     
     if not start_coords or not end_coords:
         missing = []
@@ -1360,7 +1412,9 @@ def plan_trip(
     log.info(f"End: {end_lat:.4f}, {end_lon:.4f}")
     
     # Get route
+    t_route = time.perf_counter()
     route = get_route(start_lat, start_lon, end_lat, end_lon)
+    route_elapsed = time.perf_counter() - t_route
     if not route:
         return TripPlan(
             source_name=source,
@@ -1384,7 +1438,9 @@ def plan_trip(
     duration_sec = route["duration_sec"]
     polyline = route["polyline"]
     route_steps = route.get("steps") or []
+    t_weather = time.perf_counter()
     route_weather = get_route_weather_timeline(polyline, distance_km, duration_sec)
+    weather_elapsed = time.perf_counter() - t_weather
 
     if route_weather:
         start_weather = route_weather[0]
@@ -1432,8 +1488,11 @@ def plan_trip(
         created_at=datetime.now().isoformat()
     )
     
+    total_elapsed = time.perf_counter() - t0
+
     log.info(f"\n{'='*60}")
     log.info("Trip Plan Summary:")
+    log.info(f"  Timing: geocode={geocode_elapsed:.2f}s route={route_elapsed:.2f}s weather={weather_elapsed:.2f}s total={total_elapsed:.2f}s")
     log.info(f"  Distance: {distance_km:.1f} km")
     log.info(f"  Duration: {plan.estimated_duration_min} min")
     log.info(f"  Energy: {energy_needed_kwh:.1f} kWh (baseline estimate)")
