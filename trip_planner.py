@@ -21,14 +21,14 @@ Date:        2026-05-09
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import requests
 
 import db
-import energy_model
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,24 @@ MAX_DISTANCE_BETWEEN_CHARGERS_KM = 400  # Don't plan stops > 400km apart
 MIN_EFFICIENCY_KWH_PER_KM = 0.12
 MAX_EFFICIENCY_KWH_PER_KM = 0.60
 DEFAULT_EFFICIENCY_KWH_PER_KM = 0.28
+
+US_STATE_ABBREVIATIONS = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
+    "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
+    "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+}
+
+US_STATE_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware", "florida",
+    "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska",
+    "nevada", "new hampshire", "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
+    "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee", "texas",
+    "utah", "vermont", "virginia", "washington", "west virginia", "wisconsin", "wyoming", "district of columbia",
+}
+
+ZIP_RE = re.compile(r"^\d{5}(?:-\d{4})?$")
 
 
 # ── Data Structures ────────────────────────────────────────────────
@@ -130,50 +148,111 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                         return (lat, lon)
                 except ValueError:
                     pass
+
+        def _looks_like_us_location(query: str) -> bool:
+            q = query.strip()
+            q_lower = q.lower()
+            if ZIP_RE.match(q):
+                return True
+            if q_lower in US_STATE_NAMES:
+                return True
+            if q.upper() in US_STATE_ABBREVIATIONS:
+                return True
+
+            tokens = [t.strip(". ") for t in q.replace(",", " ").split() if t.strip()]
+            if any(ZIP_RE.match(t) for t in tokens):
+                return True
+            if any(t.upper() in US_STATE_ABBREVIATIONS for t in tokens):
+                return True
+            return False
+
+        def _build_query_variants(query: str) -> list[str]:
+            variants = [query]
+            lower_query = query.lower()
+            if _looks_like_us_location(query) and not any(s in lower_query for s in ("usa", "united states", "us")):
+                variants.insert(0, f"{query}, USA")
+            return variants
+
+        query_variants = _build_query_variants(location_query)
+        looks_us = _looks_like_us_location(location_query)
         
         # Primary provider: Nominatim with a short retry window.
         nominatim_url = "https://nominatim.openstreetmap.org/search"
-        nominatim_params = {
-            "q": location_query,
-            "format": "json",
-            "limit": 1,
-            "addressdetails": 1,
-        }
         headers = {
             "User-Agent": "MLLighting-Trip-Planner/1.0"
         }
 
-        for attempt in (1, 2):
-            try:
-                response = requests.get(nominatim_url, params=nominatim_params, headers=headers, timeout=10)
-                response.raise_for_status()
-                results = response.json()
-                if results:
-                    lat = float(results[0]["lat"])
-                    lon = float(results[0]["lon"])
-                    log.info(f"Geocoded '{location_query}' via Nominatim to {lat}, {lon}")
-                    return (lat, lon)
-            except requests.RequestException as e:
-                if attempt == 2:
-                    log.warning("Nominatim geocode failed for '%s': %s", location_query, e)
+        for query in query_variants:
+            search_attempts = [
+                {
+                    "q": query,
+                    "format": "json",
+                    "limit": 5,
+                    "addressdetails": 1,
+                }
+            ]
+            if looks_us:
+                search_attempts.insert(
+                    0,
+                    {
+                        "q": query,
+                        "format": "json",
+                        "limit": 5,
+                        "addressdetails": 1,
+                        "countrycodes": "us",
+                    },
+                )
+
+            for nominatim_params in search_attempts:
+                try:
+                    response = requests.get(nominatim_url, params=nominatim_params, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    results = response.json() or []
+                    if results:
+                        # Prefer US result when the query looks US-focused.
+                        best = results[0]
+                        if looks_us:
+                            us_results = [
+                                r for r in results
+                                if (r.get("address") or {}).get("country_code", "").lower() == "us"
+                            ]
+                            if us_results:
+                                best = us_results[0]
+
+                        lat = float(best["lat"])
+                        lon = float(best["lon"])
+                        log.info("Geocoded '%s' via Nominatim (%s) to %s, %s", location_query, query, lat, lon)
+                        return (lat, lon)
+                except requests.RequestException as e:
+                    log.warning("Nominatim geocode failed for '%s' query '%s': %s", location_query, query, e)
 
         # Fallback provider: Photon
         photon_url = "https://photon.komoot.io/api/"
-        photon_params = {
-            "q": location_query,
-            "limit": 1,
-        }
-        response = requests.get(photon_url, params=photon_params, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        features = data.get("features") or []
-        if features:
-            coords = features[0].get("geometry", {}).get("coordinates") or []
-            if len(coords) >= 2:
-                lon = float(coords[0])
-                lat = float(coords[1])
-                log.info(f"Geocoded '{location_query}' via Photon to {lat}, {lon}")
-                return (lat, lon)
+        for query in query_variants:
+            photon_params = {
+                "q": query,
+                "limit": 3,
+                "lang": "en",
+            }
+            response = requests.get(photon_url, params=photon_params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            features = data.get("features") or []
+            if features:
+                best_feature = features[0]
+                if looks_us:
+                    for feature in features:
+                        cc = (feature.get("properties") or {}).get("countrycode", "").lower()
+                        if cc == "us":
+                            best_feature = feature
+                            break
+
+                coords = best_feature.get("geometry", {}).get("coordinates") or []
+                if len(coords) >= 2:
+                    lon = float(coords[0])
+                    lat = float(coords[1])
+                    log.info("Geocoded '%s' via Photon (%s) to %s, %s", location_query, query, lat, lon)
+                    return (lat, lon)
 
         log.warning(f"Could not geocode location: {location_query}")
         return None
@@ -620,47 +699,17 @@ def plan_trip(
     duration_sec = route["duration_sec"]
     polyline = route["polyline"]
     
-    # Get weather
-    weather = get_weather_forecast(start_lat, start_lon, end_lat, end_lon, distance_km)
-    avg_temp = weather["avg_temp_c"]
-    
-    # Predict energy using your trained model
-    energy_result = energy_model.predict_energy(
-        distance_km=distance_km,
-        avg_speed_kmh=distance_km / (duration_sec / 3600) if duration_sec > 0 else 0,
-        avg_ambient_temp_c=avg_temp,
-        avg_outside_temp_c=avg_temp,
-    )
-    
-    model_energy_kwh = float(energy_result["energy_used_kwh"])
-    baseline_energy_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
-
-    if energy_result.get("confidence") == "low":
-        # Blend model output with a physics-based baseline when extrapolating.
-        energy_needed_kwh = (model_energy_kwh * 0.7) + (baseline_energy_kwh * 0.3)
-    else:
-        energy_needed_kwh = model_energy_kwh
+    # Phase 1 estimate: distance + fixed efficiency baseline.
+    energy_needed_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
 
     min_plausible_kwh = distance_km * MIN_EFFICIENCY_KWH_PER_KM
     max_plausible_kwh = distance_km * MAX_EFFICIENCY_KWH_PER_KM
     energy_needed_kwh = max(min_plausible_kwh, min(max_plausible_kwh, energy_needed_kwh))
 
     feasible = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
-    
-    # Find charging stops
-    if not feasible:
-        charging_stops = optimize_charging_stops(
-            polyline, distance_km, current_soc_percent, energy_needed_kwh
-        )
-        feasible, arrival_soc = _can_complete_with_stops(
-            distance_km,
-            current_soc_percent,
-            energy_needed_kwh,
-            charging_stops,
-        )
-    else:
-        charging_stops = []
-        arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
+
+    charging_stops = []
+    arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
     
     plan = TripPlan(
         source_name=source,
@@ -673,12 +722,12 @@ def plan_trip(
         charging_stops=charging_stops,
         feasible=feasible,
         feasibility_reason=(
-            "Direct route, no charging needed" if feasible and not charging_stops
-            else f"Requires {len(charging_stops)} charging stop(s)" if feasible
-            else "Trip currently not feasible with available SOC and nearby chargers"
+            "Baseline estimate generated successfully"
+            if feasible
+            else "Baseline estimate generated (trip may require charging)"
         ),
         polyline=polyline,
-        weather_summary=f"{weather['condition']}, {weather['avg_temp_c']:.0f}°C",
+        weather_summary="Not included in baseline estimate",
         created_at=datetime.now().isoformat()
     )
     
@@ -686,7 +735,7 @@ def plan_trip(
     log.info("Trip Plan Summary:")
     log.info(f"  Distance: {distance_km:.1f} km")
     log.info(f"  Duration: {plan.estimated_duration_min} min")
-    log.info(f"  Energy: {energy_needed_kwh:.1f} kWh ({energy_result['confidence']} confidence)")
+    log.info(f"  Energy: {energy_needed_kwh:.1f} kWh (baseline estimate)")
     log.info(f"  Start SOC: {current_soc_percent:.0f}% → Arrival SOC: {arrival_soc:.0f}%")
     log.info(f"  Charging stops: {len(charging_stops)}")
     log.info(f"  Feasible: {feasible}")

@@ -3797,24 +3797,20 @@ def create_app() -> Flask:
         if not vin:
             return None
 
-        row = db.fetch_one(
+        location_row = db.fetch_one(
             """
-            SELECT latitude, longitude
+            SELECT latitude, longitude, last_update
             FROM location_state
             WHERE vin = %s
               AND latitude IS NOT NULL
               AND longitude IS NOT NULL
-            LIMIT 1
             """,
             (vin,),
         )
-        if row:
-            return (float(row["latitude"]), float(row["longitude"]))
 
-        # Fallback: latest recorded drive point when location_state is unavailable.
-        row = db.fetch_one(
+        drive_row = db.fetch_one(
             """
-            SELECT dp.latitude, dp.longitude
+            SELECT dp.latitude, dp.longitude, dp.recorded_at
             FROM drive_points dp
             JOIN drives d ON d.id = dp.drive_id
             WHERE d.vin = %s
@@ -3825,18 +3821,35 @@ def create_app() -> Flask:
             """,
             (vin,),
         )
-        if row:
-            return (float(row["latitude"]), float(row["longitude"]))
+
+        candidates = []
+        if location_row:
+            candidates.append(
+                (
+                    location_row.get("last_update"),
+                    float(location_row["latitude"]),
+                    float(location_row["longitude"]),
+                )
+            )
+        if drive_row:
+            candidates.append(
+                (
+                    drive_row.get("recorded_at"),
+                    float(drive_row["latitude"]),
+                    float(drive_row["longitude"]),
+                )
+            )
+
+        if candidates:
+            candidates.sort(key=lambda item: item[0] or datetime.min, reverse=True)
+            _, lat, lon = candidates[0]
+            return (lat, lon)
 
         return None
 
     @app.route("/trip-planner", methods=["GET", "POST"])
     def trip_planner():
         """Interactive trip planner for EV routing with charger recommendations."""
-        if not energy_model.is_available():
-            flash("Trip planner requires trained energy model. Run training first.", "warning")
-            return redirect(url_for("settings"))
-
         plan = None
         form_data = {
             "source": "",
