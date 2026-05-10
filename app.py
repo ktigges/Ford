@@ -1921,11 +1921,19 @@ def create_app():
             "schema_num_training_drives": ml_schema.get("num_training_drives"),
             "scheduler_running": _ml_retrain_scheduler_is_running(),
         }
+        # Show last 20 lines of ml_retrain.log
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "ml_retrain.log")
+        ml_logs = ""
+        if os.path.isfile(log_path):
+            with open(log_path, "r") as f:
+                lines = f.readlines()
+                ml_logs = "".join(lines[-20:])
         return render_template(
             "settings_ai_page.html",
             settings=current,
             ml_retrain_status=ml_retrain_status,
             ml_retrain_job_running=ml_retrain_job_running,
+            ml_logs=ml_logs,
         )
 
 
@@ -1938,10 +1946,45 @@ def create_app():
             "backup_last_completed_at": _get_setting("backup_last_completed_at") or _SETTINGS_DEFAULTS["backup_last_completed_at"],
             "backup_last_error": _get_setting("backup_last_error") or _SETTINGS_DEFAULTS["backup_last_error"],
         }
+        # Show last 20 lines of lightning_app.log
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "lightning_app.log")
+        backup_logs = ""
+        if os.path.isfile(log_path):
+            with open(log_path, "r") as f:
+                lines = f.readlines()
+                backup_logs = "".join(lines[-20:])
         return render_template(
             "settings_backup_page.html",
             settings=current,
+            backup_logs=backup_logs,
         )
+# ── Log viewing routes ─────────────────────────────────────────────
+import glob
+
+@app.route("/logs", methods=["GET"])
+def logs():
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    log_files = [os.path.basename(f) for f in glob.glob(os.path.join(log_dir, "*.log"))]
+    selected_log = request.args.get("log_name") or (log_files[0] if log_files else None)
+    log_content = ""
+    if selected_log and selected_log in log_files:
+        try:
+            with open(os.path.join(log_dir, selected_log), "r") as f:
+                log_content = f.read()[-6000:]  # Show last ~6000 chars
+        except Exception as exc:
+            log_content = f"Error reading log: {exc}"
+    return render_template("logs.html", log_files=log_files, selected_log=selected_log, log_content=log_content)
+
+@app.route("/logs/<log_name>")
+def view_log(log_name):
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    safe_log = os.path.basename(log_name)
+    log_path = os.path.join(log_dir, safe_log)
+    if not os.path.isfile(log_path):
+        return f"Log file not found: {safe_log}", 404
+    with open(log_path, "r") as f:
+        content = f.read()
+    return f"<pre style='background:#222;color:#eee;padding:1em;'>{content}</pre>"
 
     @app.route("/setup/test", methods=["POST"])
     def db_setup_test():

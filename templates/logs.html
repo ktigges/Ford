@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Logs – MLLighting{% endblock %}
+{% block content %}
+<h1>Application Logs</h1>
+<form method="get" action="{{ url_for('logs') }}" style="margin-bottom:2rem;">
+  <label for="log_name">Select Log File:</label>
+  <select name="log_name" id="log_name" onchange="this.form.submit()">
+    {% for log in log_files %}
+      <option value="{{ log }}" {% if log == selected_log %}selected{% endif %}>{{ log }}</option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">View</button></noscript>
+</form>
+
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Viewing: {{ selected_log }}</h3>
+  <pre style="max-height:600px; overflow:auto; background:#222; color:#eee; padding:1em; border-radius:6px;">
+{{ log_content|default('No log content found.') }}
+  </pre>
+</div>
+{% endblock %}
