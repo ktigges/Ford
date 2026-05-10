@@ -1884,18 +1884,6 @@ def create_app():
             "settings_backup_page.html",
             settings=settings,
         )
-            db_cfg = new_cfg
-
-            # Attempt to connect with the new settings
-            try:
-                db.init_pool()
-                flash("Database connected successfully!", "success")
-                return redirect(url_for("db_setup"))
-            except Exception as exc:
-                flash(f"Connection failed: {exc}", "error")
-
-        return render_template("db_setup.html", db=db_cfg, connected=db.is_available(),
-                               backup_files=_setup_backup_list())
 
     @app.route("/setup/test", methods=["POST"])
     def db_setup_test():
