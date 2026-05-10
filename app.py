@@ -1837,48 +1837,110 @@ def create_app():
 
 
 
+
     # General Options sub-page
     @app.route("/settings/options", methods=["GET", "POST"])
     def settings_options_page():
-        # ...existing settings context logic...
+        current = {
+            "units": _get_setting("units"),
+            "timezone": _get_setting("timezone") or _SETTINGS_DEFAULTS["timezone"],
+            "log_level": get_log_level(),
+            "poll_interval_off": _get_setting("poll_interval_off"),
+            "poll_interval_on": _get_setting("poll_interval_on"),
+            "poll_interval_moving": _get_setting("poll_interval_moving"),
+            "poll_interval_charging": _get_setting("poll_interval_charging"),
+            "conservative_polling": _get_setting("conservative_polling"),
+            "autostart_poller": _get_setting("autostart_poller"),
+            "developing": _get_setting("developing"),
+        }
+        ssl_cfg = config.ssl_config()
+        ssl_status = {
+            "active": app.config.get("SSL_ACTIVE", False),
+            "recovery": app.config.get("SSL_RECOVERY", False),
+        }
+        sequence_alignment = {"last_run": None, "force_next_startup": False}  # Placeholder or fetch as needed
         return render_template(
             "settings_options_page.html",
-            settings=settings,
+            settings=current,
             sequence_alignment=sequence_alignment,
-            ssl=ssl,
+            ssl=ssl_cfg,
             ssl_status=ssl_status,
         )
+
 
     # Charger Networks sub-page
     @app.route("/settings/chargers", methods=["GET", "POST"])
     def settings_chargers_page():
-        # ...existing charger context logic...
+        current = {
+            "nlr_api_key": _get_setting("nlr_api_key") or "",
+            "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
+            "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
+            "charger_fetch_strategy": _get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"],
+            "charger_page_size": _get_setting("charger_page_size") or _SETTINGS_DEFAULTS["charger_page_size"],
+            "charger_auto_update": _get_setting("charger_auto_update") or _SETTINGS_DEFAULTS["charger_auto_update"],
+            "charger_auto_update_hours": _get_setting("charger_auto_update_hours") or _SETTINGS_DEFAULTS["charger_auto_update_hours"],
+        }
+        charger_status = nlr_chargers.get_sync_status()
+        charger_failure_class = _charger_failure_class(charger_status)
+        charger_job_running = _charger_import_is_running()
         return render_template(
             "settings_chargers_page.html",
-            settings=settings,
+            settings=current,
             charger_status=charger_status,
             charger_failure_class=charger_failure_class,
             charger_job_running=charger_job_running,
         )
 
+
     # AI / ML sub-page
     @app.route("/settings/ai", methods=["GET", "POST"])
     def settings_ai_page():
-        # ...existing ML retrain context logic...
+        current = {
+            "ml_retrain_schedule_enabled": _get_setting("ml_retrain_schedule_enabled") or _SETTINGS_DEFAULTS["ml_retrain_schedule_enabled"],
+            "ml_retrain_schedule_hours": _get_setting("ml_retrain_schedule_hours") or _SETTINGS_DEFAULTS["ml_retrain_schedule_hours"],
+            "ml_retrain_after_x_drives_enabled": _get_setting("ml_retrain_after_x_drives_enabled") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives_enabled"],
+            "ml_retrain_after_x_drives": _get_setting("ml_retrain_after_x_drives") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives"],
+        }
+        ml_retrain_job_running = _ml_retrain_is_running()
+        ml_baseline_drives = _ml_last_trained_drive_count()
+        ml_completed_drives = _count_completed_training_drives()
+        ml_new_drives = max(0, ml_completed_drives - ml_baseline_drives)
+        ml_schema = _read_model_schema()
+        ml_retrain_status = {
+            "status": _get_setting("ml_retrain_status") or "idle",
+            "last_started_at": _get_setting("ml_retrain_last_started_at") or "",
+            "last_completed_at": _get_setting("ml_retrain_last_completed_at") or "",
+            "last_trigger": _get_setting("ml_retrain_last_trigger") or "",
+            "last_error": _get_setting("ml_retrain_last_error") or "",
+            "last_duration_sec": _get_setting("ml_retrain_last_duration_sec") or "",
+            "last_exit_code": _get_setting("ml_retrain_last_exit_code") or "",
+            "baseline_drives": ml_baseline_drives,
+            "completed_drives": ml_completed_drives,
+            "new_drives_since_last_train": ml_new_drives,
+            "schema_training_date": str(ml_schema.get("training_date") or ""),
+            "schema_num_training_drives": ml_schema.get("num_training_drives"),
+            "scheduler_running": _ml_retrain_scheduler_is_running(),
+        }
         return render_template(
             "settings_ai_page.html",
-            settings=settings,
+            settings=current,
             ml_retrain_status=ml_retrain_status,
             ml_retrain_job_running=ml_retrain_job_running,
         )
 
+
     # Backup sub-page
     @app.route("/settings/backup", methods=["GET", "POST"])
     def settings_backup_page():
-        # ...existing backup context logic...
+        current = {
+            "backup_schedule_enabled": _get_setting("backup_schedule_enabled") or _SETTINGS_DEFAULTS["backup_schedule_enabled"],
+            "backup_schedule_hours": _get_setting("backup_schedule_hours") or _SETTINGS_DEFAULTS["backup_schedule_hours"],
+            "backup_last_completed_at": _get_setting("backup_last_completed_at") or _SETTINGS_DEFAULTS["backup_last_completed_at"],
+            "backup_last_error": _get_setting("backup_last_error") or _SETTINGS_DEFAULTS["backup_last_error"],
+        }
         return render_template(
             "settings_backup_page.html",
-            settings=settings,
+            settings=current,
         )
 
     @app.route("/setup/test", methods=["POST"])
