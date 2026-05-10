@@ -69,12 +69,42 @@
                             </small>
                         </div>
 
-                        <button type="submit" class="btn btn-primary w-100">
-                            <i class="bi bi-map"></i> Plan Route
+                        <button type="submit" name="action" value="preview" class="btn btn-primary w-100">
+                            <i class="bi bi-geo"></i> Preview Resolved Locations
                         </button>
                     </form>
                 </div>
             </div>
+
+            {% if preview and preview.ready %}
+            <div class="card mt-3 border-success">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0">Resolved Locations</h6>
+                </div>
+                <div class="card-body small">
+                    <p class="mb-1"><strong>Start Address:</strong> {{ preview.source.label }}</p>
+                    <p class="mb-2"><strong>Start Coordinates:</strong> {{ preview.source.coords_text }}</p>
+                    <p class="mb-1"><strong>Destination Address:</strong> {{ preview.destination.label }}</p>
+                    <p class="mb-3"><strong>Destination Coordinates:</strong> {{ preview.destination.coords_text }}</p>
+
+                    <form method="POST">
+                        <input type="hidden" name="source" value="{{ form.source }}">
+                        <input type="hidden" name="destination" value="{{ form.destination }}">
+                        <input type="hidden" name="start_soc" value="{{ form.start_soc }}">
+                        {% if form.use_current_source %}
+                        <input type="hidden" name="use_current_source" value="on">
+                        {% endif %}
+                        <input type="hidden" name="source_resolved_coords" value="{{ preview.source.coords_text }}">
+                        <input type="hidden" name="destination_resolved_coords" value="{{ preview.destination.coords_text }}">
+                        <input type="hidden" name="source_resolved_label" value="{{ preview.source.label }}">
+                        <input type="hidden" name="destination_resolved_label" value="{{ preview.destination.label }}">
+                        <button type="submit" name="action" value="calculate" class="btn btn-success w-100">
+                            <i class="bi bi-map"></i> Calculate Route With These Locations
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
 
             <!-- Estimator Mode -->
             <div class="card mt-3">
@@ -216,7 +246,7 @@
                 </div>
                 <div class="card-body text-center py-5">
                     <i class="bi bi-map" style="font-size: 3rem; color: #ccc;"></i>
-                    <p class="mt-4 text-muted">Enter source and destination to see your personalized trip plan</p>
+                    <p class="mt-4 text-muted">Preview resolved locations first, then calculate your trip plan</p>
                 </div>
             </div>
             {% endif %}
