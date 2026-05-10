@@ -1,5 +1,38 @@
-{# Charger network integration form from settings.html #}
 <form method="post" class="card form-card">
   <h2>EV Charger Network (NIL/NLR/NREL)</h2>
-  ...existing code...
+  <label>NLR API Key:
+    <input type="text" name="nlr_api_key" value="{{ settings.nlr_api_key }}" placeholder="API Key">
+  </label>
+  <button type="submit" name="action" value="save_charger_api_key">Save API Key</button>
+
+  <h3>Import Options</h3>
+  <label>Scope:
+    <select name="charger_scope">
+      <option value="all_us" {% if settings.charger_scope == 'all_us' %}selected{% endif %}>All US</option>
+      <option value="single_state" {% if settings.charger_scope == 'single_state' %}selected{% endif %}>Single State</option>
+    </select>
+  </label>
+  <label>State Filter:
+    <input type="text" name="charger_state_filter" value="{{ settings.charger_state_filter }}" maxlength="2" placeholder="e.g. TX">
+  </label>
+  <label>Fetch Strategy:
+    <select name="charger_fetch_strategy">
+      <option value="all_then_200" {% if settings.charger_fetch_strategy == 'all_then_200' %}selected{% endif %}>All then 200</option>
+      <option value="paged_200" {% if settings.charger_fetch_strategy == 'paged_200' %}selected{% endif %}>Paged 200</option>
+    </select>
+  </label>
+  <label>Page Size:
+    <input type="number" name="charger_page_size" value="{{ settings.charger_page_size }}" min="50" max="1000">
+  </label>
+  <button type="submit" name="action" value="save_charger_options">Save Import Options</button>
+
+  <h3>Auto-Update Schedule</h3>
+  <label><input type="checkbox" name="charger_auto_update" {% if settings.charger_auto_update == 'on' %}checked{% endif %}> Enable Auto-Update</label>
+  <label>Interval (hours):
+    <input type="number" name="charger_auto_update_hours" value="{{ settings.charger_auto_update_hours }}" min="1" max="168">
+  </label>
+  <button type="submit" name="action" value="save_charger_schedule">Save Auto-Update Schedule</button>
+
+  <h3>Manual Import</h3>
+  <button type="submit" name="action" value="run_charger_import">Run Charger Import Now</button>
 </form>
