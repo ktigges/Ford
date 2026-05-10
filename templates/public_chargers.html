@@ -68,19 +68,38 @@
           <th>Distance (mi)</th>
           <th>Max kW</th>
           <th>Connector Types</th>
+          <th>Charging Levels</th>
           <th>Ports</th>
+          <th>Details</th>
         </tr>
       </thead>
       <tbody>
         {% for row in filtered_stations %}
         <tr>
           <td>{{ row.station_name }}</td>
-          <td>{{ row.city }}, {{ row.state }} {{ row.zip }}</td>
+          <td>{{ row.street_address }}<br>{{ row.city }}, {{ row.state }} {{ row.zip }}</td>
           <td>{{ row.network_name }}</td>
           <td>{% if row.distance_miles is not none %}{{ '%.1f'|format(row.distance_miles) }}{% else %}--{% endif %}</td>
           <td>{{ '%.1f'|format(row.max_power_kw) if row.max_power_kw is not none else '0.0' }}</td>
           <td>{{ row.connector_types or 'UNKNOWN' }}</td>
+          <td>{{ row.charging_levels or 'UNKNOWN' }}</td>
           <td>{{ row.connector_count }}</td>
+          <td>
+            <details>
+              <summary>All Stats</summary>
+              <div style="margin-top:0.35rem; font-size:0.85rem; line-height:1.45;">
+                <div><strong>NLR ID:</strong> {{ row.nlr_station_id }}</div>
+                <div><strong>Status:</strong> {{ row.status_code or 'UNKNOWN' }}</div>
+                <div><strong>Fuel Type:</strong> {{ row.fuel_type_code or 'UNKNOWN' }}</div>
+                <div><strong>Access:</strong> {{ row.access_code or 'UNKNOWN' }}</div>
+                <div><strong>Access Detail:</strong> {{ row.access_detail or 'N/A' }}</div>
+                <div><strong>Owner Type:</strong> {{ row.owner_type_code or 'N/A' }}</div>
+                <div><strong>Facility Type:</strong> {{ row.facility_type or 'N/A' }}</div>
+                <div><strong>Coordinates:</strong> {{ '%.6f'|format(row.latitude) }}, {{ '%.6f'|format(row.longitude) }}</div>
+                <div><strong>Updated:</strong> {{ row.updated_at }}</div>
+              </div>
+            </details>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -121,6 +140,9 @@
       <tr><th>Imported</th><td>{{ sync_status.stations_imported or 0 }}</td></tr>
       <tr><th>Updated</th><td>{{ sync_status.stations_updated or 0 }}</td></tr>
       <tr><th>Errors</th><td>{{ sync_status.errors or 0 }}</td></tr>
+      {% if sync_status.status == 'failed' %}
+      <tr><th>Failure Class</th><td>{{ sync_status_failure_class }}</td></tr>
+      {% endif %}
       <tr><th>Last Error</th><td>{{ sync_status.last_error or 'None' }}</td></tr>
     </tbody>
   </table>
@@ -226,6 +248,7 @@
           <th>Completed</th>
           <th>Updated</th>
           <th>Errors</th>
+          <th>Failure Class</th>
           <th>Last Error</th>
         </tr>
       </thead>
@@ -241,6 +264,7 @@
           <td>{{ run.completed_at or 'In progress' }}</td>
           <td>{{ run.stations_updated or 0 }}</td>
           <td>{{ run.errors or 0 }}</td>
+          <td>{{ run.failure_class }}</td>
           <td style="max-width:360px; word-break:break-word;">{{ run.last_error or '' }}</td>
         </tr>
         {% endfor %}

@@ -863,7 +863,12 @@ def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
     try:
         stale_rows = db.fetch_all(
             """
-            SELECT id
+            SELECT id,
+                   sync_type,
+                   state_filter,
+                   stations_updated,
+                   errors,
+                   EXTRACT(EPOCH FROM (now() - COALESCE(last_heartbeat_at, started_at)))::BIGINT AS heartbeat_age_seconds
             FROM ev_sync_runs
             WHERE status = 'in_progress'
               AND completed_at IS NULL
@@ -875,6 +880,15 @@ def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
             return 0
 
         for row in stale_rows:
+            heartbeat_age = int(row.get("heartbeat_age_seconds") or 0)
+            updated = int(row.get("stations_updated") or 0)
+            sync_type = row.get("sync_type") or "unknown"
+            state_filter = row.get("state_filter") or "all"
+            diagnostic = (
+                "No heartbeat detected; run marked stale "
+                f"(sync_type={sync_type}, state={state_filter}, "
+                f"heartbeat_age_s={heartbeat_age}, stations_updated={updated})"
+            )
             db.execute(
                 """
                 UPDATE ev_sync_runs
@@ -882,16 +896,24 @@ def mark_stale_sync_runs(stale_after_minutes: int = 45) -> int:
                     completed_at = now(),
                     last_heartbeat_at = now(),
                     errors = COALESCE(errors, 0) + 1,
-                    last_error = COALESCE(last_error, 'No heartbeat detected; run marked stale')
+                    last_error = LEFT(
+                        CASE
+                            WHEN last_error IS NULL OR last_error = 'No heartbeat detected; run marked stale'
+                                THEN %s
+                            ELSE last_error
+                        END,
+                        1000
+                    )
                 WHERE id = %s
                 """,
-                ("failed", row["id"]),
+                ("failed", diagnostic, row["id"]),
             )
 
         log.warning(
-            "Marked %d stale charger sync run(s) as failed (stale_after_minutes=%d)",
+            "Marked %d stale charger sync run(s) as failed (stale_after_minutes=%d, ids=%s)",
             len(stale_rows),
             stale_after_minutes,
+            ",".join(str(r["id"]) for r in stale_rows),
         )
         return len(stale_rows)
     except Exception as e:
