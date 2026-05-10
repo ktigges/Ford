@@ -1,3 +1,58 @@
+<form method="post" class="card form-card">
+  <h2>Scheduled Backups</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Enable automatic periodic backups of your database and ML model files. Only the 5 most recent backups are retained.
+  </p>
+
+  <div class="form-group">
+    <label for="backup_schedule_enabled">
+      <input type="checkbox" name="backup_schedule_enabled" id="backup_schedule_enabled" value="on"
+             {% if settings.backup_schedule_enabled == 'on' %}checked{% endif %}
+             style="width:auto; margin-right:0.5rem;">
+      Enable periodic scheduled backups
+    </label>
+  </div>
+
+  <div class="form-group">
+    <label for="backup_schedule_hours">Backup Interval (hours)</label>
+    <input type="number" name="backup_schedule_hours" id="backup_schedule_hours" class="form-input"
+           value="{{ settings.backup_schedule_hours }}" min="1" max="168" step="1">
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      Example: 24 = backup once per day.
+    </p>
+  </div>
+
+  <div class="form-group">
+    <label>Status:</label>
+    <span style="font-size:0.9rem; color:var(--text);">
+      {% if settings.backup_schedule_enabled == 'on' %}
+        Enabled (every {{ settings.backup_schedule_hours }}h)
+      {% else %}
+        Disabled
+      {% endif %}
+    </span>
+  </div>
+
+  <div class="form-group">
+    <label>Last Backup:</label>
+    <span style="font-size:0.9rem; color:var(--text);">
+      {% if settings.backup_last_completed_at %}
+        {{ settings.backup_last_completed_at }}
+      {% else %}
+        Never
+      {% endif %}
+    </span>
+  </div>
+
+  <div class="form-group">
+    <label>Last Error:</label>
+    <span style="font-size:0.9rem; color:var(--danger);">
+      {{ settings.backup_last_error or 'None' }}
+    </span>
+  </div>
+
+  <button type="submit" name="action" value="save_backup_schedule" class="btn">Save Backup Schedule</button>
+</form>
 {% extends "base.html" %}
 {% block title %}Settings – MLLighting{% endblock %}
 {% block content %}

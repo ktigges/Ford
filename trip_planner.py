@@ -28,6 +28,7 @@ from typing import Optional
 import requests
 
 import db
+import energy_model
 
 log = logging.getLogger(__name__)
 
@@ -1461,6 +1462,40 @@ def _attach_weather_to_route_steps(route_steps: list[dict], route_weather: list[
     return route_steps
 
 
+def _attach_soc_to_route_steps(
+    route_steps: list[dict],
+    start_soc_percent: float,
+    total_distance_km: float,
+    energy_needed_kwh: float,
+    charging_stops: list[ChargingStop] | None = None,
+) -> list[dict]:
+    """Attach estimated SOC at each step, accounting for planned charging stops."""
+    if not route_steps or total_distance_km <= 0:
+        return route_steps
+
+    kwh_per_km = energy_needed_kwh / total_distance_km if energy_needed_kwh > 0 else DEFAULT_EFFICIENCY_KWH_PER_KM
+    cumulative_km = 0.0
+
+    stop_boosts: list[tuple[float, float]] = []
+    for stop in charging_stops or []:
+        boost = max(0.0, float(stop.charge_to_soc_percent) - float(stop.arrival_soc_percent))
+        stop_boosts.append((float(stop.distance_km_from_start), boost))
+
+    stop_boosts.sort(key=lambda x: x[0])
+
+    for step in route_steps:
+        step_km = max(0.0, float(step.get("distance_km") or 0.0))
+        cumulative_km += step_km
+
+        consumed_soc = (cumulative_km * kwh_per_km / BATTERY_CAPACITY_KWH * 100) if BATTERY_CAPACITY_KWH > 0 else 0.0
+        recovered_soc = sum(boost for km_mark, boost in stop_boosts if km_mark <= cumulative_km)
+
+        est_soc = max(0.0, min(100.0, float(start_soc_percent) - consumed_soc + recovered_soc))
+        step["step_soc_percent"] = round(est_soc, 1)
+
+    return route_steps
+
+
 # ── Main Trip Planning ─────────────────────────────────────────────
 
 def plan_trip(
@@ -1568,18 +1603,83 @@ def plan_trip(
     else:
         weather_summary = "Route weather unavailable"
     
-    # Phase 1 estimate: distance + fixed efficiency baseline.
-    energy_needed_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
+    # Baseline estimate: distance + fixed efficiency.
+    baseline_energy_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
 
     min_plausible_kwh = distance_km * MIN_EFFICIENCY_KWH_PER_KM
     max_plausible_kwh = distance_km * MAX_EFFICIENCY_KWH_PER_KM
-    energy_needed_kwh = max(min_plausible_kwh, min(max_plausible_kwh, energy_needed_kwh))
+    energy_needed_kwh = max(min_plausible_kwh, min(max_plausible_kwh, baseline_energy_kwh))
 
-    feasible = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
+    estimate_source = "Baseline"
+    estimate_confidence = "n/a"
+
+    # Step 1: Re-introduce ML prediction in trip calculations with safe fallback.
+    try:
+        if energy_model.is_available():
+            avg_speed_kmh = (distance_km / (duration_sec / 3600.0)) if duration_sec > 0 else 0.0
+            temps = [float(wx.get("temp_c")) for wx in route_weather if wx.get("temp_c") is not None]
+            avg_temp_c = (sum(temps) / len(temps)) if temps else float(current_temp_c)
+
+            ml_pred = energy_model.predict_energy(
+                distance_km=distance_km,
+                avg_speed_kmh=max(1.0, avg_speed_kmh),
+                avg_ambient_temp_c=avg_temp_c,
+                avg_outside_temp_c=avg_temp_c,
+                duration_min=max(1.0, duration_sec / 60.0),
+            )
+
+            ml_energy_kwh = float(ml_pred.get("energy_used_kwh", energy_needed_kwh))
+            ml_energy_kwh = max(min_plausible_kwh, min(max_plausible_kwh, ml_energy_kwh))
+
+            energy_needed_kwh = ml_energy_kwh
+            estimate_source = "ML"
+            estimate_confidence = str(ml_pred.get("confidence") or "unknown")
+    except Exception as exc:
+        log.warning("ML prediction unavailable, using baseline estimate: %s", exc)
+
+    feasible_direct = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
 
     charging_stops = []
     arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
+    feasible = feasible_direct
+
+    # Step 2: Enable charging stop recommendations when direct trip is not feasible.
+    if not feasible_direct:
+        charging_stops = optimize_charging_stops(
+            polyline=polyline,
+            total_distance_km=distance_km,
+            current_soc_percent=current_soc_percent,
+            energy_needed_kwh=energy_needed_kwh,
+        )
+
+        if charging_stops:
+            feasible_with_stops, arrival_soc_with_stops = _can_complete_with_stops(
+                total_distance_km=distance_km,
+                start_soc_percent=current_soc_percent,
+                energy_needed_kwh=energy_needed_kwh,
+                stops=charging_stops,
+            )
+            feasible = feasible_with_stops
+            if feasible_with_stops:
+                arrival_soc = arrival_soc_with_stops
     
+    route_steps = _attach_soc_to_route_steps(
+        route_steps=route_steps,
+        start_soc_percent=current_soc_percent,
+        total_distance_km=distance_km,
+        energy_needed_kwh=energy_needed_kwh,
+        charging_stops=charging_stops,
+    )
+
+    if feasible_direct:
+        reason = f"{estimate_source} estimate generated successfully"
+    elif charging_stops and feasible:
+        reason = f"{estimate_source} estimate recommends {len(charging_stops)} charging stop(s)"
+    elif not charging_stops:
+        reason = f"{estimate_source} estimate generated (trip may require charging, but no suitable stops were found)"
+    else:
+        reason = f"{estimate_source} estimate generated (route may still require additional charging flexibility)"
+
     plan = TripPlan(
         source_name=source,
         destination_name=destination,
@@ -1590,11 +1690,7 @@ def plan_trip(
         energy_needed_kwh=energy_needed_kwh,
         charging_stops=charging_stops,
         feasible=feasible,
-        feasibility_reason=(
-            "Baseline estimate generated successfully"
-            if feasible
-            else "Baseline estimate generated (trip may require charging)"
-        ),
+        feasibility_reason=reason,
         polyline=polyline,
         route_steps=route_steps,
         route_weather=route_weather,
@@ -1607,9 +1703,10 @@ def plan_trip(
     log.info(f"\n{'='*60}")
     log.info("Trip Plan Summary:")
     log.info(f"  Timing: geocode={geocode_elapsed:.2f}s route={route_elapsed:.2f}s weather={weather_elapsed:.2f}s total={total_elapsed:.2f}s")
+    log.info(f"  Estimate source: {estimate_source} (confidence: {estimate_confidence})")
     log.info(f"  Distance: {distance_km:.1f} km")
     log.info(f"  Duration: {plan.estimated_duration_min} min")
-    log.info(f"  Energy: {energy_needed_kwh:.1f} kWh (baseline estimate)")
+    log.info(f"  Energy: {energy_needed_kwh:.1f} kWh")
     log.info(f"  Start SOC: {current_soc_percent:.0f}% → Arrival SOC: {arrival_soc:.0f}%")
     log.info(f"  Charging stops: {len(charging_stops)}")
     log.info(f"  Feasible: {feasible}")
