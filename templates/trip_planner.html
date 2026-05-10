@@ -4,8 +4,8 @@
 
 {% block content %}
 <div class="container mt-4">
-    <h1>🚗 Personalized EV Trip Planner</h1>
-    <p class="text-muted">Plan your route with personalized energy consumption predictions based on your driving style</p>
+    <h1>EV Trip Baseline Estimator</h1>
+    <p class="text-muted">Plan a route, calculate mileage, estimate kWh required, and visualize it on the map</p>
 
     <div class="row">
         <!-- Input Form -->
@@ -23,9 +23,9 @@
                                    id="source" 
                                    name="source" 
                                    value="{{ form.source }}"
-                                   placeholder="City, State or Lat,Lon (e.g., Denver, CO or 39.7392,-104.9903)"
+                                placeholder="Address, City State ZIP, City State, State, or Lat,Lon"
                                    {% if not form.use_current_source %}required{% endif %}>
-                            <small class="form-text text-muted">Enter a place name or coordinates</small>
+                            <small class="form-text text-muted">Examples: 123 Main St, Denver CO 80203, Denver CO, Colorado, 39.7392,-104.9903</small>
                         </div>
 
                         <div class="mb-3 form-check">
@@ -49,9 +49,9 @@
                                    id="destination" 
                                    name="destination" 
                                    value="{{ form.destination }}"
-                                   placeholder="City, State or Lat,Lon"
+                                placeholder="Address, City State ZIP, City State, State, or Lat,Lon"
                                    required>
-                            <small class="form-text text-muted">Enter a place name or coordinates</small>
+                            <small class="form-text text-muted">Supports flexible geocoding formats</small>
                         </div>
 
                         <div class="mb-3">
@@ -76,24 +76,24 @@
                 </div>
             </div>
 
-            <!-- Model Status -->
+            <!-- Estimator Mode -->
             <div class="card mt-3">
                 <div class="card-header">
-                    <h6 class="mb-0">Model Info</h6>
+                    <h6 class="mb-0">Estimator Mode</h6>
                 </div>
                 <div class="card-body small">
                     <p class="mb-1">
-                        <strong>Status:</strong> 
-                        <span class="badge bg-success">✓ Ready</span>
+                        <strong>Status:</strong>
+                        <span class="badge bg-primary">Baseline</span>
                     </p>
                     <p class="mb-1">
-                        <strong>Training Samples:</strong> 12 drives
+                        <strong>Inputs:</strong> Route distance + fixed efficiency
                     </p>
                     <p class="mb-1">
-                        <strong>Prediction Error:</strong> ±1.45 kWh (MAE)
+                        <strong>Outputs:</strong> Mileage, duration, and kWh required
                     </p>
                     <p class="mb-0">
-                        <small class="text-muted">Improves with more drive data</small>
+                        <small class="text-muted">Weather and ML adjustments can be added after this baseline is verified</small>
                     </p>
                 </div>
             </div>
@@ -120,7 +120,7 @@
                         <div class="col-md-6">
                             <div class="mb-3">
                                 <small class="text-muted">Distance</small>
-                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km) }} km</h5>
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km * 0.621371) }} mi <small class="text-muted">({{ "%.1f"|format(plan.total_distance_km) }} km)</small></h5>
                             </div>
                             <div class="mb-3">
                                 <small class="text-muted">Duration</small>
@@ -133,7 +133,7 @@
                                 <h5 class="mb-0">{{ "%.1f"|format(plan.energy_needed_kwh) }} kWh</h5>
                             </div>
                             <div class="mb-3">
-                                <small class="text-muted">Weather</small>
+                                <small class="text-muted">Estimate Mode</small>
                                 <h5 class="mb-0">{{ plan.weather_summary }}</h5>
                             </div>
                         </div>
@@ -205,7 +205,7 @@
                     </div>
                     {% else %}
                     <hr>
-                    <p class="text-success"><strong>✓ Direct route - no charging stops needed!</strong></p>
+                    <p class="text-success"><strong>Baseline estimate complete.</strong></p>
                     {% endif %}
                 </div>
             </div>
@@ -313,7 +313,7 @@ document.getElementById('start_soc').addEventListener('input', function() {
             sourceInput.required = false;
         } else {
             sourceInput.disabled = false;
-            sourceInput.placeholder = 'City, State or Lat,Lon (e.g., Denver, CO or 39.7392,-104.9903)';
+            sourceInput.placeholder = 'Address, City State ZIP, City State, State, or Lat,Lon';
             sourceInput.required = true;
             if (sourceInput.dataset.userValue) {
                 sourceInput.value = sourceInput.dataset.userValue;
