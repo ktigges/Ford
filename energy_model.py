@@ -1,5 +1,4 @@
-"""
-Load and use the trained energy consumption model for predictions.
+"""Load and use the trained energy consumption model for predictions.
 
 This module provides a simple API to:
 1. Load the trained model and scaler from disk
@@ -10,9 +9,6 @@ Used by:
 - Trip planner service (/predict/trip)
 - Chat bot backend (/chat)
 - Analytics dashboard
-
-Author:      Kevin Tigges
-Date:        2026-05-09
 """
 
 import json

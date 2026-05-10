@@ -6,11 +6,6 @@ Provides two backup strategies:
    that can be restored without pg_dump/psql installed.
 
 Backups are stored in the `backups/` directory (relative to the project root).
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
 """
 
 import json

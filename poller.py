@@ -2,12 +2,7 @@
 
 Runs in a daemon thread. Only one instance at a time.
 Uses the reusable oauth module to obtain tokens and writes telemetry + state.
-Extract metrics from Ford's API response and upserts into PostgreSQL state tables.
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
+Extracts metrics from Ford's API response and upserts into PostgreSQL state tables.
 """
 
 import hashlib

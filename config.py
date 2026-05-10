@@ -1,11 +1,6 @@
 """Configuration loader for the Lightning application.
 
 Reads config.json once and exposes typed accessors for each section.
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
 """
 
 import json

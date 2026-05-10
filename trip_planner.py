@@ -1,10 +1,9 @@
-"""
-Trip planner service for personalized EV routing.
+"""Trip planner service for personalized EV routing.
 
 Orchestrates:
 1. Route analysis (distance, elevation, polyline)
 2. Weather forecast along route
-3. Energy consumption prediction (using your trained model)
+3. Energy consumption prediction (using trained model)
 4. Charging stop optimization
 5. Charger network recommendations
 
@@ -13,9 +12,6 @@ Outputs trip plan with:
 - Energy needed & available capacity
 - Recommended charging stops
 - Charging duration at each stop
-
-Author:      Kevin Tigges
-Date:        2026-05-09
 """
 
 import json
@@ -24,7 +20,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
@@ -51,6 +47,8 @@ MAX_DISTANCE_BETWEEN_CHARGERS_KM = 400  # Don't plan stops > 400km apart
 MIN_EFFICIENCY_KWH_PER_KM = 0.12
 MAX_EFFICIENCY_KWH_PER_KM = 0.60
 DEFAULT_EFFICIENCY_KWH_PER_KM = 0.28
+WEATHER_SAMPLE_INTERVAL_MILES = 20
+WEATHER_MAX_CHECKPOINTS = 10
 
 US_STATE_ABBREVIATIONS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
@@ -171,8 +169,41 @@ class TripPlan:
     feasibility_reason: str
     polyline: list[tuple[float, float]]
     route_steps: list[dict]
+    route_weather: list[dict]
     weather_summary: str
     created_at: str
+
+
+OPEN_METEO_WEATHER_CODE_LABELS = {
+    0: "Clear",
+    1: "Mostly Clear",
+    2: "Partly Cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Rime Fog",
+    51: "Light Drizzle",
+    53: "Drizzle",
+    55: "Heavy Drizzle",
+    56: "Freezing Drizzle",
+    57: "Heavy Freezing Drizzle",
+    61: "Light Rain",
+    63: "Rain",
+    65: "Heavy Rain",
+    66: "Freezing Rain",
+    67: "Heavy Freezing Rain",
+    71: "Light Snow",
+    73: "Snow",
+    75: "Heavy Snow",
+    77: "Snow Grains",
+    80: "Rain Showers",
+    81: "Heavy Showers",
+    82: "Violent Showers",
+    85: "Snow Showers",
+    86: "Heavy Snow Showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm/Hail",
+    99: "Severe Thunderstorm/Hail",
+}
 
 
 # ── Geocoding ──────────────────────────────────────────────────────
@@ -704,6 +735,148 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 
+def _point_along_polyline(polyline: list[tuple[float, float]], target_km: float) -> tuple[float, float]:
+    """Interpolate a point along polyline at target distance from start."""
+    if not polyline:
+        return (0.0, 0.0)
+    if len(polyline) == 1 or target_km <= 0:
+        return polyline[0]
+
+    traveled = 0.0
+    for i in range(1, len(polyline)):
+        a_lat, a_lon = polyline[i - 1]
+        b_lat, b_lon = polyline[i]
+        seg_km = haversine_distance(a_lat, a_lon, b_lat, b_lon)
+        if seg_km <= 0:
+            continue
+
+        if traveled + seg_km >= target_km:
+            t = (target_km - traveled) / seg_km
+            lat = a_lat + t * (b_lat - a_lat)
+            lon = a_lon + t * (b_lon - a_lon)
+            return (lat, lon)
+        traveled += seg_km
+
+    return polyline[-1]
+
+
+def _weather_label_from_code(code: int | None) -> str:
+    if code is None:
+        return "Unknown"
+    return OPEN_METEO_WEATHER_CODE_LABELS.get(int(code), "Unknown")
+
+
+def get_route_weather_timeline(
+    polyline: list[tuple[float, float]],
+    total_distance_km: float,
+    duration_sec: int,
+    interval_miles: float = WEATHER_SAMPLE_INTERVAL_MILES,
+    max_points: int = WEATHER_MAX_CHECKPOINTS,
+) -> list[dict]:
+    """Sample weather along route at start, ~every N miles, and destination ETA."""
+    if not polyline or total_distance_km <= 0:
+        return []
+
+    interval_km = max(1.0, interval_miles * 1.60934)
+    checkpoints_km = [0.0]
+    cursor = interval_km
+    while cursor < total_distance_km:
+        checkpoints_km.append(cursor)
+        cursor += interval_km
+    if checkpoints_km[-1] < total_distance_km:
+        checkpoints_km.append(total_distance_km)
+
+    # Keep UI compact on long routes.
+    if len(checkpoints_km) > max_points:
+        stride = (len(checkpoints_km) - 1) / float(max_points - 1)
+        reduced = []
+        for i in range(max_points):
+            reduced.append(checkpoints_km[int(round(i * stride))])
+        checkpoints_km = sorted(set(reduced))
+        if checkpoints_km[0] != 0.0:
+            checkpoints_km.insert(0, 0.0)
+        if checkpoints_km[-1] != total_distance_km:
+            checkpoints_km.append(total_distance_km)
+
+    now_utc = datetime.utcnow()
+    timeline = []
+
+    for idx, km_mark in enumerate(checkpoints_km):
+        lat, lon = _point_along_polyline(polyline, km_mark)
+        progress = km_mark / total_distance_km if total_distance_km > 0 else 0.0
+        eta = now_utc + timedelta(seconds=int(duration_sec * progress))
+
+        label = "Start"
+        if idx == len(checkpoints_km) - 1:
+            label = "Destination"
+        elif idx > 0:
+            label = f"Mile {int(round(km_mark * 0.621371))}"
+
+        entry = {
+            "label": label,
+            "distance_miles": round(km_mark * 0.621371, 1),
+            "eta_utc": eta.strftime("%Y-%m-%d %H:%M UTC"),
+            "lat": round(lat, 5),
+            "lon": round(lon, 5),
+            "temp_c": None,
+            "weather": "Unknown",
+            "wind_kmh": None,
+            "precipitation_pct": None,
+        }
+
+        try:
+            response = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m",
+                    "forecast_days": 3,
+                    "timezone": "UTC",
+                },
+                timeout=8,
+            )
+            response.raise_for_status()
+            data = response.json() or {}
+            hourly = data.get("hourly") or {}
+
+            times = hourly.get("time") or []
+            temps = hourly.get("temperature_2m") or []
+            codes = hourly.get("weather_code") or []
+            precips = hourly.get("precipitation_probability") or []
+            winds = hourly.get("wind_speed_10m") or []
+
+            if times:
+                target_hour = eta.replace(minute=0, second=0, microsecond=0)
+                best_idx = 0
+                best_delta = None
+                for i, t in enumerate(times):
+                    try:
+                        dt = datetime.fromisoformat(t)
+                    except ValueError:
+                        continue
+                    delta = abs((dt - target_hour).total_seconds())
+                    if best_delta is None or delta < best_delta:
+                        best_delta = delta
+                        best_idx = i
+
+                temp_val = temps[best_idx] if best_idx < len(temps) else None
+                code_val = codes[best_idx] if best_idx < len(codes) else None
+                precip_val = precips[best_idx] if best_idx < len(precips) else None
+                wind_val = winds[best_idx] if best_idx < len(winds) else None
+
+                entry["temp_c"] = round(float(temp_val), 1) if temp_val is not None else None
+                entry["weather"] = _weather_label_from_code(code_val)
+                entry["precipitation_pct"] = int(round(float(precip_val))) if precip_val is not None else None
+                entry["wind_kmh"] = round(float(wind_val), 1) if wind_val is not None else None
+        except Exception as exc:
+            log.warning("Route weather fetch failed at %.4f,%.4f: %s", lat, lon, exc)
+
+        timeline.append(entry)
+
+    return timeline
+
+
 # ── Route Service (OpenRouteService or fallback) ────────────────────
 
 def get_route(
@@ -1175,6 +1348,7 @@ def plan_trip(
             ),
             polyline=[],
             route_steps=[],
+            route_weather=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
         )
@@ -1201,6 +1375,7 @@ def plan_trip(
             feasibility_reason="Could not calculate route",
             polyline=[],
             route_steps=[],
+            route_weather=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
         )
@@ -1209,6 +1384,19 @@ def plan_trip(
     duration_sec = route["duration_sec"]
     polyline = route["polyline"]
     route_steps = route.get("steps") or []
+    route_weather = get_route_weather_timeline(polyline, distance_km, duration_sec)
+
+    if route_weather:
+        start_weather = route_weather[0]
+        end_weather = route_weather[-1]
+        start_temp = f"{start_weather['temp_c']:.1f}°C" if start_weather.get("temp_c") is not None else "n/a"
+        end_temp = f"{end_weather['temp_c']:.1f}°C" if end_weather.get("temp_c") is not None else "n/a"
+        weather_summary = (
+            f"Start: {start_weather.get('weather', 'Unknown')} {start_temp} • "
+            f"Arrive: {end_weather.get('weather', 'Unknown')} {end_temp}"
+        )
+    else:
+        weather_summary = "Route weather unavailable"
     
     # Phase 1 estimate: distance + fixed efficiency baseline.
     energy_needed_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
@@ -1239,7 +1427,8 @@ def plan_trip(
         ),
         polyline=polyline,
         route_steps=route_steps,
-        weather_summary="Not included in baseline estimate",
+        route_weather=route_weather,
+        weather_summary=weather_summary,
         created_at=datetime.now().isoformat()
     )
     
