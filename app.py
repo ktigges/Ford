@@ -3456,44 +3456,43 @@ def create_app() -> Flask:
 
     # ── Manage Vehicles ──────────────────────────────────────────────
 
-    _VIN_TABLES = [
-        "garage", "telemetry", "vehicle_state", "battery_state",
-        "charging_state", "charging_history", "location_state", "tire_state", "door_state",
-        "window_state", "brake_state", "security_state", "environment_state",
-        "vehicle_configuration", "departure_schedule",
-        "polling_config", "collector_status", "oauth_credentials",
-    ]
+    _SETTINGS_DEFAULTS = {
+        "backup_schedule_enabled": "off",  # on/off for periodic backup
+        "backup_schedule_hours": "24",     # periodic backup interval in hours
+        "backup_last_completed_at": "",
+        "backup_last_error": "",
+        "units": "imperial",
+        "timezone": _default_timezone_name(),
+        "poll_interval_off": "120",
+        "poll_interval_on": "60",
+        "poll_interval_moving": "15",
+        "poll_interval_charging": "60",
+        "conservative_polling": "off",
+        "autostart_poller": "off",
+        "developing": "off",  # disables startup delay if 'on'
+        "home_country": "US",  # inferred from timezone; used for charger region
+        "nlr_api_key": "",  # NREL Alt Fuel Stations API key (empty until set)
+        "charger_scope": "all_us",  # all_us or single_state
+        "charger_state_filter": "",  # two-letter state when scope=single_state
+        "charger_fetch_strategy": "all_then_200",  # all_then_200 or paged_200
+        "charger_page_size": "200",  # page size for paged mode / fallback
+        "charger_auto_update": "off",  # on/off for periodic background charger refresh
+        "charger_auto_update_hours": "24",  # refresh interval in hours
+        "ml_retrain_schedule_enabled": "off",  # on/off for periodic model retraining
+        "ml_retrain_schedule_hours": "24",  # periodic retrain interval in hours
+        "ml_retrain_after_x_drives_enabled": "off",  # on/off for drive-count trigger
+        "ml_retrain_after_x_drives": "10",  # retrain after this many new drives
+        "ml_retrain_last_trained_drive_count": "0",  # baseline drive count from last successful retrain
+        "ml_retrain_status": "idle",  # idle, in_progress, completed, failed
+        "ml_retrain_last_started_at": "",
+        "ml_retrain_last_completed_at": "",
+        "ml_retrain_last_trigger": "",
+        "ml_retrain_last_error": "",
+        "ml_retrain_last_duration_sec": "",
+        "ml_retrain_last_exit_code": "",
+    }
 
-    @app.route("/manage")
-    def manage():
-        """Show all VINs in the system with per-table row counts."""
-        active_vin = _active_vin()
-        garage_rows = db.fetch_all("SELECT * FROM garage ORDER BY updated_at DESC")
-
-        # Build per-VIN stats
-        vin_stats = []
-        for g in garage_rows:
-            v = g["vin"]
-            counts = {}
-            total = 0
-            for t in _VIN_TABLES:
-                if t == "garage":
-                    continue
-                if not _table_exists(t):
-                    continue
-                # composite-PK tables use vin column too
-                row = db.fetch_one(f"SELECT count(*) AS cnt FROM {t} WHERE vin = %s", (v,))
-                c = row["cnt"] if row else 0
-                if c > 0:
-                    counts[t] = c
-                    total += c
-            vin_stats.append({
-                "vin": v,
-                "nickname": g.get("nickname"),
-                "make": g.get("make"),
-                "model_name": g.get("model_name"),
-                "model_year": g.get("model_year"),
-                "is_active": (v == active_vin),
+    # Backup scheduler thread and functions (moved out of _SETTINGS_DEFAULTS)
                 "counts": counts,
                 "total_rows": total,
             })
