@@ -21,6 +21,7 @@ Date:        2026-05-09
 import json
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -36,7 +37,8 @@ log = logging.getLogger(__name__)
 
 # API keys - load from config or environment
 OPENWEATHER_API_KEY = "demo"  # TODO: Set from environment or config.json
-GOOGLE_MAPS_API_KEY = None  # TODO: Set if using Google Maps
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+OPENROUTESERVICE_API_KEY = os.getenv("OPENROUTESERVICE_API_KEY")
 
 # EV-specific parameters
 BATTERY_CAPACITY_KWH = 131  # Ford F-150 Lightning Standard (adjust per vehicle)
@@ -168,6 +170,7 @@ class TripPlan:
     feasible: bool
     feasibility_reason: str
     polyline: list[tuple[float, float]]
+    route_steps: list[dict]
     weather_summary: str
     created_at: str
 
@@ -715,49 +718,121 @@ def get_route(
         "duration_sec": int,
         "polyline": [(lat, lon), ...],
         "elevation_gain_m": float,
+        "steps": [{"instruction": str, "distance_km": float, "duration_min": int}, ...],
     }
     """
-    # Try OpenRouteService (free tier available)
+    def _format_osrm_instruction(step: dict) -> str:
+        maneuver = step.get("maneuver") or {}
+        mtype = (maneuver.get("type") or "").replace("_", " ")
+        modifier = (maneuver.get("modifier") or "").replace("_", " ")
+        road = (step.get("name") or "").strip()
+
+        if mtype in {"depart", "arrive"}:
+            instruction = mtype.capitalize()
+        elif modifier:
+            instruction = f"{mtype.capitalize()} {modifier}".strip()
+        else:
+            instruction = mtype.capitalize() if mtype else "Continue"
+
+        if road:
+            instruction = f"{instruction} onto {road}"
+        return instruction.strip()
+
+    # Primary provider: OSRM public router (road-accurate geometry + steps, no key).
     try:
-        url = "https://api.openrouteservice.org/v2/directions/driving-car"
+        url = (
+            "https://router.project-osrm.org/route/v1/driving/"
+            f"{start_lon},{start_lat};{end_lon},{end_lat}"
+        )
         params = {
-            "start": f"{start_lon},{start_lat}",
-            "end": f"{end_lon},{end_lat}",
-            "api_key": "5b3ce3597851110001cf6248",  # Public demo key (limited)
-            "format": "geojson",
-            "geometry_format": "geojson"
+            "overview": "full",
+            "geometries": "geojson",
+            "steps": "true",
         }
-        
-        response = requests.get(url, params=params, timeout=10)
+
+        response = requests.get(url, params=params, timeout=12)
         response.raise_for_status()
         data = response.json()
-        
-        if "features" in data and data["features"]:
-            route = data["features"][0]
-            coords = route["geometry"]["coordinates"]
-            polyline = [(lat, lon) for lon, lat in coords]  # ORS returns [lon, lat]
-            
-            distance_km = route["properties"]["segments"][0]["distance"] / 1000
-            duration_sec = int(route["properties"]["segments"][0]["duration"])
-            
-            # Rough elevation gain estimation (2% elevation per 100m horizontal)
-            elevation_gain_m = distance_km * 20
-            
-            log.info(f"Route found: {distance_km:.1f} km, {duration_sec//60} min")
-            
+
+        routes = data.get("routes") or []
+        if routes:
+            route = routes[0]
+            coords = (route.get("geometry") or {}).get("coordinates") or []
+            polyline = [(lat, lon) for lon, lat in coords]
+
+            distance_km = float(route.get("distance", 0)) / 1000
+            duration_sec = int(route.get("duration", 0))
+
+            steps: list[dict] = []
+            for leg in route.get("legs", []) or []:
+                for step in leg.get("steps", []) or []:
+                    steps.append(
+                        {
+                            "instruction": _format_osrm_instruction(step),
+                            "distance_km": round(float(step.get("distance", 0)) / 1000, 2),
+                            "duration_min": max(1, int(round(float(step.get("duration", 0)) / 60))),
+                        }
+                    )
+
             return {
                 "distance_km": distance_km,
                 "duration_sec": duration_sec,
                 "polyline": polyline,
-                "elevation_gain_m": elevation_gain_m,
+                "elevation_gain_m": 0,
+                "steps": steps,
             }
-        else:
-            log.warning("No route found in ORS response")
-            return None
-    
+
+        log.warning("No route found in OSRM response")
     except Exception as e:
-        log.warning(f"OpenRouteService failed: {e}, using fallback")
-        
+        log.warning(f"OSRM failed: {e}")
+
+    # Optional fallback: OpenRouteService if OPENROUTESERVICE_API_KEY is configured.
+    if OPENROUTESERVICE_API_KEY:
+        try:
+            url = "https://api.openrouteservice.org/v2/directions/driving-car"
+            params = {
+                "start": f"{start_lon},{start_lat}",
+                "end": f"{end_lon},{end_lat}",
+                "api_key": OPENROUTESERVICE_API_KEY,
+                "format": "geojson",
+                "geometry_format": "geojson",
+            }
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if "features" in data and data["features"]:
+                route = data["features"][0]
+                coords = route["geometry"]["coordinates"]
+                polyline = [(lat, lon) for lon, lat in coords]
+
+                segment = route["properties"]["segments"][0]
+                distance_km = float(segment.get("distance", 0)) / 1000
+                duration_sec = int(segment.get("duration", 0))
+
+                steps = []
+                for step in segment.get("steps", []) or []:
+                    steps.append(
+                        {
+                            "instruction": step.get("instruction", "Continue"),
+                            "distance_km": round(float(step.get("distance", 0)) / 1000, 2),
+                            "duration_min": max(1, int(round(float(step.get("duration", 0)) / 60))),
+                        }
+                    )
+
+                return {
+                    "distance_km": distance_km,
+                    "duration_sec": duration_sec,
+                    "polyline": polyline,
+                    "elevation_gain_m": distance_km * 20,
+                    "steps": steps,
+                }
+        except Exception as e:
+            log.warning(f"OpenRouteService failed: {e}")
+
+    # Last-resort fallback if routing providers are unavailable.
+    try:
         # Fallback: simple great-circle distance
         distance_km = haversine_distance(start_lat, start_lon, end_lat, end_lon)
         duration_sec = int(distance_km / 80 * 3600)  # Assume 80 km/h avg
@@ -776,7 +851,17 @@ def get_route(
             "duration_sec": duration_sec,
             "polyline": polyline,
             "elevation_gain_m": 0,
+            "steps": [
+                {
+                    "instruction": "Approximate route fallback used (road network unavailable)",
+                    "distance_km": round(distance_km, 2),
+                    "duration_min": max(1, int(round(duration_sec / 60))),
+                }
+            ],
         }
+    except Exception as e:
+        log.warning("Fallback route generation failed: %s", e)
+        return None
 
 
 # ── Weather Service ───────────────────────────────────────────────
@@ -1089,6 +1174,7 @@ def plan_trip(
                 f"Could not geolocate {missing_text}. Try 'City, ST' or 'lat,lon' format."
             ),
             polyline=[],
+            route_steps=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
         )
@@ -1114,6 +1200,7 @@ def plan_trip(
             feasible=False,
             feasibility_reason="Could not calculate route",
             polyline=[],
+            route_steps=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
         )
@@ -1121,6 +1208,7 @@ def plan_trip(
     distance_km = route["distance_km"]
     duration_sec = route["duration_sec"]
     polyline = route["polyline"]
+    route_steps = route.get("steps") or []
     
     # Phase 1 estimate: distance + fixed efficiency baseline.
     energy_needed_kwh = distance_km * DEFAULT_EFFICIENCY_KWH_PER_KM
@@ -1150,6 +1238,7 @@ def plan_trip(
             else "Baseline estimate generated (trip may require charging)"
         ),
         polyline=polyline,
+        route_steps=route_steps,
         weather_summary="Not included in baseline estimate",
         created_at=datetime.now().isoformat()
     )

@@ -237,6 +237,19 @@
                     <hr>
                     <p class="text-success"><strong>Baseline estimate complete.</strong></p>
                     {% endif %}
+
+                    {% if plan.route_steps %}
+                    <hr>
+                    <h6>Turn-by-Turn Directions</h6>
+                    <ol class="small ps-3">
+                        {% for step in plan.route_steps %}
+                        <li class="mb-2">
+                            <div><strong>{{ step.instruction }}</strong></div>
+                            <div class="text-muted">{{ "%.2f"|format(step.distance_km) }} km • {{ step.duration_min }} min</div>
+                        </li>
+                        {% endfor %}
+                    </ol>
+                    {% endif %}
                 </div>
             </div>
             {% else %}
