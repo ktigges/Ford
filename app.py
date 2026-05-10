@@ -1884,12 +1884,28 @@ def create_app():
         charger_status = nlr_chargers.get_sync_status()
         charger_failure_class = _charger_failure_class(charger_status)
         charger_job_running = _charger_import_is_running()
+
+        logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        charger_logs = ""
+        charger_log_path = os.path.join(logs_dir, "debug_chargers.log")
+        if os.path.isfile(charger_log_path):
+            with open(charger_log_path, "r") as f:
+                charger_logs = "".join(f.readlines()[-20:])
+
+        charger_audit_logs = ""
+        charger_audit_path = os.path.join(logs_dir, "charger_sync_audit.log")
+        if os.path.isfile(charger_audit_path):
+            with open(charger_audit_path, "r") as f:
+                charger_audit_logs = "".join(f.readlines()[-20:])
+
         return render_template(
             "settings_chargers_page.html",
             settings=current,
             charger_status=charger_status,
             charger_failure_class=charger_failure_class,
             charger_job_running=charger_job_running,
+            charger_logs=charger_logs,
+            charger_audit_logs=charger_audit_logs,
         )
 
 
