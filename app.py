@@ -22,6 +22,7 @@ Date:        2026-05-09
 """
 
 import logging
+import glob
 import os
 import re
 import subprocess
@@ -1958,33 +1959,32 @@ def create_app():
             settings=current,
             backup_logs=backup_logs,
         )
-# ── Log viewing routes ─────────────────────────────────────────────
-import glob
 
-@app.route("/logs", methods=["GET"])
-def logs():
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    log_files = [os.path.basename(f) for f in glob.glob(os.path.join(log_dir, "*.log"))]
-    selected_log = request.args.get("log_name") or (log_files[0] if log_files else None)
-    log_content = ""
-    if selected_log and selected_log in log_files:
-        try:
-            with open(os.path.join(log_dir, selected_log), "r") as f:
-                log_content = f.read()[-6000:]  # Show last ~6000 chars
-        except Exception as exc:
-            log_content = f"Error reading log: {exc}"
-    return render_template("logs.html", log_files=log_files, selected_log=selected_log, log_content=log_content)
+    # ── Log viewing routes ─────────────────────────────────────────────
+    @app.route("/logs", methods=["GET"])
+    def logs():
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        log_files = [os.path.basename(f) for f in glob.glob(os.path.join(log_dir, "*.log"))]
+        selected_log = request.args.get("log_name") or (log_files[0] if log_files else None)
+        log_content = ""
+        if selected_log and selected_log in log_files:
+            try:
+                with open(os.path.join(log_dir, selected_log), "r") as f:
+                    log_content = f.read()[-6000:]  # Show last ~6000 chars
+            except Exception as exc:
+                log_content = f"Error reading log: {exc}"
+        return render_template("logs.html", log_files=log_files, selected_log=selected_log, log_content=log_content)
 
-@app.route("/logs/<log_name>")
-def view_log(log_name):
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    safe_log = os.path.basename(log_name)
-    log_path = os.path.join(log_dir, safe_log)
-    if not os.path.isfile(log_path):
-        return f"Log file not found: {safe_log}", 404
-    with open(log_path, "r") as f:
-        content = f.read()
-    return f"<pre style='background:#222;color:#eee;padding:1em;'>{content}</pre>"
+    @app.route("/logs/<log_name>")
+    def view_log(log_name):
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        safe_log = os.path.basename(log_name)
+        log_path = os.path.join(log_dir, safe_log)
+        if not os.path.isfile(log_path):
+            return f"Log file not found: {safe_log}", 404
+        with open(log_path, "r") as f:
+            content = f.read()
+        return f"<pre style='background:#222;color:#eee;padding:1em;'>{content}</pre>"
 
     @app.route("/setup/test", methods=["POST"])
     def db_setup_test():
