@@ -68,6 +68,60 @@ US_STATE_NAMES = {
 
 ZIP_RE = re.compile(r"^\d{5}(?:-\d{4})?$")
 
+STATE_NAME_TO_ABBR = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "district of columbia": "DC",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+}
+
 
 # ── Data Structures ────────────────────────────────────────────────
 
@@ -166,6 +220,133 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                 return True
             return False
 
+        def _normalize_state_token(token: str) -> str | None:
+            t = (token or "").strip().strip(".").lower()
+            if not t:
+                return None
+            if len(t) == 2 and t.upper() in US_STATE_ABBREVIATIONS:
+                return t.upper()
+            if t in STATE_NAME_TO_ABBR:
+                return STATE_NAME_TO_ABBR[t]
+            return None
+
+        def _extract_us_hint(query: str) -> dict:
+            q = (query or "").strip()
+            if not q:
+                return {"city": None, "state": None, "zip": None, "is_state_only": False}
+
+            q_clean = re.sub(r"\s+", " ", q)
+            parts = [p.strip() for p in q_clean.split(",") if p.strip()]
+            zip_match = re.search(r"\b(\d{5})(?:-\d{4})?\b", q_clean)
+            zip_code = zip_match.group(1) if zip_match else None
+
+            city = None
+            state = None
+
+            if len(parts) >= 2:
+                state = _normalize_state_token(parts[-1])
+                if not state:
+                    # Handle "City, ST ZIP"
+                    trailing_tokens = [t for t in re.split(r"\s+", parts[-1]) if t]
+                    if trailing_tokens:
+                        state = _normalize_state_token(trailing_tokens[0])
+
+                if state:
+                    city = parts[0]
+            else:
+                tokens = [t for t in re.split(r"\s+", q_clean) if t]
+                for i in range(len(tokens) - 1, -1, -1):
+                    maybe_state = _normalize_state_token(tokens[i])
+                    if maybe_state:
+                        state = maybe_state
+                        if i > 0:
+                            city = " ".join(tokens[:i])
+                        break
+
+                if not state:
+                    maybe_state = _normalize_state_token(q_clean)
+                    if maybe_state:
+                        state = maybe_state
+
+            if city:
+                city = city.strip().strip(",")
+                # If city looks like an address, keep free-form mode only.
+                if re.match(r"^\d+\s+", city):
+                    city = None
+
+            is_state_only = bool(state and not city and not zip_code)
+            return {
+                "city": city,
+                "state": state,
+                "zip": zip_code,
+                "is_state_only": is_state_only,
+            }
+
+        def _state_from_nominatim_address(address: dict) -> str | None:
+            if not isinstance(address, dict):
+                return None
+            for key in ("state_code", "ISO3166-2-lvl4", "state"):
+                raw = address.get(key)
+                if not raw:
+                    continue
+                text = str(raw).strip()
+                if key == "ISO3166-2-lvl4" and "-" in text:
+                    text = text.split("-", 1)[1]
+                normalized = _normalize_state_token(text)
+                if normalized:
+                    return normalized
+            return None
+
+        def _city_from_nominatim_address(address: dict) -> str | None:
+            if not isinstance(address, dict):
+                return None
+            for key in ("city", "town", "village", "hamlet", "municipality", "county"):
+                value = address.get(key)
+                if value:
+                    return str(value).strip().lower()
+            return None
+
+        def _score_nominatim_result(result: dict, us_hint: dict, prefer_us: bool) -> int:
+            score = 0
+            address = (result or {}).get("address") or {}
+            country_code = str(address.get("country_code", "")).lower()
+            if prefer_us:
+                score += 200 if country_code == "us" else -200
+
+            expected_state = us_hint.get("state")
+            if expected_state:
+                actual_state = _state_from_nominatim_address(address)
+                if actual_state == expected_state:
+                    score += 140
+                elif actual_state:
+                    score -= 120
+
+            expected_city = (us_hint.get("city") or "").lower()
+            if expected_city:
+                actual_city = _city_from_nominatim_address(address)
+                if actual_city and actual_city == expected_city:
+                    score += 100
+                elif actual_city:
+                    score -= 60
+
+            expected_zip = us_hint.get("zip")
+            if expected_zip:
+                actual_zip = str(address.get("postcode", "")).strip()
+                if actual_zip.startswith(expected_zip):
+                    score += 90
+                elif actual_zip:
+                    score -= 60
+
+            if us_hint.get("is_state_only"):
+                result_type = str((result or {}).get("type", "")).lower()
+                if result_type in {"administrative", "state"}:
+                    score += 40
+
+            # Favor more specific rank when scores tie.
+            rank = int((result or {}).get("place_rank", 0) or 0)
+            score += min(rank, 30)
+            return score
+
         def _build_query_variants(query: str) -> list[str]:
             variants = [query]
             lower_query = query.lower()
@@ -175,6 +356,7 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
 
         query_variants = _build_query_variants(location_query)
         looks_us = _looks_like_us_location(location_query)
+        us_hint = _extract_us_hint(location_query)
         
         # Primary provider: Nominatim with a short retry window.
         nominatim_url = "https://nominatim.openstreetmap.org/search"
@@ -183,12 +365,53 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
         }
 
         for query in query_variants:
+            # Structured search is more reliable for city/state/zip lookups.
+            structured_params = None
+            if us_hint.get("state") and not re.match(r"^\d+\s+", query.strip()):
+                structured_params = {
+                    "format": "json",
+                    "limit": 10,
+                    "addressdetails": 1,
+                    "countrycodes": "us",
+                    "state": us_hint["state"],
+                }
+                if us_hint.get("city"):
+                    structured_params["city"] = us_hint["city"]
+                if us_hint.get("zip"):
+                    structured_params["postalcode"] = us_hint["zip"]
+
+            structured_candidates = []
+            if structured_params:
+                try:
+                    response = requests.get(nominatim_url, params=structured_params, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    structured_candidates = response.json() or []
+                except requests.RequestException as e:
+                    log.warning("Structured geocode failed for '%s': %s", location_query, e)
+
+                if structured_candidates:
+                    best = max(
+                        structured_candidates,
+                        key=lambda r: _score_nominatim_result(r, us_hint, looks_us),
+                    )
+                    lat = float(best["lat"])
+                    lon = float(best["lon"])
+                    log.info(
+                        "Geocoded '%s' via Nominatim structured query to %s, %s (%s)",
+                        location_query,
+                        lat,
+                        lon,
+                        best.get("display_name", ""),
+                    )
+                    return (lat, lon)
+
             search_attempts = [
                 {
                     "q": query,
                     "format": "json",
-                    "limit": 5,
+                    "limit": 10,
                     "addressdetails": 1,
+                    "accept-language": "en",
                 }
             ]
             if looks_us:
@@ -197,9 +420,10 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                     {
                         "q": query,
                         "format": "json",
-                        "limit": 5,
+                        "limit": 10,
                         "addressdetails": 1,
                         "countrycodes": "us",
+                        "accept-language": "en",
                     },
                 )
 
@@ -209,19 +433,21 @@ def geocode_location(location_query: str) -> tuple[float, float] | None:
                     response.raise_for_status()
                     results = response.json() or []
                     if results:
-                        # Prefer US result when the query looks US-focused.
-                        best = results[0]
-                        if looks_us:
-                            us_results = [
-                                r for r in results
-                                if (r.get("address") or {}).get("country_code", "").lower() == "us"
-                            ]
-                            if us_results:
-                                best = us_results[0]
+                        best = max(
+                            results,
+                            key=lambda r: _score_nominatim_result(r, us_hint, looks_us),
+                        )
 
                         lat = float(best["lat"])
                         lon = float(best["lon"])
-                        log.info("Geocoded '%s' via Nominatim (%s) to %s, %s", location_query, query, lat, lon)
+                        log.info(
+                            "Geocoded '%s' via Nominatim (%s) to %s, %s (%s)",
+                            location_query,
+                            query,
+                            lat,
+                            lon,
+                            best.get("display_name", ""),
+                        )
                         return (lat, lon)
                 except requests.RequestException as e:
                     log.warning("Nominatim geocode failed for '%s' query '%s': %s", location_query, query, e)
