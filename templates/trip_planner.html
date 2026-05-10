@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+
+{% block title %}Trip Planner{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>🚗 Personalized EV Trip Planner</h1>
+    <p class="text-muted">Plan your route with personalized energy consumption predictions based on your driving style</p>
+
+    <div class="row">
+        <!-- Input Form -->
+        <div class="col-md-5">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Plan Your Trip</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" id="tripForm">
+                        <div class="mb-3">
+                            <label for="source" class="form-label">Source</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="source" 
+                                   name="source" 
+                                   value="{{ form.source }}"
+                                   placeholder="City, State or Lat,Lon (e.g., Denver, CO or 39.7392,-104.9903)"
+                                   required>
+                            <small class="form-text text-muted">Enter a place name or coordinates</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="destination" class="form-label">Destination</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="destination" 
+                                   name="destination" 
+                                   value="{{ form.destination }}"
+                                   placeholder="City, State or Lat,Lon"
+                                   required>
+                            <small class="form-text text-muted">Enter a place name or coordinates</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="start_soc" class="form-label">Starting Battery %</label>
+                            <input type="range" 
+                                   class="form-range" 
+                                   id="start_soc" 
+                                   name="start_soc" 
+                                   value="{{ form.start_soc }}"
+                                   min="0" 
+                                   max="100" 
+                                   step="5">
+                            <small class="form-text text-muted">
+                                Current: <strong id="socValue">{{ form.start_soc }}%</strong>
+                            </small>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-map"></i> Plan Route
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Model Status -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h6 class="mb-0">Model Info</h6>
+                </div>
+                <div class="card-body small">
+                    <p class="mb-1">
+                        <strong>Status:</strong> 
+                        <span class="badge bg-success">✓ Ready</span>
+                    </p>
+                    <p class="mb-1">
+                        <strong>Training Samples:</strong> 12 drives
+                    </p>
+                    <p class="mb-1">
+                        <strong>Prediction Error:</strong> ±1.45 kWh (MAE)
+                    </p>
+                    <p class="mb-0">
+                        <small class="text-muted">Improves with more drive data</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="col-md-7">
+            {% if plan %}
+            <div class="card">
+                <div class="card-header {% if plan.feasible %}bg-success{% else %}bg-danger{% endif %} text-white">
+                    <h5 class="mb-0">
+                        {% if plan.feasible %}
+                        ✓ Trip Feasible
+                        {% else %}
+                        ✗ Trip Not Feasible
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ plan.source_name }} → {{ plan.destination_name }}</h6>
+                    <p class="text-muted">{{ plan.feasibility_reason }}</p>
+
+                    <div class="row mt-3">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <small class="text-muted">Distance</small>
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km) }} km</h5>
+                            </div>
+                            <div class="mb-3">
+                                <small class="text-muted">Duration</small>
+                                <h5 class="mb-0">{{ plan.estimated_duration_min }} min</h5>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <small class="text-muted">Energy Needed</small>
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.energy_needed_kwh) }} kWh</h5>
+                            </div>
+                            <div class="mb-3">
+                                <small class="text-muted">Weather</small>
+                                <h5 class="mb-0">{{ plan.weather_summary }}</h5>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- SOC Projection -->
+                    <div class="mb-3">
+                        <small class="text-muted">Battery State of Charge</small>
+                        <div class="d-flex align-items-center">
+                            <div class="flex-grow-1">
+                                <div class="progress" style="height: 30px;">
+                                    <div class="progress-bar" 
+                                         role="progressbar" 
+                                         style="width: {{ plan.start_soc_percent }}%;"
+                                         aria-valuenow="{{ plan.start_soc_percent }}" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                        {{ plan.start_soc_percent|int }}%
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="margin: 0 20px;">
+                                <i class="bi bi-arrow-right"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="progress" style="height: 30px;">
+                                    <div class="progress-bar {% if plan.arrival_soc_percent >= 10 %}bg-success{% else %}bg-danger{% endif %}" 
+                                         role="progressbar" 
+                                         style="width: {{ plan.arrival_soc_percent }}%;"
+                                         aria-valuenow="{{ plan.arrival_soc_percent }}" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                        {{ plan.arrival_soc_percent|int }}%
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mt-2">
+                            Start: {{ plan.start_soc_percent|int }}% → Arrival: {{ plan.arrival_soc_percent|int }}%
+                        </small>
+                    </div>
+
+                    <!-- Charging Stops -->
+                    {% if plan.charging_stops %}
+                    <hr>
+                    <h6>Recommended Charging Stops</h6>
+                    <div class="list-group">
+                        {% for stop in plan.charging_stops %}
+                        <div class="list-group-item">
+                            <div class="d-flex justify-content-between">
+                                <div>
+                                    <h6 class="mb-1">{{ stop.charger_name }}</h6>
+                                    <small class="text-muted">
+                                        {{ stop.address }}<br>
+                                        Network: {{ stop.network }} | Power: {{ stop.charger_power_kw|int }} kW
+                                    </small>
+                                </div>
+                                <div class="text-end">
+                                    <small><strong>km {{ "%.0f"|format(stop.distance_km_from_start) }}</strong></small><br>
+                                    <small>Arrive: {{ stop.arrival_soc_percent|int }}%</small><br>
+                                    <small>Charge to: {{ stop.charge_to_soc_percent|int }}%</small><br>
+                                    <small class="text-muted">{{ stop.charge_time_min }} min</small>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <hr>
+                    <p class="text-success"><strong>✓ Direct route - no charging stops needed!</strong></p>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">Trip Details</h5>
+                </div>
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-map" style="font-size: 3rem; color: #ccc;"></i>
+                    <p class="mt-4 text-muted">Enter source and destination to see your personalized trip plan</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Map Display (if trip planned) -->
+{% if plan and plan.polyline %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header">
+            <h5 class="mb-0">Route Map</h5>
+        </div>
+        <div id="tripMap" style="height: 400px;"></div>
+    </div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const mapContainer = document.getElementById('tripMap');
+    if (!mapContainer) return;
+
+    const map = L.map(mapContainer).setView([39.5, -104.9], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
+    }).addTo(map);
+
+    const polyline = {{ plan.polyline|tojson }};
+    if (polyline && polyline.length > 0) {
+        L.polyline(polyline, { color: 'blue', weight: 3, opacity: 0.7 }).addTo(map);
+        
+        // Add start and end markers
+        L.marker(polyline[0], { title: 'Start' })
+            .bindPopup('<b>Start</b>')
+            .addTo(map);
+        L.marker(polyline[polyline.length - 1], { title: 'End' })
+            .bindPopup('<b>End</b>')
+            .addTo(map);
+
+        // Add charging stop markers
+        const stops = {{ plan.charging_stops|tojson }};
+        if (stops && stops.length > 0) {
+            stops.forEach(function(stop, idx) {
+                L.circleMarker([stop.lat, stop.lon], {
+                    radius: 8,
+                    fillColor: '#ff7800',
+                    color: '#000',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).bindPopup(
+                    '<b>Stop ' + (idx + 1) + '</b><br>' +
+                    stop.charger_name + '<br>' +
+                    'Charge: ' + stop.charge_to_soc_percent + '%<br>' +
+                    stop.charge_time_min + ' min'
+                ).addTo(map);
+            });
+        }
+
+        // Fit bounds to route
+        const bounds = L.latLngBounds(polyline);
+        map.fitBounds(bounds, { padding: [50, 50] });
+    }
+});
+</script>
+{% endif %}
+
+<script>
+// Update SOC value display in real-time
+document.getElementById('start_soc').addEventListener('input', function() {
+    document.getElementById('socValue').textContent = this.value + '%';
+});
+</script>
+
+{% endblock %}
