@@ -1884,10 +1884,6 @@ def create_app():
             "settings_backup_page.html",
             settings=settings,
         )
-                "password": posted_password or db_cfg.get("password", ""),
-                "connect_timeout": int(request.form.get("connect_timeout", 10)),
-            }
-            config.save_database(new_cfg)
             db_cfg = new_cfg
 
             # Attempt to connect with the new settings
@@ -4167,6 +4163,11 @@ def create_app():
                         }
                         flash("Locations resolved. Review below, then calculate route.", "success")
 
+        baseline_kwh = None
+        ml_kwh = None
+        if plan:
+            baseline_kwh = getattr(plan, "baseline_energy_needed_kwh", None)
+            ml_kwh = getattr(plan, "ml_energy_needed_kwh", None)
         return render_template(
             "trip_planner.html",
             form=form_data,
@@ -4174,6 +4175,8 @@ def create_app():
             preview=preview,
             unit_system=unit_system,
             timezone_name=timezone_name,
+            baseline_energy_kwh=baseline_kwh,
+            ml_energy_kwh=ml_kwh,
         )
 
     @app.route("/api/predict/trip", methods=["POST"])

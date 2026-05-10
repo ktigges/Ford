@@ -233,6 +233,7 @@
             </div>
         </div>
 
+
         <!-- Results Panel -->
         <div class="col-md-7">
             {% if plan %}
@@ -251,7 +252,7 @@
                     <p class="text-muted">{{ plan.feasibility_reason }}</p>
 
                     <div class="row mt-3">
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <div class="mb-3">
                                 <small class="text-muted">Distance</small>
                                 {% if unit_system == 'imperial' %}
@@ -265,29 +266,16 @@
                                 <h5 class="mb-0">{{ plan.estimated_duration_min }} min</h5>
                             </div>
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <div class="mb-3">
-                                <small class="text-muted">Energy Needed</small>
-                                <h5 class="mb-0">{{ "%.1f"|format(plan.energy_needed_kwh) }} kWh</h5>
+                                <small class="text-muted">Energy Needed (Baseline)</small>
+                                <h5 class="mb-0">{{ "%.1f"|format(baseline_energy_kwh) }} kWh</h5>
                             </div>
+                        </div>
+                        <div class="col-md-4">
                             <div class="mb-3">
-                                <small class="text-muted">Estimate Mode</small>
-                                {% if plan.route_weather and plan.route_weather|length > 1 %}
-                                {% set wx_start = plan.route_weather[0] %}
-                                {% set wx_end = plan.route_weather[-1] %}
-                                <h5 class="mb-0">
-                                    Start: {{ wx_start.weather }}
-                                    {% if wx_start.temp_c is not none %}
-                                        {% if unit_system == 'imperial' %}{{ "%.1f"|format((wx_start.temp_c * 9/5) + 32) }}°F{% else %}{{ "%.1f"|format(wx_start.temp_c) }}°C{% endif %}
-                                    {% else %}n/a{% endif %}
-                                    • Arrive: {{ wx_end.weather }}
-                                    {% if wx_end.temp_c is not none %}
-                                        {% if unit_system == 'imperial' %}{{ "%.1f"|format((wx_end.temp_c * 9/5) + 32) }}°F{% else %}{{ "%.1f"|format(wx_end.temp_c) }}°C{% endif %}
-                                    {% else %}n/a{% endif %}
-                                </h5>
-                                {% else %}
-                                <h5 class="mb-0">{{ plan.weather_summary }}</h5>
-                                {% endif %}
+                                <small class="text-muted">Energy Needed (ML)</small>
+                                <h5 class="mb-0">{{ "%.1f"|format(ml_energy_kwh) }} kWh</h5>
                             </div>
                         </div>
                     </div>
