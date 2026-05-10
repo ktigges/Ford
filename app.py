@@ -1836,10 +1836,6 @@ def create_app():
         return files
 
 
-    # Main settings landing page (navigation only)
-    @app.route("/settings", methods=["GET"])
-    def settings():
-        return render_template("settings.html")
 
     # General Options sub-page
     @app.route("/settings/options", methods=["GET", "POST"])
