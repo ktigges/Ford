@@ -757,6 +757,18 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 
+def _bearing_degrees(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial bearing in degrees from point A to point B (0-360)."""
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+
+    y = math.sin(dlambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    brng = math.degrees(math.atan2(y, x))
+    return (brng + 360.0) % 360.0
+
+
 def _downsample_polyline(polyline: list[tuple[float, float]], max_points: int = MAX_ROUTE_POLYLINE_POINTS) -> list[tuple[float, float]]:
     """Reduce route payload size while preserving start/end and overall shape."""
     if not polyline or len(polyline) <= max_points:
@@ -860,8 +872,29 @@ def get_route_weather_timeline(
                 "temp_c": None,
                 "weather": "Unknown",
                 "wind_kmh": None,
+                "wind_dir_deg": None,
+                "route_bearing_deg": None,
+                "wind_impact": "low",
+                "wind_context": "",
+                "driving_alert": "",
                 "precipitation_pct": None,
             }
+        )
+
+    # Estimate route direction at each checkpoint for wind impact context.
+    for i, entry in enumerate(timeline):
+        if len(timeline) == 1:
+            continue
+        if i == len(timeline) - 1:
+            prev_pt = timeline[i - 1]
+            next_pt = entry
+        else:
+            prev_pt = entry
+            next_pt = timeline[i + 1]
+
+        entry["route_bearing_deg"] = round(
+            _bearing_degrees(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"]),
+            1,
         )
 
     def _enrich_weather(entry: dict) -> None:
@@ -871,7 +904,7 @@ def get_route_weather_timeline(
                 params={
                     "latitude": entry["lat"],
                     "longitude": entry["lon"],
-                    "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m",
+                    "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_direction_10m",
                     "forecast_days": 3,
                     "timezone": "UTC",
                 },
@@ -886,6 +919,7 @@ def get_route_weather_timeline(
             codes = hourly.get("weather_code") or []
             precips = hourly.get("precipitation_probability") or []
             winds = hourly.get("wind_speed_10m") or []
+            wind_dirs = hourly.get("wind_direction_10m") or []
 
             if not times:
                 return
@@ -907,11 +941,60 @@ def get_route_weather_timeline(
             code_val = codes[best_idx] if best_idx < len(codes) else None
             precip_val = precips[best_idx] if best_idx < len(precips) else None
             wind_val = winds[best_idx] if best_idx < len(winds) else None
+            wind_dir_val = wind_dirs[best_idx] if best_idx < len(wind_dirs) else None
 
             entry["temp_c"] = round(float(temp_val), 1) if temp_val is not None else None
             entry["weather"] = _weather_label_from_code(code_val)
             entry["precipitation_pct"] = int(round(float(precip_val))) if precip_val is not None else None
             entry["wind_kmh"] = round(float(wind_val), 1) if wind_val is not None else None
+            entry["wind_dir_deg"] = round(float(wind_dir_val), 1) if wind_dir_val is not None else None
+
+            wind_speed = float(entry["wind_kmh"] or 0.0)
+            bearing = entry.get("route_bearing_deg")
+            wind_dir = entry.get("wind_dir_deg")
+
+            # Tightened thresholds so moderate winds surface sooner.
+            if wind_speed >= 40:
+                entry["wind_impact"] = "high"
+            elif wind_speed >= 20:
+                entry["wind_impact"] = "medium"
+            else:
+                entry["wind_impact"] = "low"
+
+            if bearing is not None and wind_dir is not None:
+                # Convert "from" wind direction to where wind is blowing toward.
+                wind_to = (float(wind_dir) + 180.0) % 360.0
+                angle = abs((wind_to - float(bearing) + 180.0) % 360.0 - 180.0)
+                if angle <= 45:
+                    entry["wind_context"] = "headwind"
+                    if wind_speed >= 15 and entry["wind_impact"] == "low":
+                        entry["wind_impact"] = "medium"
+                    if entry["wind_impact"] == "medium" and wind_speed >= 30:
+                        entry["wind_impact"] = "high"
+                elif angle >= 135:
+                    entry["wind_context"] = "tailwind"
+                else:
+                    entry["wind_context"] = "crosswind"
+
+            weather_text = (entry.get("weather") or "").lower()
+            precip = int(entry.get("precipitation_pct") or 0)
+            alert_parts = []
+            if any(k in weather_text for k in ("snow", "thunder", "fog")):
+                alert_parts.append("visibility/traction risk")
+            if any(k in weather_text for k in ("rain", "drizzle")) and precip >= 35:
+                alert_parts.append("wet roads")
+            if entry["wind_context"] == "headwind" and wind_speed >= 15 and entry["wind_impact"] == "medium":
+                alert_parts.append("minor range impact from headwind")
+            elif entry["wind_impact"] == "high":
+                if entry["wind_context"] == "headwind":
+                    alert_parts.append("range impact from headwind")
+                elif entry["wind_context"] == "crosswind":
+                    alert_parts.append("stability impact from crosswind")
+                else:
+                    alert_parts.append("wind impact")
+
+            if alert_parts:
+                entry["driving_alert"] = " | ".join(alert_parts)
         except Exception as exc:
             log.warning("Route weather fetch failed at %.4f,%.4f: %s", entry["lat"], entry["lon"], exc)
 
