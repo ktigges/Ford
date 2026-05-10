@@ -2,22 +2,13 @@
 {% block title %}Settings – MLLighting{% endblock %}
 {% block content %}
 <h1>Settings</h1>
-
-<form method="post" class="card form-card">
-  <h2>Display Units</h2>
-  {% extends "base.html" %}
-  {% block title %}Settings – MLLighting{% endblock %}
-  {% block content %}
-  <h1>Settings</h1>
-
-  <div class="card" style="max-width:600px; margin:2rem auto;">
-    <h2>Settings Sections</h2>
-    <ul style="list-style:none; padding:0;">
-      <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_options_page') }}">General Options</a></li>
-      <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_chargers_page') }}">Charger Networks</a></li>
-      <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_ai_page') }}">AI / ML</a></li>
-      <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_backup_page') }}">Backup</a></li>
-    </ul>
-  </div>
-  {% endblock %}
-  </div>
+<div class="card" style="max-width:600px; margin:2rem auto;">
+  <h2>Settings Sections</h2>
+  <ul style="list-style:none; padding:0;">
+    <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_options_page') }}">General Options</a></li>
+    <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_chargers_page') }}">Charger Networks</a></li>
+    <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_ai_page') }}">AI / ML</a></li>
+    <li style="margin-bottom:1rem;"><a class="btn" href="{{ url_for('settings_backup_page') }}">Backup</a></li>
+  </ul>
+</div>
+{% endblock %}
