@@ -175,7 +175,9 @@ class TripPlan:
     baseline_energy_needed_kwh: float
     ml_energy_needed_kwh: float
     energy_needed_kwh: float  # For backward compatibility (use ML if available, else baseline)
-    charging_stops: list[ChargingStop]
+    charging_stops: list[ChargingStop]  # Used estimate's stops
+    baseline_charging_stops: list[ChargingStop]  # Stops calculated from baseline energy
+    ml_charging_stops: list[ChargingStop]  # Stops calculated from ML energy
     feasible: bool
     feasibility_reason: str
     polyline: list[tuple[float, float]]
@@ -1549,6 +1551,8 @@ def plan_trip(
             ml_energy_needed_kwh=0,
             energy_needed_kwh=0,
             charging_stops=[],
+            baseline_charging_stops=[],
+            ml_charging_stops=[],
             feasible=False,
             feasibility_reason=(
                 f"Could not geolocate {missing_text}. Try 'City, ST' or 'lat,lon' format."
@@ -1584,6 +1588,8 @@ def plan_trip(
             ml_energy_needed_kwh=0,
             energy_needed_kwh=0,
             charging_stops=[],
+            baseline_charging_stops=[],
+            ml_charging_stops=[],
             feasible=False,
             feasibility_reason="Could not calculate route",
             polyline=[],
@@ -1652,21 +1658,36 @@ def plan_trip(
     # Use ML if available, else baseline
     energy_needed_kwh = ml_energy_kwh if ml_energy_kwh is not None else baseline_energy_kwh
 
-    feasible_direct = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
-
-    charging_stops = []
-    arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
-    feasible = feasible_direct
-
-    # Step 2: Enable charging stop recommendations when direct trip is not feasible.
-    if not feasible_direct:
-        charging_stops = optimize_charging_stops(
+    # Step 2: Calculate charging stops for BOTH baseline and ML estimates
+    baseline_charging_stops = []
+    baseline_feasible_direct = _is_direct_trip_feasible(current_soc_percent, baseline_energy_kwh)
+    if not baseline_feasible_direct:
+        baseline_charging_stops = optimize_charging_stops(
             polyline=polyline,
             total_distance_km=distance_km,
             current_soc_percent=current_soc_percent,
-            energy_needed_kwh=energy_needed_kwh,
-        )
+            energy_needed_kwh=baseline_energy_kwh,
+        ) or []
 
+    ml_charging_stops = []
+    ml_energy_for_stops = ml_energy_kwh if ml_energy_kwh is not None else baseline_energy_kwh
+    ml_feasible_direct = _is_direct_trip_feasible(current_soc_percent, ml_energy_for_stops)
+    if not ml_feasible_direct:
+        ml_charging_stops = optimize_charging_stops(
+            polyline=polyline,
+            total_distance_km=distance_km,
+            current_soc_percent=current_soc_percent,
+            energy_needed_kwh=ml_energy_for_stops,
+        ) or []
+
+    # Use the active estimate's stops
+    feasible_direct = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
+    charging_stops = ml_charging_stops if ml_energy_kwh is not None else baseline_charging_stops
+    arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
+    feasible = feasible_direct
+
+    # Step 3: Assess feasibility with stops if needed
+    if not feasible_direct:
         if charging_stops:
             feasible_with_stops, arrival_soc_with_stops = _can_complete_with_stops(
                 total_distance_km=distance_km,
@@ -1678,22 +1699,22 @@ def plan_trip(
             if feasible_with_stops:
                 arrival_soc = arrival_soc_with_stops
     
-    # Calculate route steps with SOC for baseline estimate
+    # Calculate route steps with SOC for baseline estimate (with baseline charging stops)
     baseline_route_steps = _attach_soc_to_route_steps(
         route_steps=route_steps,
         start_soc_percent=current_soc_percent,
         total_distance_km=distance_km,
         energy_needed_kwh=baseline_energy_kwh,
-        charging_stops=charging_stops,
+        charging_stops=baseline_charging_stops,
     )
     
-    # Calculate route steps with SOC for ML estimate (if available)
+    # Calculate route steps with SOC for ML estimate (with ML charging stops)
     ml_route_steps = _attach_soc_to_route_steps(
         route_steps=route_steps,
         start_soc_percent=current_soc_percent,
         total_distance_km=distance_km,
-        energy_needed_kwh=ml_energy_kwh if ml_energy_kwh is not None else baseline_energy_kwh,
-        charging_stops=charging_stops,
+        energy_needed_kwh=ml_energy_for_stops,
+        charging_stops=ml_charging_stops,
     ) if ml_energy_kwh is not None else baseline_route_steps
     
     # Use the active estimate (ML if available, else baseline) for display
@@ -1725,6 +1746,8 @@ def plan_trip(
         ml_energy_needed_kwh=ml_energy_kwh if ml_energy_kwh is not None else 0.0,
         energy_needed_kwh=energy_needed_kwh,
         charging_stops=charging_stops,
+        baseline_charging_stops=baseline_charging_stops,
+        ml_charging_stops=ml_charging_stops,
         feasible=feasible,
         feasibility_reason=reason,
         polyline=polyline,
