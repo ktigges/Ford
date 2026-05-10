@@ -870,6 +870,7 @@ def get_route_weather_timeline(
                 "lat": round(lat, 5),
                 "lon": round(lon, 5),
                 "temp_c": None,
+                "is_day": None,
                 "weather": "Unknown",
                 "wind_kmh": None,
                 "wind_dir_deg": None,
@@ -904,7 +905,7 @@ def get_route_weather_timeline(
                 params={
                     "latitude": entry["lat"],
                     "longitude": entry["lon"],
-                    "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_direction_10m",
+                    "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_direction_10m,is_day",
                     "forecast_days": 3,
                     "timezone": "UTC",
                 },
@@ -920,6 +921,7 @@ def get_route_weather_timeline(
             precips = hourly.get("precipitation_probability") or []
             winds = hourly.get("wind_speed_10m") or []
             wind_dirs = hourly.get("wind_direction_10m") or []
+            is_day_vals = hourly.get("is_day") or []
 
             if not times:
                 return
@@ -942,12 +944,15 @@ def get_route_weather_timeline(
             precip_val = precips[best_idx] if best_idx < len(precips) else None
             wind_val = winds[best_idx] if best_idx < len(winds) else None
             wind_dir_val = wind_dirs[best_idx] if best_idx < len(wind_dirs) else None
+            is_day_val = is_day_vals[best_idx] if best_idx < len(is_day_vals) else None
 
             entry["temp_c"] = round(float(temp_val), 1) if temp_val is not None else None
             entry["weather"] = _weather_label_from_code(code_val)
             entry["precipitation_pct"] = int(round(float(precip_val))) if precip_val is not None else None
             entry["wind_kmh"] = round(float(wind_val), 1) if wind_val is not None else None
             entry["wind_dir_deg"] = round(float(wind_dir_val), 1) if wind_dir_val is not None else None
+            if is_day_val is not None:
+                entry["is_day"] = bool(int(is_day_val))
 
             wind_speed = float(entry["wind_kmh"] or 0.0)
             bearing = entry.get("route_bearing_deg")
