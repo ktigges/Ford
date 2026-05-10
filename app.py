@@ -155,9 +155,21 @@ def create_app():
     """Flask application factory."""
     app = Flask(__name__)
     config.load()
+    secret_key = (os.environ.get("LIGHTNING_SECRET_KEY") or "").strip()
+    if not secret_key:
+        # Stable fallback key for local/dev bootstrap when env var is not set.
+        secret_key = "lightning-dev-bootstrap-secret-change-me"
+    app.config["SECRET_KEY"] = secret_key
+    app.secret_key = secret_key
     _setup_logging()
     log = logging.getLogger(__name__)
     log.info("Starting MLLighting app (env=%s)", config.environment())
+
+    # Initialize DB pool at startup so normal routes don't fall into setup mode.
+    try:
+        db.init_pool()
+    except Exception as exc:
+        log.warning("Database pool init failed at startup: %s", exc)
 
     _SETTINGS_DEFAULTS = {
         "units": "imperial",
@@ -239,6 +251,10 @@ def create_app():
         finally:
             with _charger_import_guard:
                 _charger_import_thread["thread"] = None
+
+    def _charger_import_is_running() -> bool:
+        t = _charger_import_thread.get("thread")
+        return bool(t and t.is_alive())
 
     def _charger_import_db_in_progress() -> bool:
         """Return True if the DB has an active in-progress charger sync run."""
@@ -1824,12 +1840,17 @@ def create_app():
         """Database setup page — shown when PostgreSQL is unreachable."""
         db_cfg = config.database()
         if request.method == "POST":
+            posted_password = request.form.get("password", "")
+            if posted_password is None:
+                posted_password = ""
+            posted_password = posted_password.strip()
+
             new_cfg = {
                 "host": request.form.get("host", "localhost").strip(),
                 "port": int(request.form.get("port", 5432)),
                 "name": request.form.get("name", "lightning").strip(),
                 "user": request.form.get("user", "lightning").strip(),
-                "password": request.form.get("password", "").strip(),
+                "password": posted_password or db_cfg.get("password", ""),
                 "connect_timeout": int(request.form.get("connect_timeout", 10)),
             }
             config.save_database(new_cfg)
