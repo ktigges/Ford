@@ -1,5 +1,32 @@
-{# ML retraining section from settings.html #}
 <form method="post" class="card form-card">
   <h2>ML Model Retraining</h2>
-  ...existing code...
+  <label><input type="checkbox" name="ml_retrain_schedule_enabled" {% if settings.ml_retrain_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Retraining</label>
+  <label>Interval (hours):
+    <input type="number" name="ml_retrain_schedule_hours" value="{{ settings.ml_retrain_schedule_hours }}" min="1" max="168">
+  </label>
+  <label><input type="checkbox" name="ml_retrain_after_x_drives_enabled" {% if settings.ml_retrain_after_x_drives_enabled == 'on' %}checked{% endif %}> Retrain After X Drives</label>
+  <label>Drives:
+    <input type="number" name="ml_retrain_after_x_drives" value="{{ settings.ml_retrain_after_x_drives }}" min="1" max="500">
+  </label>
+  <button type="submit" name="action" value="save_retrain_options">Save ML Retrain Options</button>
+  <button type="submit" name="action" value="run_retrain_now">Run Retrain Now</button>
 </form>
+
+<div class="card" style="margin-top:2rem;">
+  <h3>Retrain Status</h3>
+  <ul>
+    <li>Status: {{ ml_retrain_status.status }}</li>
+    <li>Last Started: {{ ml_retrain_status.last_started_at }}</li>
+    <li>Last Completed: {{ ml_retrain_status.last_completed_at }}</li>
+    <li>Last Trigger: {{ ml_retrain_status.last_trigger }}</li>
+    <li>Last Error: {{ ml_retrain_status.last_error }}</li>
+    <li>Last Duration (sec): {{ ml_retrain_status.last_duration_sec }}</li>
+    <li>Last Exit Code: {{ ml_retrain_status.last_exit_code }}</li>
+    <li>Baseline Drives: {{ ml_retrain_status.baseline_drives }}</li>
+    <li>Completed Drives: {{ ml_retrain_status.completed_drives }}</li>
+    <li>New Drives Since Last Train: {{ ml_retrain_status.new_drives_since_last_train }}</li>
+    <li>Schema Training Date: {{ ml_retrain_status.schema_training_date }}</li>
+    <li>Schema Num Training Drives: {{ ml_retrain_status.schema_num_training_drives }}</li>
+    <li>Scheduler Running: {{ ml_retrain_status.scheduler_running }}</li>
+  </ul>
+</div>
