@@ -3398,6 +3398,101 @@ def create_app():
 
     # Backup scheduler thread and functions (moved out of _SETTINGS_DEFAULTS)
 
+    @app.route("/manage")
+    def manage():
+        """Manage known VINs and show per-table row counts."""
+        active_vin = _active_vin()
+
+        garage_rows = db.fetch_all(
+            """
+            SELECT vin, nickname, make, model_name, model_year
+            FROM garage
+            ORDER BY vin
+            """
+        )
+
+        count_tables = [
+            "telemetry",
+            "vehicle_state",
+            "battery_state",
+            "charging_state",
+            "charging_history",
+            "location_state",
+            "tire_state",
+            "door_state",
+            "window_state",
+            "brake_state",
+            "security_state",
+            "environment_state",
+            "collector_status",
+            "polling_config",
+            "oauth_credentials",
+            "vehicle_configuration",
+            "departure_schedule",
+            "drives",
+            "drive_points",
+        ]
+
+        vin_stats: list[dict] = []
+        for row in garage_rows:
+            vin = row.get("vin")
+            counts: dict[str, int] = {}
+            total_rows = 0
+
+            for table_name in count_tables:
+                if not _table_exists(table_name):
+                    continue
+                if table_name == "drive_points":
+                    result = db.fetch_one(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM drive_points dp
+                        JOIN drives d ON d.id = dp.drive_id
+                        WHERE d.vin = %s
+                        """,
+                        (vin,),
+                    )
+                else:
+                    result = db.fetch_one(
+                        f"SELECT COUNT(*) AS cnt FROM {table_name} WHERE vin = %s",
+                        (vin,),
+                    )
+
+                cnt = int(result["cnt"]) if result and result.get("cnt") is not None else 0
+                if cnt > 0:
+                    counts[table_name] = cnt
+                    total_rows += cnt
+
+            vin_stats.append(
+                {
+                    "vin": vin,
+                    "nickname": row.get("nickname"),
+                    "make": row.get("make"),
+                    "model_name": row.get("model_name"),
+                    "model_year": row.get("model_year"),
+                    "counts": counts,
+                    "total_rows": total_rows,
+                    "is_active": (vin == active_vin),
+                }
+            )
+
+        orphan_creds = db.fetch_all(
+            """
+            SELECT oc.id, oc.provider, oc.vin
+            FROM oauth_credentials oc
+            LEFT JOIN garage g ON g.vin = oc.vin
+            WHERE oc.vin IS NULL OR g.vin IS NULL
+            ORDER BY oc.id DESC
+            """
+        )
+
+        return render_template(
+            "manage.html",
+            active_vin=active_vin,
+            vin_stats=vin_stats,
+            orphan_creds=orphan_creds,
+        )
+
     @app.route("/manage/delete-vin", methods=["POST"])
     def manage_delete_vin():
         """Delete a VIN and all its data (ON DELETE CASCADE handles child tables)."""
