@@ -554,9 +554,9 @@
                                     {% endif %}
                                 </div>
                                 {% if unit_system == 'imperial' %}
-                                <span class="text-muted">{{ "%.2f"|format(step.distance_km * 0.621371) }} mi • {{ step.duration_min }} min</span>
+                                <span class="text-muted">{{ "%.2f"|format(step.distance_km * 0.621371) }} mi • {{ step.duration_min }} min{% if step.step_soc_percent is not none %} • SOC ~{{ step.step_soc_percent|round|int }}%{% endif %}</span>
                                 {% else %}
-                                <span class="text-muted">{{ "%.2f"|format(step.distance_km) }} km • {{ step.duration_min }} min</span>
+                                <span class="text-muted">{{ "%.2f"|format(step.distance_km) }} km • {{ step.duration_min }} min{% if step.step_soc_percent is not none %} • SOC ~{{ step.step_soc_percent|round|int }}%{% endif %}</span>
                                 {% endif %}
                             </div>
                         </div>
