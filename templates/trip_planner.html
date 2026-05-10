@@ -3,6 +3,52 @@
 {% block title %}Trip Planner{% endblock %}
 
 {% block content %}
+<style>
+    .weather-strip {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(190px, 220px);
+        gap: 12px;
+        overflow-x: auto;
+        padding-bottom: 8px;
+    }
+
+    .weather-card {
+        border: 1px solid #d8e2ec;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #f7fbff 0%, #eef5fb 100%);
+        padding: 10px 12px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    }
+
+    .weather-icon {
+        font-size: 1.1rem;
+        line-height: 1;
+    }
+
+    .wx-temp {
+        font-weight: 700;
+        font-size: 1.05rem;
+    }
+
+    .wx-meta {
+        color: #5a6a7a;
+        font-size: 0.85rem;
+    }
+
+    .precip-track {
+        height: 6px;
+        background: #d9e6f3;
+        border-radius: 999px;
+        overflow: hidden;
+    }
+
+    .precip-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #4ea8de 0%, #1b84c6 100%);
+        border-radius: 999px;
+    }
+</style>
 <div class="container mt-4">
     <h1>EV Trip Baseline Estimator</h1>
     <p class="text-muted">Plan a route, calculate mileage, estimate kWh required, and visualize it on the map</p>
@@ -168,7 +214,22 @@
                             </div>
                             <div class="mb-3">
                                 <small class="text-muted">Estimate Mode</small>
+                                {% if plan.route_weather and plan.route_weather|length > 1 %}
+                                {% set wx_start = plan.route_weather[0] %}
+                                {% set wx_end = plan.route_weather[-1] %}
+                                <h5 class="mb-0">
+                                    Start: {{ wx_start.weather }}
+                                    {% if wx_start.temp_c is not none %}
+                                        {% if unit_system == 'imperial' %}{{ "%.1f"|format((wx_start.temp_c * 9/5) + 32) }}°F{% else %}{{ "%.1f"|format(wx_start.temp_c) }}°C{% endif %}
+                                    {% else %}n/a{% endif %}
+                                    • Arrive: {{ wx_end.weather }}
+                                    {% if wx_end.temp_c is not none %}
+                                        {% if unit_system == 'imperial' %}{{ "%.1f"|format((wx_end.temp_c * 9/5) + 32) }}°F{% else %}{{ "%.1f"|format(wx_end.temp_c) }}°C{% endif %}
+                                    {% else %}n/a{% endif %}
+                                </h5>
+                                {% else %}
                                 <h5 class="mb-0">{{ plan.weather_summary }}</h5>
+                                {% endif %}
                             </div>
                         </div>
                     </div>
@@ -245,38 +306,50 @@
                     {% if plan.route_weather %}
                     <hr>
                     <h6>Route Weather Timeline (every ~20 miles)</h6>
-                    <div class="list-group list-group-flush">
+                    <div class="weather-strip">
                         {% for wx in plan.route_weather %}
-                        <div class="list-group-item px-0">
-                            <div class="d-flex justify-content-between flex-wrap">
+                        <div class="weather-card">
+                            <div class="d-flex justify-content-between align-items-start mb-1">
                                 <div>
-                                    <strong>{{ wx.label }}</strong>
-                                    {% if unit_system == 'imperial' %}
-                                    <span class="text-muted ms-2">Mile {{ "%.1f"|format(wx.distance_miles) }}</span>
-                                    {% else %}
-                                    <span class="text-muted ms-2">{{ "%.1f"|format(wx.distance_miles * 1.60934) }} km</span>
-                                    {% endif %}
+                                    <div class="fw-semibold">{{ wx.label }}</div>
+                                    <div class="wx-meta">
+                                        {% if unit_system == 'imperial' %}
+                                        Mile {{ "%.1f"|format(wx.distance_miles) }}
+                                        {% else %}
+                                        {{ "%.1f"|format(wx.distance_miles * 1.60934) }} km
+                                        {% endif %}
+                                    </div>
                                 </div>
-                                <small class="text-muted">ETA {{ wx.eta_utc }}</small>
+                                <span class="weather-icon">
+                                    {% set w = (wx.weather or '')|lower %}
+                                    {% if 'thunder' in w %}⛈{% elif 'snow' in w %}❄{% elif 'rain' in w or 'drizzle' in w %}🌧{% elif 'cloud' in w or 'overcast' in w or 'fog' in w %}☁{% else %}☀{% endif %}
+                                </span>
                             </div>
-                            <div class="small mt-1">
-                                <span class="badge bg-info text-dark me-2">{{ wx.weather }}</span>
+                            <div class="wx-temp mb-1">
                                 {% if wx.temp_c is not none %}
-                                {% if unit_system == 'imperial' %}
-                                <span class="me-2">{{ "%.1f"|format((wx.temp_c * 9/5) + 32) }}°F</span>
+                                    {% if unit_system == 'imperial' %}
+                                    {{ "%.1f"|format((wx.temp_c * 9/5) + 32) }}°F
+                                    {% else %}
+                                    {{ "%.1f"|format(wx.temp_c) }}°C
+                                    {% endif %}
                                 {% else %}
-                                <span class="me-2">{{ "%.1f"|format(wx.temp_c) }}°C</span>
+                                    --
                                 {% endif %}
-                                {% endif %}
-                                {% if wx.precipitation_pct is not none %}
-                                <span class="text-muted me-2">Precip {{ wx.precipitation_pct }}%</span>
-                                {% endif %}
+                            </div>
+                            <div class="wx-meta mb-2">{{ wx.weather }} • ETA {{ wx.eta_utc }}</div>
+                            <div class="wx-meta mb-1">Precip {{ wx.precipitation_pct if wx.precipitation_pct is not none else 0 }}%</div>
+                            <div class="precip-track mb-2">
+                                <div class="precip-fill" style="width: {{ wx.precipitation_pct if wx.precipitation_pct is not none else 0 }}%;"></div>
+                            </div>
+                            <div class="wx-meta">
                                 {% if wx.wind_kmh is not none %}
-                                {% if unit_system == 'imperial' %}
-                                <span class="text-muted">Wind {{ "%.1f"|format(wx.wind_kmh * 0.621371) }} mph</span>
+                                    {% if unit_system == 'imperial' %}
+                                    Wind {{ "%.1f"|format(wx.wind_kmh * 0.621371) }} mph
+                                    {% else %}
+                                    Wind {{ "%.1f"|format(wx.wind_kmh) }} km/h
+                                    {% endif %}
                                 {% else %}
-                                <span class="text-muted">Wind {{ "%.1f"|format(wx.wind_kmh) }} km/h</span>
-                                {% endif %}
+                                    Wind --
                                 {% endif %}
                             </div>
                         </div>
