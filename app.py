@@ -262,7 +262,13 @@ def create_app() -> Flask:
                 result.get("errors", 0),
             )
         except Exception as exc:
-            log.error("Background charger import failed: %s", exc)
+            log.exception(
+                "Background charger import failed (state=%s, strategy=%s, page_size=%s): %s",
+                state_for_import or "all",
+                fetch_strategy,
+                page_size,
+                exc,
+            )
         finally:
             with _charger_import_guard:
                 _charger_import_thread["thread"] = None
@@ -3377,6 +3383,24 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     app = create_app()
     _log = logging.getLogger(__name__)
+    debug_mode = (config.environment() == "development")
+    use_reloader = os.environ.get("LIGHTNING_USE_RELOADER", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+    if debug_mode and not use_reloader:
+        _log.info(
+            "Running in development mode with Flask reloader disabled. "
+            "Set LIGHTNING_USE_RELOADER=1 to re-enable code auto-reload."
+        )
+    elif debug_mode and use_reloader:
+        _log.warning(
+            "Flask reloader explicitly enabled (LIGHTNING_USE_RELOADER=1). "
+            "Background jobs can be interrupted during reloads."
+        )
 
     # SSL/TLS support – try user certs, fall back to self-signed recovery
     ssl_cfg = config.ssl_config()
@@ -3417,6 +3441,7 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=config.flask_port(),
-        debug=(config.environment() == "development"),
+        debug=debug_mode,
+        use_reloader=use_reloader,
         ssl_context=ssl_context,
     )
