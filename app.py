@@ -3847,10 +3847,51 @@ def create_app() -> Flask:
 
         return None
 
+    def _reverse_geocode_label(lat: float, lon: float) -> str:
+        """Resolve a user-friendly address label for coordinates."""
+        try:
+            response = requests.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={
+                    "lat": lat,
+                    "lon": lon,
+                    "format": "jsonv2",
+                    "zoom": 18,
+                    "addressdetails": 1,
+                },
+                headers={"User-Agent": "MLLighting-Trip-Planner/1.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            data = response.json() or {}
+            display_name = (data.get("display_name") or "").strip()
+            if display_name:
+                return display_name
+        except Exception as exc:
+            log.warning("Reverse geocode failed for %s,%s: %s", lat, lon, exc)
+        return f"{lat:.6f},{lon:.6f}"
+
+    def _parse_coord_string(value: str) -> tuple[float, float] | None:
+        value = (value or "").strip()
+        if not value or "," not in value:
+            return None
+        parts = [p.strip() for p in value.split(",")]
+        if len(parts) != 2:
+            return None
+        try:
+            lat = float(parts[0])
+            lon = float(parts[1])
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                return (lat, lon)
+        except (TypeError, ValueError):
+            return None
+        return None
+
     @app.route("/trip-planner", methods=["GET", "POST"])
     def trip_planner():
         """Interactive trip planner for EV routing with charger recommendations."""
         plan = None
+        preview = None
         form_data = {
             "source": "",
             "destination": "",
@@ -3868,43 +3909,98 @@ def create_app() -> Flask:
                 form_data["start_soc"] = 85
 
             form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
+            action = (request.form.get("action") or "preview").strip().lower()
 
-            source_for_plan = form_data["source"]
-            if form_data["use_current_source"]:
-                current_coords = _current_vehicle_location_coords()
-                if not current_coords:
-                    flash(
-                        "Current vehicle location is unavailable. Poll the vehicle first or enter a source manually.",
-                        "warning",
-                    )
-                    current_coords = None
-                if current_coords:
-                    source_for_plan = f"{current_coords[0]:.6f},{current_coords[1]:.6f}"
+            if action == "calculate":
+                source_coords_text = request.form.get("source_resolved_coords", "").strip()
+                destination_coords_text = request.form.get("destination_resolved_coords", "").strip()
+                source_label = request.form.get("source_resolved_label", "").strip() or source_coords_text
+                destination_label = request.form.get("destination_resolved_label", "").strip() or destination_coords_text
 
-            if not form_data["destination"]:
-                flash("Please enter a destination.", "warning")
-            elif not form_data["use_current_source"] and not form_data["source"]:
-                flash("Please enter a source or enable current vehicle location.", "warning")
-            elif form_data["use_current_source"] and not source_for_plan:
-                # Current location toggle was selected but no coordinates were available.
-                pass
+                source_coords = _parse_coord_string(source_coords_text)
+                destination_coords = _parse_coord_string(destination_coords_text)
+
+                if not source_coords or not destination_coords:
+                    flash("Preview locations first, then calculate route.", "warning")
+                else:
+                    preview = {
+                        "ready": True,
+                        "source": {
+                            "label": source_label,
+                            "coords_text": source_coords_text,
+                        },
+                        "destination": {
+                            "label": destination_label,
+                            "coords_text": destination_coords_text,
+                        },
+                    }
+
+                    try:
+                        plan = tp_service.plan_trip(
+                            source=source_coords_text,
+                            destination=destination_coords_text,
+                            current_soc_percent=form_data["start_soc"],
+                        )
+                        if plan:
+                            plan.source_name = source_label
+                            plan.destination_name = destination_label
+                    except Exception as exc:
+                        log.exception(f"Trip planning failed: {exc}")
+                        flash(f"Trip planning failed: {exc}", "error")
             else:
-                try:
-                    plan = tp_service.plan_trip(
-                        source=source_for_plan,
-                        destination=form_data["destination"],
-                        current_soc_percent=form_data["start_soc"],
-                    )
-                    if plan and form_data["use_current_source"]:
-                        plan.source_name = "Current Vehicle Location"
-                except Exception as exc:
-                    log.exception(f"Trip planning failed: {exc}")
-                    flash(f"Trip planning failed: {exc}", "error")
+                source_coords = None
+                destination_coords = None
+                source_label = ""
+                destination_label = ""
+
+                if not form_data["destination"]:
+                    flash("Please enter a destination.", "warning")
+                elif not form_data["use_current_source"] and not form_data["source"]:
+                    flash("Please enter a source or enable current vehicle location.", "warning")
+                else:
+                    if form_data["use_current_source"]:
+                        current_coords = _current_vehicle_location_coords()
+                        if not current_coords:
+                            flash(
+                                "Current vehicle location is unavailable. Poll the vehicle first or enter a source manually.",
+                                "warning",
+                            )
+                        else:
+                            source_coords = current_coords
+                            source_label = f"Current Vehicle Location: {_reverse_geocode_label(source_coords[0], source_coords[1])}"
+                    else:
+                        source_coords = tp_service.geocode_location(form_data["source"])
+                        if source_coords:
+                            source_label = _reverse_geocode_label(source_coords[0], source_coords[1])
+
+                    destination_coords = tp_service.geocode_location(form_data["destination"])
+                    if destination_coords:
+                        destination_label = _reverse_geocode_label(destination_coords[0], destination_coords[1])
+
+                    if not source_coords:
+                        flash("Could not resolve source location. Edit source and preview again.", "warning")
+                    if not destination_coords:
+                        flash("Could not resolve destination location. Edit destination and preview again.", "warning")
+
+                    if source_coords and destination_coords:
+                        preview = {
+                            "ready": True,
+                            "source": {
+                                "label": source_label,
+                                "coords_text": f"{source_coords[0]:.6f},{source_coords[1]:.6f}",
+                            },
+                            "destination": {
+                                "label": destination_label,
+                                "coords_text": f"{destination_coords[0]:.6f},{destination_coords[1]:.6f}",
+                            },
+                        }
+                        flash("Locations resolved. Review below, then calculate route.", "success")
 
         return render_template(
             "trip_planner.html",
             form=form_data,
             plan=plan,
+            preview=preview,
         )
 
     @app.route("/api/predict/trip", methods=["POST"])
