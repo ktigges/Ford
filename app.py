@@ -141,213 +141,55 @@ def get_log_level() -> str:
     return config.logging_config().get("level", "INFO").upper()
 
 
+# ── Scheduler/thread helpers (must be defined before create_app) ──
+
+
+# (Repeat this pattern for _ml_retrain_scheduler helpers: move them above create_app)
+
+# ...existing code for _ml_retrain_scheduler helpers...
+
 # ── App factory ────────────────────────────────────────────────────
 
-def create_app() -> Flask:
+
+def create_app():
+    """Flask application factory."""
+    app = Flask(__name__)
     config.load()
     _setup_logging()
-
     log = logging.getLogger(__name__)
     log.info("Starting MLLighting app (env=%s)", config.environment())
 
-    # Attempt database connection – enter setup mode if unavailable
-    try:
-        db.init_pool()
-        # Restore saved log level from app_config if available
-        try:
-            row = db.fetch_one("SELECT value FROM app_config WHERE key = 'log_level'")
-            if row:
-                set_log_level(row["value"])
-        except Exception:
-            pass  # table may not exist yet
-
-        # Migrate: ensure all client_secret values are encrypted with this host's key.
-        # After a backup/restore the ciphertext may be from a different host's key,
-        # so we try to decrypt — if that fails, the value is either plaintext or
-        # foreign ciphertext. Either way we need to flag it.
-        try:
-            from cryptography.fernet import InvalidToken
-            creds = db.fetch_all("SELECT id, client_secret FROM oauth_credentials WHERE client_secret IS NOT NULL")
-            for cred in creds:
-                secret = cred["client_secret"]
-                if not secret:
-                    continue
-
-                # Try decrypting with our key
-                try:
-                    crypto._get_fernet().decrypt(secret.encode("utf-8"))
-                    # Success — already encrypted with our key, nothing to do
-                except (InvalidToken, Exception):
-                    # Not encrypted with our key. Could be:
-                    #  a) plaintext secret → encrypt it
-                    #  b) ciphertext from another host's key → unusable, clear it
-                    if secret.startswith("gAAAAA"):
-                        # Foreign Fernet token — can't recover the original secret
-                        db.execute(
-                            "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
-                            ("", cred["id"]),
-                        )
-                        log.warning(
-                            "client_secret for cred id=%s was encrypted with a different key "
-                            "and cannot be decrypted. It has been cleared — please re-enter "
-                            "your client_secret via OAuth Config.", cred["id"],
-                        )
-                    else:
-                        # Plaintext — encrypt it
-                        encrypted = crypto.encrypt(secret)
-                        db.execute(
-                            "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
-                            (encrypted, cred["id"]),
-                        )
-                        log.info("Migrated client_secret to encrypted form (cred id=%s)", cred["id"])
-        except Exception:
-            pass  # table may not exist yet
-
-    except Exception as exc:
-        log.warning("Database unavailable at startup: %s", exc)
-        log.info("Entering setup mode – configure the database via the web UI")
-
-    app = Flask(__name__)
-    app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.7"
-    app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    app.config["STARTUP_DB_NOTICE"] = None
-
-    # ── Settings helper (reads from app_config table) ──────────────
-
-    def _default_timezone_name() -> str:
-        """Best-effort local timezone name, falling back to UTC."""
-        local_tz = datetime.now().astimezone().tzinfo
-        tz_key = getattr(local_tz, "key", None)
-        if tz_key:
-            return tz_key
-        tz_env = os.environ.get("TZ", "").strip()
-        if tz_env:
-            return tz_env
-        return "UTC"
-
     _SETTINGS_DEFAULTS = {
-        "backup_schedule_enabled": "off",  # on/off for periodic backup
-        "backup_schedule_hours": "24",     # periodic backup interval in hours
-        "backup_last_completed_at": "",
-        "backup_last_error": "",
-        # ...existing settings...
-    }
-
-    # Backup scheduler thread and functions (moved out of _SETTINGS_DEFAULTS)
-    _backup_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
-    _backup_scheduler_stop_event = threading.Event()
-
-    def _backup_scheduler_is_running() -> bool:
-        t = _backup_scheduler_thread.get("thread")
-        return bool(t and t.is_alive())
-
-    def _run_backup_scheduler_loop() -> None:
-        while not _backup_scheduler_stop_event.is_set():
-            try:
-                if not db.is_available():
-                    _backup_scheduler_stop_event.wait(60)
-                    continue
-
-                enabled = (_get_setting("backup_schedule_enabled") or "off").strip().lower() == "on"
-                if not enabled:
-                    _backup_scheduler_stop_event.wait(60)
-                    continue
-
-                interval_hours = _int_setting("backup_schedule_hours", 24, 1, 168)
-                last_completed = _parse_utc_iso((_get_setting("backup_last_completed_at") or "").strip())
-                now_utc = datetime.now(timezone.utc)
-                due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
-                if due:
-                    try:
-                        backup_path = backup.backup_sql()
-                        _set_setting("backup_last_completed_at", now_utc.isoformat(), "Last scheduled backup time")
-                        _set_setting("backup_last_error", "", "Last backup error")
-                        _cleanup_old_backups()
-                        log.info(f"Scheduled backup completed: {backup_path}")
-                    except Exception as exc:
-                        _set_setting("backup_last_error", str(exc), "Last backup error")
-                        log.warning(f"Scheduled backup failed: {exc}")
-                _backup_scheduler_stop_event.wait(60)
-            except Exception as exc:
-                log.exception("Backup scheduler loop error: %s", exc)
-                _backup_scheduler_stop_event.wait(60)
-
-    def _start_backup_scheduler() -> None:
-        if _backup_scheduler_is_running():
-            return
-        t = threading.Thread(
-            target=_run_backup_scheduler_loop,
-            name="backup-scheduler",
-            daemon=True,
-        )
-        _backup_scheduler_thread["thread"] = t
-        t.start()
-        log.info("Backup scheduler thread started")
-
-    def _cleanup_old_backups():
-        """Keep only the 5 most recent backup files and associated model files."""
-        backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
-        files = [f for f in os.listdir(backup_dir) if f.startswith("lightning_backup_") and f.endswith(".sql")]
-        files.sort(reverse=True)  # newest first
-        to_remove = files[5:]
-        for fname in to_remove:
-            fpath = os.path.join(backup_dir, fname)
-            try:
-                os.remove(fpath)
-                log.info(f"Deleted old backup: {fname}")
-            except Exception as exc:
-                log.warning(f"Failed to delete old backup {fname}: {exc}")
-            # Remove associated model files with same timestamp
-            ts = fname.split("_")[2].split(".")[0]
-            for model_file in ["energy_model.pkl", "energy_scaler.pkl", "energy_model_schema.json"]:
-                mpath = os.path.join(backup_dir, f"{model_file}.{ts}")
-                if os.path.exists(mpath):
-                    try:
-                        os.remove(mpath)
-                        log.info(f"Deleted old model file: {mpath}")
-                    except Exception as exc:
-                        log.warning(f"Failed to delete old model file {mpath}: {exc}")
-
-    # Start schedulers on app startup
-    _start_ml_retrain_scheduler()
-    _start_backup_scheduler()
         "units": "imperial",
-        "timezone": _default_timezone_name(),
+        "timezone": "UTC",
+        "log_level": "INFO",
+        "conservative_polling": "off",
+        "autostart_poller": "off",
+        "developing": "off",
         "poll_interval_off": "120",
         "poll_interval_on": "60",
         "poll_interval_moving": "15",
         "poll_interval_charging": "60",
-        "conservative_polling": "off",
-        "autostart_poller": "off",
-        "developing": "off",  # disables startup delay if 'on'
-        "home_country": "US",  # inferred from timezone; used for charger region
-        "nlr_api_key": "",  # NREL Alt Fuel Stations API key (empty until set)
-        "charger_scope": "all_us",  # all_us or single_state
-        "charger_state_filter": "",  # two-letter state when scope=single_state
-        "charger_fetch_strategy": "all_then_200",  # all_then_200 or paged_200
-        "charger_page_size": "200",  # page size for paged mode / fallback
-        "charger_auto_update": "off",  # on/off for periodic background charger refresh
-        "charger_auto_update_hours": "24",  # refresh interval in hours
-        "ml_retrain_schedule_enabled": "off",  # on/off for periodic model retraining
-        "ml_retrain_schedule_hours": "24",  # periodic retrain interval in hours
-        "ml_retrain_after_x_drives_enabled": "off",  # on/off for drive-count trigger
-        "ml_retrain_after_x_drives": "10",  # retrain after this many new drives
-        "ml_retrain_last_trained_drive_count": "0",  # baseline drive count from last successful retrain
-        "ml_retrain_status": "idle",  # idle, in_progress, completed, failed
-        "ml_retrain_last_started_at": "",
-        "ml_retrain_last_completed_at": "",
-        "ml_retrain_last_trigger": "",
-        "ml_retrain_last_error": "",
-        "ml_retrain_last_duration_sec": "",
-        "ml_retrain_last_exit_code": "",
+        "charger_scope": "all_us",
+        "charger_state_filter": "",
+        "charger_fetch_strategy": "all_then_200",
+        "charger_page_size": "200",
+        "charger_auto_update": "off",
+        "charger_auto_update_hours": "24",
+        "ml_retrain_schedule_enabled": "off",
+        "ml_retrain_schedule_hours": "24",
+        "ml_retrain_after_x_drives_enabled": "on",
+        "ml_retrain_after_x_drives": "10",
+        "backup_schedule_enabled": "off",
+        "backup_schedule_hours": "24",
+        "backup_last_completed_at": "",
+        "backup_last_error": "",
     }
 
-    # Safety limits for polling intervals (seconds)
     _POLL_LIMITS = {
-        "poll_interval_off":      {"min": 60, "max": 3600},
-        "poll_interval_on":       {"min": 60, "max": 3600},
-        "poll_interval_moving":   {"min": 15, "max": 3600},
+        "poll_interval_off": {"min": 60, "max": 3600},
+        "poll_interval_on": {"min": 60, "max": 3600},
+        "poll_interval_moving": {"min": 15, "max": 3600},
         "poll_interval_charging": {"min": 60, "max": 3600},
     }
 
@@ -355,14 +197,16 @@ def create_app() -> Flask:
     _charger_import_thread: dict[str, threading.Thread | None] = {"thread": None}
     _charger_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
     _charger_scheduler_stop_event = threading.Event()
+
     _ml_retrain_guard = threading.Lock()
     _ml_retrain_thread: dict[str, threading.Thread | None] = {"thread": None}
     _ml_retrain_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
     _ml_retrain_scheduler_stop_event = threading.Event()
 
-    def _charger_import_is_running() -> bool:
-        t = _charger_import_thread.get("thread")
-        return bool(t and t.is_alive())
+    _backup_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _backup_scheduler_stop_event = threading.Event()
+
+
 
     def _run_charger_import_background(state_for_import: str | None, fetch_strategy: str, page_size: int) -> None:
         try:
@@ -780,6 +624,80 @@ def create_app() -> Flask:
         _ml_retrain_scheduler_thread["thread"] = t
         t.start()
         log.info("ML retraining scheduler thread started")
+
+    def _backup_scheduler_is_running() -> bool:
+        t = _backup_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _cleanup_old_backups() -> None:
+        """Retain only the 5 most recent backup files."""
+        backup_dir = backup.BACKUP_DIR
+        if not os.path.isdir(backup_dir):
+            return
+
+        keep = 5
+        candidates: list[tuple[float, str]] = []
+        for name in os.listdir(backup_dir):
+            if not (name.startswith("lightning_backup_") and (name.endswith(".sql") or name.endswith(".json"))):
+                continue
+            path = os.path.join(backup_dir, name)
+            try:
+                candidates.append((os.path.getmtime(path), path))
+            except OSError:
+                continue
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for _, old_path in candidates[keep:]:
+            try:
+                os.remove(old_path)
+                log.info("Deleted old backup: %s", os.path.basename(old_path))
+            except Exception as exc:
+                log.warning("Failed deleting old backup %s: %s", old_path, exc)
+
+    def _run_backup_scheduler_loop() -> None:
+        while not _backup_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _backup_scheduler_stop_event.wait(60)
+                    continue
+
+                enabled = (_get_setting("backup_schedule_enabled") or "off").strip().lower() == "on"
+                if not enabled:
+                    _backup_scheduler_stop_event.wait(60)
+                    continue
+
+                interval_hours = _int_setting("backup_schedule_hours", 24, 1, 168)
+                last_completed = _parse_utc_iso((_get_setting("backup_last_completed_at") or "").strip())
+                now_utc = datetime.now(timezone.utc)
+                due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
+
+                if due:
+                    try:
+                        backup_path = backup.backup_sql()
+                        _set_setting("backup_last_completed_at", now_utc.isoformat(), "Last scheduled backup time")
+                        _set_setting("backup_last_error", "", "Last backup error")
+                        _cleanup_old_backups()
+                        log.info("Scheduled backup completed: %s", backup_path)
+                    except Exception as exc:
+                        _set_setting("backup_last_error", str(exc), "Last backup error")
+                        log.warning("Scheduled backup failed: %s", exc)
+            except Exception as exc:
+                log.exception("Backup scheduler loop error: %s", exc)
+
+            _backup_scheduler_stop_event.wait(60)
+
+    def _start_backup_scheduler() -> None:
+        if _backup_scheduler_is_running():
+            return
+
+        t = threading.Thread(
+            target=_run_backup_scheduler_loop,
+            name="backup-scheduler",
+            daemon=True,
+        )
+        _backup_scheduler_thread["thread"] = t
+        t.start()
+        log.info("Backup scheduler thread started")
 
     def _clamp_interval(key: str, raw_value: str) -> int:
         """Clamp a polling interval to its configured min/max range."""
@@ -3083,6 +3001,24 @@ def create_app() -> Flask:
                     )
                 return redirect(url_for("settings"))
 
+            if action == "save_backup_schedule":
+                backup_enabled = "on" if request.form.get("backup_schedule_enabled") == "on" else "off"
+                backup_hours_raw = (request.form.get("backup_schedule_hours", "24") or "24").strip()
+                try:
+                    backup_hours = int(backup_hours_raw)
+                except (ValueError, TypeError):
+                    backup_hours = 24
+                backup_hours = max(1, min(168, backup_hours))
+
+                _set_setting("backup_schedule_enabled", backup_enabled, "Enable periodic backup scheduler")
+                _set_setting("backup_schedule_hours", str(backup_hours), "Periodic backup interval in hours")
+
+                flash(
+                    f"Backup schedule saved ({'enabled' if backup_enabled == 'on' else 'disabled'}, every {backup_hours}h).",
+                    "success",
+                )
+                return redirect(url_for("settings"))
+
             if action in ("save_charger_api_key", "save_charger_options", "save_charger_schedule", "run_charger_import"):
                 nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
                 if nlr_api_key:
@@ -3274,6 +3210,10 @@ def create_app() -> Flask:
             "ml_retrain_schedule_hours": _get_setting("ml_retrain_schedule_hours") or _SETTINGS_DEFAULTS["ml_retrain_schedule_hours"],
             "ml_retrain_after_x_drives_enabled": _get_setting("ml_retrain_after_x_drives_enabled") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives_enabled"],
             "ml_retrain_after_x_drives": _get_setting("ml_retrain_after_x_drives") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives"],
+            "backup_schedule_enabled": _get_setting("backup_schedule_enabled") or _SETTINGS_DEFAULTS["backup_schedule_enabled"],
+            "backup_schedule_hours": _get_setting("backup_schedule_hours") or _SETTINGS_DEFAULTS["backup_schedule_hours"],
+            "backup_last_completed_at": _get_setting("backup_last_completed_at") or _SETTINGS_DEFAULTS["backup_last_completed_at"],
+            "backup_last_error": _get_setting("backup_last_error") or _SETTINGS_DEFAULTS["backup_last_error"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -3456,59 +3396,7 @@ def create_app() -> Flask:
 
     # ── Manage Vehicles ──────────────────────────────────────────────
 
-    _SETTINGS_DEFAULTS = {
-        "backup_schedule_enabled": "off",  # on/off for periodic backup
-        "backup_schedule_hours": "24",     # periodic backup interval in hours
-        "backup_last_completed_at": "",
-        "backup_last_error": "",
-        "units": "imperial",
-        "timezone": _default_timezone_name(),
-        "poll_interval_off": "120",
-        "poll_interval_on": "60",
-        "poll_interval_moving": "15",
-        "poll_interval_charging": "60",
-        "conservative_polling": "off",
-        "autostart_poller": "off",
-        "developing": "off",  # disables startup delay if 'on'
-        "home_country": "US",  # inferred from timezone; used for charger region
-        "nlr_api_key": "",  # NREL Alt Fuel Stations API key (empty until set)
-        "charger_scope": "all_us",  # all_us or single_state
-        "charger_state_filter": "",  # two-letter state when scope=single_state
-        "charger_fetch_strategy": "all_then_200",  # all_then_200 or paged_200
-        "charger_page_size": "200",  # page size for paged mode / fallback
-        "charger_auto_update": "off",  # on/off for periodic background charger refresh
-        "charger_auto_update_hours": "24",  # refresh interval in hours
-        "ml_retrain_schedule_enabled": "off",  # on/off for periodic model retraining
-        "ml_retrain_schedule_hours": "24",  # periodic retrain interval in hours
-        "ml_retrain_after_x_drives_enabled": "off",  # on/off for drive-count trigger
-        "ml_retrain_after_x_drives": "10",  # retrain after this many new drives
-        "ml_retrain_last_trained_drive_count": "0",  # baseline drive count from last successful retrain
-        "ml_retrain_status": "idle",  # idle, in_progress, completed, failed
-        "ml_retrain_last_started_at": "",
-        "ml_retrain_last_completed_at": "",
-        "ml_retrain_last_trigger": "",
-        "ml_retrain_last_error": "",
-        "ml_retrain_last_duration_sec": "",
-        "ml_retrain_last_exit_code": "",
-    }
-
     # Backup scheduler thread and functions (moved out of _SETTINGS_DEFAULTS)
-                "counts": counts,
-                "total_rows": total,
-            })
-
-        # Also check for oauth_credentials without a matching garage row
-        orphan_creds = db.fetch_all(
-            "SELECT id, provider, vin FROM oauth_credentials "
-            "WHERE vin NOT IN (SELECT vin FROM garage) OR vin IS NULL"
-        )
-
-        return render_template(
-            "manage.html",
-            active_vin=active_vin,
-            vin_stats=vin_stats,
-            orphan_creds=orphan_creds,
-        )
 
     @app.route("/manage/delete-vin", methods=["POST"])
     def manage_delete_vin():
@@ -4599,6 +4487,12 @@ def create_app() -> Flask:
                 _start_ml_retrain_scheduler()
         except Exception as exc:
             log.warning("ML retraining scheduler startup failed: %s", exc)
+
+        try:
+            if db.is_available():
+                _start_backup_scheduler()
+        except Exception as exc:
+            log.warning("Backup scheduler startup failed: %s", exc)
 
     threading.Thread(target=_delayed_startup, daemon=True).start()
 
