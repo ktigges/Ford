@@ -180,6 +180,8 @@ class TripPlan:
     feasibility_reason: str
     polyline: list[tuple[float, float]]
     route_steps: list[dict]
+    baseline_route_steps: list[dict]  # Route steps with SOC based on baseline energy estimate
+    ml_route_steps: list[dict]  # Route steps with SOC based on ML energy estimate
     route_weather: list[dict]
     weather_summary: str
     created_at: str
@@ -1543,6 +1545,8 @@ def plan_trip(
             estimated_duration_min=0,
             start_soc_percent=current_soc_percent,
             arrival_soc_percent=0,
+            baseline_energy_needed_kwh=0,
+            ml_energy_needed_kwh=0,
             energy_needed_kwh=0,
             charging_stops=[],
             feasible=False,
@@ -1551,6 +1555,8 @@ def plan_trip(
             ),
             polyline=[],
             route_steps=[],
+            baseline_route_steps=[],
+            ml_route_steps=[],
             route_weather=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
@@ -1574,12 +1580,16 @@ def plan_trip(
             estimated_duration_min=0,
             start_soc_percent=current_soc_percent,
             arrival_soc_percent=0,
+            baseline_energy_needed_kwh=0,
+            ml_energy_needed_kwh=0,
             energy_needed_kwh=0,
             charging_stops=[],
             feasible=False,
             feasibility_reason="Could not calculate route",
             polyline=[],
             route_steps=[],
+            baseline_route_steps=[],
+            ml_route_steps=[],
             route_weather=[],
             weather_summary="",
             created_at=datetime.now().isoformat()
@@ -1668,6 +1678,25 @@ def plan_trip(
             if feasible_with_stops:
                 arrival_soc = arrival_soc_with_stops
     
+    # Calculate route steps with SOC for baseline estimate
+    baseline_route_steps = _attach_soc_to_route_steps(
+        route_steps=route_steps,
+        start_soc_percent=current_soc_percent,
+        total_distance_km=distance_km,
+        energy_needed_kwh=baseline_energy_kwh,
+        charging_stops=charging_stops,
+    )
+    
+    # Calculate route steps with SOC for ML estimate (if available)
+    ml_route_steps = _attach_soc_to_route_steps(
+        route_steps=route_steps,
+        start_soc_percent=current_soc_percent,
+        total_distance_km=distance_km,
+        energy_needed_kwh=ml_energy_kwh if ml_energy_kwh is not None else baseline_energy_kwh,
+        charging_stops=charging_stops,
+    ) if ml_energy_kwh is not None else baseline_route_steps
+    
+    # Use the active estimate (ML if available, else baseline) for display
     route_steps = _attach_soc_to_route_steps(
         route_steps=route_steps,
         start_soc_percent=current_soc_percent,
@@ -1700,6 +1729,8 @@ def plan_trip(
         feasibility_reason=reason,
         polyline=polyline,
         route_steps=route_steps,
+        baseline_route_steps=baseline_route_steps,
+        ml_route_steps=ml_route_steps,
         route_weather=route_weather,
         weather_summary=weather_summary,
         created_at=datetime.now().isoformat()

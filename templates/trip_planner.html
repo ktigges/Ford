@@ -551,6 +551,13 @@
                         {% endfor %}
                     </div>
                     {% endif %}
+
+                    <hr>
+                    <div class="d-grid gap-2">
+                        <a href="{{ url_for('trip_detail') }}" class="btn btn-info">
+                            <i class="bi bi-bar-chart"></i> View Detailed Analysis (Baseline vs ML)
+                        </a>
+                    </div>
                 </div>
             </div>
             {% else %}
