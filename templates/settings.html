@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings – Lightning{% endblock %}
+{% block title %}Settings – MLLighting{% endblock %}
 {% block content %}
 <h1>Settings</h1>
 
@@ -300,6 +300,156 @@
 
     const shouldRefresh = {{ 'true' if (charger_job_running or (charger_status and charger_status.status == 'in_progress')) else 'false' }};
     if (shouldRefresh) {
+      window.setTimeout(function () {
+        window.location.reload();
+      }, 15000);
+    }
+  })();
+</script>
+
+<form method="post" class="card form-card">
+  <h2>ML Model Retraining</h2>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.75rem;">
+    Configure automatic background retraining and manually run retraining jobs.
+    Retraining uses <strong>train_energy_model.py</strong> and writes output to <strong>logs/ml_retrain.log</strong>.
+  </p>
+
+  <div class="form-group">
+    <label for="ml_retrain_schedule_enabled">
+      <input type="checkbox" name="ml_retrain_schedule_enabled" id="ml_retrain_schedule_enabled" value="on"
+             {% if settings.ml_retrain_schedule_enabled == 'on' %}checked{% endif %}
+             style="width:auto; margin-right:0.5rem;">
+      Enable periodic background retraining
+    </label>
+  </div>
+
+  <div class="form-group">
+    <label for="ml_retrain_schedule_hours">Retraining Interval (hours)</label>
+    <input type="number" name="ml_retrain_schedule_hours" id="ml_retrain_schedule_hours" class="form-input"
+           value="{{ settings.ml_retrain_schedule_hours }}" min="1" max="168" step="1">
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      Example: 24 = retrain once per day.
+    </p>
+  </div>
+
+  <div class="form-group">
+    <label for="ml_retrain_after_x_drives_enabled">
+      <input type="checkbox" name="ml_retrain_after_x_drives_enabled" id="ml_retrain_after_x_drives_enabled" value="on"
+             {% if settings.ml_retrain_after_x_drives_enabled == 'on' %}checked{% endif %}
+             style="width:auto; margin-right:0.5rem;">
+      Retrain after X new completed drives
+    </label>
+  </div>
+
+  <div class="form-group">
+    <label for="ml_retrain_after_x_drives">New Drives Threshold (X)</label>
+    <input type="number" name="ml_retrain_after_x_drives" id="ml_retrain_after_x_drives" class="form-input"
+           value="{{ settings.ml_retrain_after_x_drives }}" min="1" max="500" step="1">
+    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.25rem;">
+      When enabled, retraining starts once this many new completed drives are collected since the last successful training run.
+    </p>
+  </div>
+
+  {% if ml_retrain_status %}
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:0.75rem; margin-bottom:0.75rem;">
+    <h3 style="margin-top:0; font-size:0.95rem; color:var(--text);">Retraining Status</h3>
+    <table style="width:100%; font-size:0.85rem;">
+      <tr>
+        <td style="padding:0.25rem 0;">Status:</td>
+        <td style="padding:0.25rem 0; text-align:right;">
+          <span style="display:inline-block; padding:0.2rem 0.5rem; border-radius:3px;
+                       background:{% if ml_retrain_status.status == 'completed' %}var(--accent-green){% elif ml_retrain_status.status == 'in_progress' %}var(--accent-blue){% elif ml_retrain_status.status == 'failed' %}var(--accent-red){% else %}var(--muted){% endif %};
+                       color:white; font-weight:bold;">
+            {{ ml_retrain_status.status }}
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Scheduler:</td>
+        <td style="padding:0.25rem 0; text-align:right;">
+          {% if ml_retrain_status.scheduler_running %}Running{% else %}Stopped{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Last Trigger:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.last_trigger or 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Last Started:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.last_started_at or 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Last Completed:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.last_completed_at or 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Last Duration:</td>
+        <td style="padding:0.25rem 0; text-align:right;">
+          {% if ml_retrain_status.last_duration_sec %}
+            {{ ml_retrain_status.last_duration_sec }} sec
+          {% else %}
+            N/A
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Exit Code:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.last_exit_code or 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Training Drives:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.schema_num_training_drives or 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Model Trained At:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.schema_training_date or 'N/A' }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Completed Drives (DB):</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.completed_drives }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">Baseline Drives:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.baseline_drives }}</td>
+      </tr>
+      <tr>
+        <td style="padding:0.25rem 0;">New Drives Since Last Train:</td>
+        <td style="padding:0.25rem 0; text-align:right;">{{ ml_retrain_status.new_drives_since_last_train }}</td>
+      </tr>
+      {% if ml_retrain_status.last_error %}
+      <tr>
+        <td style="padding:0.25rem 0; color:var(--accent-red);">Last Error:</td>
+        <td style="padding:0.25rem 0; text-align:right; color:var(--accent-red); max-width:340px; word-break:break-word;">{{ ml_retrain_status.last_error }}</td>
+      </tr>
+      {% endif %}
+    </table>
+  </div>
+  {% endif %}
+
+  {% if ml_retrain_job_running %}
+  <div class="flash warning" style="margin-bottom:0.75rem;">
+    Model retraining is running in the background. This page will auto-refresh every 15 seconds.
+  </div>
+  {% endif %}
+
+  <div class="btn-group" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    <button type="submit" name="action" value="save_retrain_options" class="btn">Save Retraining Options</button>
+    <button type="submit" name="action" value="run_retrain_now" class="btn" id="run-ml-retrain-btn">Run Retraining Now</button>
+  </div>
+</form>
+
+<script>
+  (function () {
+    const runButton = document.getElementById("run-ml-retrain-btn");
+    if (runButton) {
+      runButton.addEventListener("click", function () {
+        runButton.disabled = true;
+        runButton.textContent = "Submitting Retraining...";
+      });
+    }
+
+    const shouldRefreshMl = {{ 'true' if ml_retrain_job_running else 'false' }};
+    if (shouldRefreshMl) {
       window.setTimeout(function () {
         window.location.reload();
       }, 15000);
