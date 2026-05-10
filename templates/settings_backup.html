@@ -1,16 +1,21 @@
-<form method="post" class="card form-card">
-  <h2>Scheduled Backups</h2>
-  <label><input type="checkbox" name="backup_schedule_enabled" {% if settings.backup_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Backups</label>
-  <label>Interval (hours):
-    <input type="number" name="backup_schedule_hours" value="{{ settings.backup_schedule_hours }}" min="1" max="168">
-  </label>
+
+<form method="post" class="card form-card" style="margin-bottom:2rem;">
+  <h2 style="margin-bottom:1.5rem;">Scheduled Backups</h2>
+  <div style="margin-bottom:1rem;">
+    <label><input type="checkbox" name="backup_schedule_enabled" {% if settings.backup_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Backups</label>
+    <label style="margin-left:2em;">Interval (hours):
+      <input type="number" name="backup_schedule_hours" value="{{ settings.backup_schedule_hours }}" min="1" max="168">
+    </label>
+  </div>
   <button type="submit" name="action" value="save_backup_schedule">Save Backup Schedule</button>
 </form>
 
-<div class="card" style="margin-top:2rem;">
-  <h3>Last Backup Info</h3>
-  <ul>
-    <li>Last Completed: {{ settings.backup_last_completed_at }}</li>
-    <li>Last Error: {{ settings.backup_last_error }}</li>
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Debug / Last Backup Info</h3>
+  <ul style="margin-bottom:0;">
+    <li>Schedule Enabled: <b>{{ settings.backup_schedule_enabled }}</b></li>
+    <li>Interval: <b>{{ settings.backup_schedule_hours }}</b> h</li>
+    <li>Last Completed: <b>{{ settings.backup_last_completed_at }}</b></li>
+    <li>Last Error: <b>{{ settings.backup_last_error }}</b></li>
   </ul>
 </div>

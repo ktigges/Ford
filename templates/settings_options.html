@@ -1,39 +1,64 @@
-<form method="post" class="card form-card">
-  <h2>General Options</h2>
-  <label>Display Units:
-    <select name="units">
-      <option value="imperial" {% if settings.units == 'imperial' %}selected{% endif %}>Imperial (mi, °F)</option>
-      <option value="metric" {% if settings.units == 'metric' %}selected{% endif %}>Metric (km, °C)</option>
-    </select>
-  </label>
-  <label>Timezone:
-    <input type="text" name="timezone" value="{{ settings.timezone }}" placeholder="America/Chicago">
-  </label>
-  <label>Log Level:
-    <select name="log_level">
-      <option value="DEBUG" {% if settings.log_level == 'DEBUG' %}selected{% endif %}>DEBUG</option>
-      <option value="INFO" {% if settings.log_level == 'INFO' %}selected{% endif %}>INFO</option>
-      <option value="WARNING" {% if settings.log_level == 'WARNING' %}selected{% endif %}>WARNING</option>
-      <option value="ERROR" {% if settings.log_level == 'ERROR' %}selected{% endif %}>ERROR</option>
-    </select>
-  </label>
-  <label><input type="checkbox" name="conservative_polling" {% if settings.conservative_polling == 'on' %}checked{% endif %}> Conservative Polling</label>
-  <label><input type="checkbox" name="autostart_poller" {% if settings.autostart_poller == 'on' %}checked{% endif %}> Autostart Poller</label>
-  <label><input type="checkbox" name="developing" {% if settings.developing == 'on' %}checked{% endif %}> Developing Mode</label>
 
-  <h3>Polling Intervals (seconds)</h3>
-  <label>Ignition Off:
-    <input type="number" name="poll_interval_off" value="{{ settings.poll_interval_off }}" min="10" max="3600">
-  </label>
-  <label>Ignition On:
-    <input type="number" name="poll_interval_on" value="{{ settings.poll_interval_on }}" min="10" max="3600">
-  </label>
-  <label>Moving:
-    <input type="number" name="poll_interval_moving" value="{{ settings.poll_interval_moving }}" min="5" max="600">
-  </label>
-  <label>Charging:
-    <input type="number" name="poll_interval_charging" value="{{ settings.poll_interval_charging }}" min="10" max="3600">
-  </label>
-
+<form method="post" class="card form-card" style="margin-bottom:2rem;">
+  <h2 style="margin-bottom:1.5rem;">General Options</h2>
+  <div style="margin-bottom:1rem;">
+    <label>Display Units:<br>
+      <select name="units">
+        <option value="imperial" {% if settings.units == 'imperial' %}selected{% endif %}>Imperial (mi, °F)</option>
+        <option value="metric" {% if settings.units == 'metric' %}selected{% endif %}>Metric (km, °C)</option>
+      </select>
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Timezone:<br>
+      <input type="text" name="timezone" value="{{ settings.timezone }}" placeholder="America/Chicago">
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Log Level:<br>
+      <select name="log_level">
+        <option value="DEBUG" {% if settings.log_level == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+        <option value="INFO" {% if settings.log_level == 'INFO' %}selected{% endif %}>INFO</option>
+        <option value="WARNING" {% if settings.log_level == 'WARNING' %}selected{% endif %}>WARNING</option>
+        <option value="ERROR" {% if settings.log_level == 'ERROR' %}selected{% endif %}>ERROR</option>
+      </select>
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label><input type="checkbox" name="conservative_polling" {% if settings.conservative_polling == 'on' %}checked{% endif %}> Conservative Polling</label>
+    <label style="margin-left:2em;"><input type="checkbox" name="autostart_poller" {% if settings.autostart_poller == 'on' %}checked{% endif %}> Autostart Poller</label>
+    <label style="margin-left:2em;"><input type="checkbox" name="developing" {% if settings.developing == 'on' %}checked{% endif %}> Developing Mode</label>
+  </div>
+  <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
+    <legend><b>Polling Intervals (seconds)</b></legend>
+    <label>Ignition Off:
+      <input type="number" name="poll_interval_off" value="{{ settings.poll_interval_off }}" min="10" max="3600">
+    </label>
+    <label style="margin-left:2em;">Ignition On:
+      <input type="number" name="poll_interval_on" value="{{ settings.poll_interval_on }}" min="10" max="3600">
+    </label>
+    <label style="margin-left:2em;">Moving:
+      <input type="number" name="poll_interval_moving" value="{{ settings.poll_interval_moving }}" min="5" max="600">
+    </label>
+    <label style="margin-left:2em;">Charging:
+      <input type="number" name="poll_interval_charging" value="{{ settings.poll_interval_charging }}" min="10" max="3600">
+    </label>
+  </fieldset>
   <button type="submit" name="action" value="save_settings">Save General Options</button>
 </form>
+
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Debug / Current Values</h3>
+  <ul style="margin-bottom:0;">
+    <li>Units: <b>{{ settings.units }}</b></li>
+    <li>Timezone: <b>{{ settings.timezone }}</b></li>
+    <li>Log Level: <b>{{ settings.log_level }}</b></li>
+    <li>Conservative Polling: <b>{{ settings.conservative_polling }}</b></li>
+    <li>Autostart Poller: <b>{{ settings.autostart_poller }}</b></li>
+    <li>Developing Mode: <b>{{ settings.developing }}</b></li>
+    <li>Polling Off: <b>{{ settings.poll_interval_off }}</b> sec</li>
+    <li>Polling On: <b>{{ settings.poll_interval_on }}</b> sec</li>
+    <li>Polling Moving: <b>{{ settings.poll_interval_moving }}</b> sec</li>
+    <li>Polling Charging: <b>{{ settings.poll_interval_charging }}</b> sec</li>
+  </ul>
+</div>

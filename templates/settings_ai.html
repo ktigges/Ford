@@ -1,32 +1,39 @@
-<form method="post" class="card form-card">
-  <h2>ML Model Retraining</h2>
-  <label><input type="checkbox" name="ml_retrain_schedule_enabled" {% if settings.ml_retrain_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Retraining</label>
-  <label>Interval (hours):
-    <input type="number" name="ml_retrain_schedule_hours" value="{{ settings.ml_retrain_schedule_hours }}" min="1" max="168">
-  </label>
-  <label><input type="checkbox" name="ml_retrain_after_x_drives_enabled" {% if settings.ml_retrain_after_x_drives_enabled == 'on' %}checked{% endif %}> Retrain After X Drives</label>
-  <label>Drives:
-    <input type="number" name="ml_retrain_after_x_drives" value="{{ settings.ml_retrain_after_x_drives }}" min="1" max="500">
-  </label>
-  <button type="submit" name="action" value="save_retrain_options">Save ML Retrain Options</button>
-  <button type="submit" name="action" value="run_retrain_now">Run Retrain Now</button>
+
+<form method="post" class="card form-card" style="margin-bottom:2rem;">
+  <h2 style="margin-bottom:1.5rem;">ML Model Retraining</h2>
+  <div style="margin-bottom:1rem;">
+    <label><input type="checkbox" name="ml_retrain_schedule_enabled" {% if settings.ml_retrain_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Retraining</label>
+    <label style="margin-left:2em;">Interval (hours):
+      <input type="number" name="ml_retrain_schedule_hours" value="{{ settings.ml_retrain_schedule_hours }}" min="1" max="168">
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label><input type="checkbox" name="ml_retrain_after_x_drives_enabled" {% if settings.ml_retrain_after_x_drives_enabled == 'on' %}checked{% endif %}> Retrain After X Drives</label>
+    <label style="margin-left:2em;">Drives:
+      <input type="number" name="ml_retrain_after_x_drives" value="{{ settings.ml_retrain_after_x_drives }}" min="1" max="500">
+    </label>
+  </div>
+  <div style="margin-bottom:1.5rem;">
+    <button type="submit" name="action" value="save_retrain_options">Save ML Retrain Options</button>
+    <button type="submit" name="action" value="run_retrain_now" style="margin-left:2em;">Run Retrain Now</button>
+  </div>
 </form>
 
-<div class="card" style="margin-top:2rem;">
-  <h3>Retrain Status</h3>
-  <ul>
-    <li>Status: {{ ml_retrain_status.status }}</li>
-    <li>Last Started: {{ ml_retrain_status.last_started_at }}</li>
-    <li>Last Completed: {{ ml_retrain_status.last_completed_at }}</li>
-    <li>Last Trigger: {{ ml_retrain_status.last_trigger }}</li>
-    <li>Last Error: {{ ml_retrain_status.last_error }}</li>
-    <li>Last Duration (sec): {{ ml_retrain_status.last_duration_sec }}</li>
-    <li>Last Exit Code: {{ ml_retrain_status.last_exit_code }}</li>
-    <li>Baseline Drives: {{ ml_retrain_status.baseline_drives }}</li>
-    <li>Completed Drives: {{ ml_retrain_status.completed_drives }}</li>
-    <li>New Drives Since Last Train: {{ ml_retrain_status.new_drives_since_last_train }}</li>
-    <li>Schema Training Date: {{ ml_retrain_status.schema_training_date }}</li>
-    <li>Schema Num Training Drives: {{ ml_retrain_status.schema_num_training_drives }}</li>
-    <li>Scheduler Running: {{ ml_retrain_status.scheduler_running }}</li>
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Debug / Retrain Status</h3>
+  <ul style="margin-bottom:0;">
+    <li>Status: <b>{{ ml_retrain_status.status }}</b></li>
+    <li>Last Started: <b>{{ ml_retrain_status.last_started_at }}</b></li>
+    <li>Last Completed: <b>{{ ml_retrain_status.last_completed_at }}</b></li>
+    <li>Last Trigger: <b>{{ ml_retrain_status.last_trigger }}</b></li>
+    <li>Last Error: <b>{{ ml_retrain_status.last_error }}</b></li>
+    <li>Last Duration (sec): <b>{{ ml_retrain_status.last_duration_sec }}</b></li>
+    <li>Last Exit Code: <b>{{ ml_retrain_status.last_exit_code }}</b></li>
+    <li>Baseline Drives: <b>{{ ml_retrain_status.baseline_drives }}</b></li>
+    <li>Completed Drives: <b>{{ ml_retrain_status.completed_drives }}</b></li>
+    <li>New Drives Since Last Train: <b>{{ ml_retrain_status.new_drives_since_last_train }}</b></li>
+    <li>Schema Training Date: <b>{{ ml_retrain_status.schema_training_date }}</b></li>
+    <li>Schema Num Training Drives: <b>{{ ml_retrain_status.schema_num_training_drives }}</b></li>
+    <li>Scheduler Running: <b>{{ ml_retrain_status.scheduler_running }}</b></li>
   </ul>
 </div>
