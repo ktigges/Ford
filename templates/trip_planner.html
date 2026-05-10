@@ -45,45 +45,34 @@
 
     .metric-pill {
         display: inline-block;
-        padding: 2px 6px;
-        border-radius: 999px;
+        padding: 0;
         font-size: 0.7rem;
         font-weight: 600;
         margin-left: 4px;
+        background: transparent;
     }
 
-    .severity-low { background: #dff5d7; color: #1c6b2f; }
-    .severity-medium { background: #fff1c9; color: #8a6500; }
-    .severity-high { background: #ffd8d8; color: #a11a1a; }
+    .severity-low { color: #1c6b2f; }
+    .severity-medium { color: #8a6500; }
+    .severity-high { color: #a11a1a; }
 
     .wind-badge {
         display: inline-block;
-        padding: 2px 6px;
-        border-radius: 999px;
+        padding: 0;
         font-size: 0.72rem;
         font-weight: 600;
+        background: transparent;
     }
 
-    .wind-low {
-        background: #dff5d7;
-        color: #1c6b2f;
-    }
+    .wind-low { color: #1c6b2f; }
 
-    .wind-medium {
-        background: #fff1c9;
-        color: #8a6500;
-    }
+    .wind-medium { color: #8a6500; }
 
-    .wind-high {
-        background: #ffd8d8;
-        color: #a11a1a;
-    }
+    .wind-high { color: #a11a1a; }
 
     .impact-alert {
         margin-top: 5px;
-        padding: 4px 6px;
-        border-radius: 6px;
-        background: #fff2cc;
+        padding: 0;
         color: #7c5600;
         font-size: 0.72rem;
         font-weight: 600;
@@ -92,13 +81,17 @@
 
     .impact-ok {
         margin-top: 5px;
-        padding: 4px 6px;
-        border-radius: 6px;
-        background: #e3f6e3;
+        padding: 0;
         color: #246b24;
         font-size: 0.72rem;
         font-weight: 600;
         line-height: 1.2;
+    }
+
+    .turn-weather {
+        color: #5a6a7a;
+        font-size: 0.76rem;
+        margin-top: 2px;
     }
 
     .precip-track {
@@ -374,26 +367,26 @@
                     <div class="weather-strip">
                         {% for wx in plan.route_weather %}
                         {% set w = (wx.weather or '')|lower %}
-                        {% set icon_name = 'bi-sun-fill' %}
+                        {% set icon_name = '☀' %}
                         {% set icon_class = 'icon-clear' %}
                         {% if wx.is_day is sameas false %}
-                            {% set icon_name = 'bi-moon-stars-fill' %}
+                            {% set icon_name = '☾' %}
                             {% set icon_class = 'icon-night' %}
                         {% endif %}
                         {% if 'thunder' in w %}
-                            {% set icon_name = 'bi-cloud-lightning-rain-fill' %}
+                            {% set icon_name = '⛈' %}
                             {% set icon_class = 'icon-storm' %}
                         {% elif 'snow' in w %}
-                            {% set icon_name = 'bi-snow' %}
+                            {% set icon_name = '❄' %}
                             {% set icon_class = 'icon-snow' %}
                         {% elif 'rain' in w or 'drizzle' in w %}
-                            {% set icon_name = 'bi-cloud-rain-heavy-fill' %}
+                            {% set icon_name = '☁' %}
                             {% set icon_class = 'icon-rain' %}
                         {% elif 'cloud' in w or 'overcast' in w or 'fog' in w %}
-                            {% set icon_name = 'bi-cloud-fill' %}
+                            {% set icon_name = '☁' %}
                             {% set icon_class = 'icon-cloud' %}
                         {% elif wx.is_day is sameas false %}
-                            {% set icon_name = 'bi-moon-stars-fill' %}
+                            {% set icon_name = '☾' %}
                             {% set icon_class = 'icon-night' %}
                         {% endif %}
 
@@ -426,7 +419,7 @@
                                     </div>
                                 </div>
                                 <span class="weather-icon">
-                                    <i class="bi {{ icon_name }} {{ icon_class }}"></i>
+                                    <span class="{{ icon_class }}">{{ icon_name }}</span>
                                 </span>
                             </div>
                             <div class="wx-temp mb-1">
@@ -514,6 +507,29 @@
                     <div class="list-group list-group-flush small">
                         {% for step in plan.route_steps %}
                         {% set text = (step.instruction or '')|lower %}
+                        {% set sw = (step.step_weather or '')|lower %}
+                        {% set step_icon = '☀' %}
+                        {% set step_icon_class = 'icon-clear' %}
+                        {% if step.step_is_day is sameas false %}
+                            {% set step_icon = '☾' %}
+                            {% set step_icon_class = 'icon-night' %}
+                        {% endif %}
+                        {% if 'thunder' in sw %}
+                            {% set step_icon = '⛈' %}
+                            {% set step_icon_class = 'icon-storm' %}
+                        {% elif 'snow' in sw %}
+                            {% set step_icon = '❄' %}
+                            {% set step_icon_class = 'icon-snow' %}
+                        {% elif 'rain' in sw or 'drizzle' in sw %}
+                            {% set step_icon = '☁' %}
+                            {% set step_icon_class = 'icon-rain' %}
+                        {% elif 'cloud' in sw or 'overcast' in sw or 'fog' in sw %}
+                            {% set step_icon = '☁' %}
+                            {% set step_icon_class = 'icon-cloud' %}
+                        {% elif step.step_is_day is sameas false %}
+                            {% set step_icon = '☾' %}
+                            {% set step_icon_class = 'icon-night' %}
+                        {% endif %}
                         <div class="list-group-item px-0">
                             <div class="d-flex justify-content-between flex-wrap">
                                 <div class="me-2">
@@ -521,6 +537,21 @@
                                         {% if 'left' in text %}⬅{% elif 'right' in text %}➡{% elif 'arrive' in text %}🏁{% elif 'depart' in text %}🚗{% else %}⬆{% endif %}
                                     </span>
                                     <strong>{{ step.instruction }}</strong>
+                                    {% if step.step_weather %}
+                                    <div class="turn-weather">
+                                        <span class="{{ step_icon_class }}">{{ step_icon }}</span>
+                                        {{ step.step_weather }}
+                                        {% if step.step_temp_c is not none %}
+                                            • {% if unit_system == 'imperial' %}{{ "%.0f"|format((step.step_temp_c * 9/5) + 32) }}°F{% else %}{{ "%.0f"|format(step.step_temp_c) }}°C{% endif %}
+                                        {% endif %}
+                                        {% if step.step_wind_kmh is not none %}
+                                            • W {% if unit_system == 'imperial' %}{{ "%.0f"|format(step.step_wind_kmh * 0.621371) }} mph{% else %}{{ "%.0f"|format(step.step_wind_kmh) }} km/h{% endif %}
+                                        {% endif %}
+                                        {% if step.step_precipitation_pct is not none %}
+                                            • P {{ step.step_precipitation_pct }}%
+                                        {% endif %}
+                                    </div>
+                                    {% endif %}
                                 </div>
                                 {% if unit_system == 'imperial' %}
                                 <span class="text-muted">{{ "%.2f"|format(step.distance_km * 0.621371) }} mi • {{ step.duration_min }} min</span>
