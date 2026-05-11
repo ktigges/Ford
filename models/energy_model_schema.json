@@ -16,18 +16,18 @@
   ],
   "feature_scales": {
     "distance_km": {
-      "min": 16.0,
+      "min": 13.0,
       "max": 60.0
     },
     "avg_speed_kmh": {
       "min": 8.87704658736842,
-      "max": 44.69008114414634
+      "max": 60.418332112250006
     },
     "energy_used_kwh": {
       "min": 2.15,
       "max": 21.25
     }
   },
-  "training_date": "2026-05-09T21:29:16.422604",
-  "num_training_drives": 12
+  "training_date": "2026-05-10T21:29:29.776860",
+  "num_training_drives": 14
 }

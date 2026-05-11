@@ -1,5 +1,6 @@
 
-<form method="post" class="card form-card" style="margin-bottom:2rem;">
+<form method="post" action="{{ url_for('settings') }}" class="card form-card" style="margin-bottom:2rem;">
+  <input type="hidden" name="return_to" value="settings_options_page">
   <h2 style="margin-bottom:1.5rem;">General Options</h2>
   <div style="margin-bottom:1rem;">
     <label>Display Units:<br>
@@ -28,6 +29,13 @@
     <label><input type="checkbox" name="conservative_polling" {% if settings.conservative_polling == 'on' %}checked{% endif %}> Conservative Polling</label>
     <label style="margin-left:2em;"><input type="checkbox" name="autostart_poller" {% if settings.autostart_poller == 'on' %}checked{% endif %}> Autostart Poller</label>
     <label style="margin-left:2em;"><input type="checkbox" name="developing" {% if settings.developing == 'on' %}checked{% endif %}> Developing Mode</label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Startup Timeout (seconds):
+      <input type="number" name="startup_delay_seconds" value="{{ settings.startup_delay_seconds }}" min="0" max="300">
+    </label>
+    <small style="display:block; color:#666; margin-top:0.35rem;">Used at app startup before UI/poller become available. Ignored when Developing Mode is enabled.</small>
+    <small style="display:block; color:#666; margin-top:0.35rem;">Current behavior: {% if settings.developing == 'on' %}Developer Mode is ON, startup timeout is bypassed.{% else %}Startup timeout applies for {{ settings.startup_delay_seconds }} seconds.{% endif %}</small>
   </div>
   <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
     <legend><b>Polling Intervals (seconds)</b></legend>
