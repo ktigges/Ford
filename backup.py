@@ -87,6 +87,36 @@ def _db_config() -> dict:
     return config.database()
 
 
+def _running_db_container_name() -> str | None:
+    """Return running DB container name when available, else None.
+
+    Prefers DB_CONTAINER env var, defaulting to lightning-db.
+    """
+    container = (os.environ.get("DB_CONTAINER") or "lightning-db").strip()
+    if not container:
+        return None
+
+    if shutil.which("docker") is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    running = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return container if container in running else None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SQL dump backup (pg_dump / psql)
 # ═══════════════════════════════════════════════════════════════════
@@ -104,21 +134,51 @@ def backup_sql(label: str = "") -> str:
     env = os.environ.copy()
     env["PGPASSWORD"] = cfg["password"]
 
-    cmd = [
-        "pg_dump",
-        "-h", cfg["host"],
-        "-p", str(cfg["port"]),
-        "-U", cfg["user"],
-        "-d", cfg["name"],
-        "--clean",
-        "--if-exists",
-        "--no-owner",
-        "--no-privileges",
-        "-f", filepath,
-    ]
+    container = _running_db_container_name()
+    if container:
+        # Use pg_dump inside the running Postgres container to avoid client/server version mismatch.
+        cmd = [
+            "docker",
+            "exec",
+            "-e",
+            f"PGPASSWORD={cfg['password']}",
+            container,
+            "pg_dump",
+            "-U",
+            cfg["user"],
+            "-d",
+            cfg["name"],
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+        ]
+        log.info("Running pg_dump in container '%s' -> %s", container, filename)
+        with open(filepath, "w") as out_f:
+            result = subprocess.run(
+                cmd,
+                env=env,
+                stdout=out_f,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+    else:
+        cmd = [
+            "pg_dump",
+            "-h", cfg["host"],
+            "-p", str(cfg["port"]),
+            "-U", cfg["user"],
+            "-d", cfg["name"],
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+            "-f", filepath,
+        ]
 
-    log.info("Running pg_dump  %s", filename)
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
+        log.info("Running host pg_dump -> %s", filename)
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
 
     if result.returncode != 0:
         log.error("pg_dump failed: %s", result.stderr)
@@ -150,18 +210,46 @@ def restore_sql(filepath: str) -> None:
     env = os.environ.copy()
     env["PGPASSWORD"] = cfg["password"]
 
-    cmd = [
-        "psql",
-        "-h", cfg["host"],
-        "-p", str(cfg["port"]),
-        "-U", cfg["user"],
-        "-d", cfg["name"],
-        "-v", "ON_ERROR_STOP=1",
-        "-f", filepath,
-    ]
+    container = _running_db_container_name()
 
     log.info("Restoring SQL backup from %s", os.path.basename(filepath))
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    if container:
+        cmd = [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            f"PGPASSWORD={cfg['password']}",
+            container,
+            "psql",
+            "-U",
+            cfg["user"],
+            "-d",
+            cfg["name"],
+            "-v",
+            "ON_ERROR_STOP=1",
+        ]
+        with open(filepath, "r") as in_f:
+            result = subprocess.run(
+                cmd,
+                env=env,
+                stdin=in_f,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=300,
+            )
+    else:
+        cmd = [
+            "psql",
+            "-h", cfg["host"],
+            "-p", str(cfg["port"]),
+            "-U", cfg["user"],
+            "-d", cfg["name"],
+            "-v", "ON_ERROR_STOP=1",
+            "-f", filepath,
+        ]
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
 
     if result.returncode != 0:
         log.error("psql restore failed: %s", result.stderr)
