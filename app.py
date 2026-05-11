@@ -162,8 +162,9 @@ def create_app():
         secret_key = "lightning-dev-bootstrap-secret-change-me"
     app.config["SECRET_KEY"] = secret_key
     app.secret_key = secret_key
-    # Stamp the build time once so every template can display it.
+    # Stamp the build time and version once so every template can display them.
     from datetime import datetime as _dt
+    app.config["APP_VERSION"] = "0.7"
     app.config["APP_BUILD_TIME"] = _dt.now().strftime("%Y-%m-%d %H:%M")
     _setup_logging()
     log = logging.getLogger(__name__)
