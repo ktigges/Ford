@@ -1777,12 +1777,24 @@ def create_app():
                 return units.unit_label(cat, system)
             return ""
 
+        def _format_minutes_to_hms(minutes: int | float) -> str:
+            """Convert minutes to human-readable format: '7h 14m' or '30m'."""
+            if not minutes or minutes <= 0:
+                return "0m"
+            minutes = int(minutes)
+            hours = minutes // 60
+            mins = minutes % 60
+            if hours > 0:
+                return f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
+            return f"{mins}m"
+
         return {
             "unit_system": system,
             "convert": lambda val, field: units.convert_for_display(val, field, system),
             "ulabel": lambda cat: units.unit_label(cat, system),
             "ulabel_for_field": _ulabel_for_field,
             "format_local_dt": _format_local_datetime,
+            "format_minutes_to_hms": _format_minutes_to_hms,
             "display_timezone": tz_name,
         }
 
