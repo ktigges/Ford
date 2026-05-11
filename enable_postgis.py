@@ -53,7 +53,7 @@ def enable_postgis():
             log.info("Creating spatial index...")
             db.execute("""
                 CREATE INDEX idx_ev_stations_location ON ev_stations USING GIST (
-                    ll_to_earth(latitude, longitude)
+                    ST_Point(longitude, latitude)
                 );
             """)
             log.info("Spatial index created")

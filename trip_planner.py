@@ -1297,19 +1297,19 @@ def find_nearby_chargers(
                 s.street_address AS address,
                 COALESCE(MAX(NULLIF(c.network, '')), s.network_name, 'Unknown') AS network,
                 COALESCE(MAX(c.power_kw), %s) AS max_power_kw,
-                -- Calculate distance in km for display (after using index)
+                -- Calculate distance in km for display (using geometry degrees)
                 ST_Distance(
-                    ST_Point(%s, %s)::geography,
-                    ST_Point(s.longitude, s.latitude)::geography
-                ) / 1000 AS distance_km
+                    ST_Point(%s, %s),
+                    ST_Point(s.longitude, s.latitude)
+                ) * 111.32 AS distance_km
             FROM ev_stations s
             JOIN ev_charger_connectors c ON s.id = c.station_id
             WHERE 
                 -- Use PostGIS spatial index for efficient filtering
                 ST_DWithin(
-                    ST_Point(%s, %s)::geography,
-                    ST_Point(s.longitude, s.latitude)::geography,
-                    %s
+                    ST_Point(%s, %s),
+                    ST_Point(s.longitude, s.latitude),
+                    %s / 111320.0
                 )
                 AND COALESCE(c.power_kw, 0) >= %s
                 AND (%s = '' OR %s = 'ANY' OR UPPER(c.connector_type) = ANY(%s))
