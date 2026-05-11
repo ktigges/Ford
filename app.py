@@ -31,6 +31,7 @@ import threading
 import json
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify, session
@@ -44,6 +45,7 @@ import poller
 import units
 import backup
 import crypto
+import entra_external_id as entra_auth
 import nlr_chargers
 import trip_planner as tp_service
 import energy_model
@@ -165,11 +167,15 @@ def create_app():
     app.secret_key = secret_key
     # Stamp the build time and version once so every template can display them.
     from datetime import datetime as _dt
-    app.config["APP_VERSION"] = "0.7"
+    app.config["APP_VERSION"] = "0.8.5"
     app.config["APP_BUILD_TIME"] = _dt.now().strftime("%Y-%m-%d %H:%M")
     _setup_logging()
     log = logging.getLogger(__name__)
     log.info("Starting MLLighting app (env=%s)", config.environment())
+    external_id_cfg = config.external_id_config()
+    app.config["EXTERNAL_ID_ENABLED"] = entra_auth.is_enabled(external_id_cfg)
+    if app.config["EXTERNAL_ID_ENABLED"]:
+        log.info("Entra External ID authentication is enabled")
 
     # Initialize DB pool at startup so normal routes don't fall into setup mode.
     try:
@@ -1937,6 +1943,123 @@ def create_app():
         )
         return creds is None
 
+    def _safe_next_url(candidate: str | None) -> str:
+        """Return a safe relative URL for post-login redirect."""
+        if not candidate:
+            return url_for("dashboard")
+        parsed = urlparse(candidate)
+        if parsed.scheme or parsed.netloc:
+            return url_for("dashboard")
+        if not candidate.startswith("/"):
+            return url_for("dashboard")
+        return candidate
+
+    def _clear_external_auth_session() -> None:
+        """Remove all session keys used by Entra External ID auth."""
+        for key in (
+            "entra_auth_state",
+            "entra_auth_nonce",
+            "entra_auth_next",
+            "entra_id_token",
+            "entra_access_token",
+            "entra_claims",
+            "entra_user",
+            "entra_id_token_exp",
+        ):
+            session.pop(key, None)
+
+    def _handle_external_id_callback():
+        """Process Entra redirect callback and establish authenticated session."""
+        if request.args.get("error"):
+            err = request.args.get("error_description") or request.args.get("error")
+            flash(f"Entra login failed: {err}", "error")
+            return redirect(url_for("auth_login"))
+
+        code = (request.args.get("code") or "").strip()
+        state = (request.args.get("state") or "").strip()
+        if not code or not state:
+            flash("Missing Entra callback parameters.", "error")
+            return redirect(url_for("auth_login"))
+
+        expected_state = session.get("entra_auth_state")
+        nonce = session.get("entra_auth_nonce")
+        if not expected_state or state != expected_state:
+            _clear_external_auth_session()
+            flash("Invalid Entra auth state. Please sign in again.", "error")
+            return redirect(url_for("auth_login"))
+
+        try:
+            token_response = entra_auth.exchange_code_for_tokens(external_id_cfg, code)
+            id_token = token_response.get("id_token")
+            access_token = token_response.get("access_token", "")
+            if not id_token:
+                flash("Token response did not include id_token.", "error")
+                return redirect(url_for("auth_login"))
+
+            claims = entra_auth.validate_id_token(external_id_cfg, id_token, expected_nonce=nonce)
+            if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
+                _clear_external_auth_session()
+                log.warning(
+                    "Denied login for user %s - not in allowed group",
+                    claims.get("preferred_username") or claims.get("oid") or claims.get("sub"),
+                )
+                return "Access denied: account is not in an allowed subscriber group.", 403
+
+            session["entra_id_token"] = id_token
+            session["entra_access_token"] = access_token
+            session["entra_claims"] = {
+                "oid": claims.get("oid") or claims.get("sub"),
+                "preferred_username": claims.get("preferred_username", ""),
+                "name": claims.get("name", ""),
+                "tid": claims.get("tid", ""),
+                "groups": claims.get("groups", []),
+                "roles": claims.get("roles", []),
+                "exp": claims.get("exp"),
+            }
+            session["entra_user"] = entra_auth.extract_user(claims)
+            session["entra_id_token_exp"] = int(claims.get("exp", 0) or 0)
+
+            session.pop("entra_auth_state", None)
+            session.pop("entra_auth_nonce", None)
+
+            destination = _safe_next_url(session.pop("entra_auth_next", None))
+            flash("Signed in successfully.", "success")
+            return redirect(destination)
+        except Exception as exc:
+            _clear_external_auth_session()
+            log.exception("Entra callback processing failed: %s", exc)
+            flash(f"Sign-in failed: {exc}", "error")
+            return redirect(url_for("auth_login"))
+
+    @app.route("/auth/login", methods=["GET"])
+    def auth_login():
+        """Start Entra External ID login flow."""
+        if not app.config.get("EXTERNAL_ID_ENABLED"):
+            flash("External ID auth is disabled in config.", "warning")
+            return redirect(url_for("dashboard"))
+
+        next_url = _safe_next_url(request.args.get("next"))
+        try:
+            authorize_url = entra_auth.build_authorize_url(external_id_cfg, session, next_url=next_url)
+            return redirect(authorize_url)
+        except Exception as exc:
+            log.exception("Failed to start Entra login: %s", exc)
+            flash(f"Unable to start sign-in flow: {exc}", "error")
+            return redirect(url_for("dashboard"))
+
+    @app.route("/auth/logout", methods=["GET"])
+    def auth_logout():
+        """Clear local auth session and optionally call Entra logout endpoint."""
+        _clear_external_auth_session()
+        post_logout_redirect = url_for("auth_login", _external=True)
+        provider_logout = entra_auth.build_logout_url(
+            external_id_cfg,
+            post_logout_redirect_uri=post_logout_redirect,
+        )
+        if provider_logout:
+            return redirect(provider_logout)
+        return redirect(url_for("auth_login"))
+
     # Run startup DB migrations once the table helpers are available.
     if db.is_available():
         try:
@@ -1964,11 +2087,47 @@ def create_app():
     _SETUP_SAFE_ENDPOINTS = frozenset({
         "db_setup", "db_setup_test", "db_setup_create",
         "db_setup_restore", "db_setup_upload",
+        "auth_login", "auth_logout",
         "oauth_config", "reset", "manage", "manage_delete_vin",
         "manage_repoll", "db_browser", "db_table", "db_delete_row",
         "settings", "backup_page", "backup_create", "backup_restore",
         "backup_download", "backup_delete", "backup_upload", "static",
     })
+
+    _AUTH_SAFE_ENDPOINTS = frozenset({"static", "auth_login", "auth_logout"})
+
+    @app.before_request
+    def _check_external_auth():
+        """Require authenticated Entra session on each request when enabled."""
+        if not app.config.get("EXTERNAL_ID_ENABLED"):
+            return
+
+        endpoint = request.endpoint or ""
+        if endpoint in _AUTH_SAFE_ENDPOINTS or endpoint.startswith("static"):
+            return
+
+        # /oauth doubles as callback endpoint for External ID.
+        if endpoint == "oauth_config" and request.method == "GET" and (
+            request.args.get("code") or request.args.get("error")
+        ):
+            return
+
+        id_token = session.get("entra_id_token")
+        if not id_token:
+            return redirect(url_for("auth_login", next=request.full_path or request.path))
+
+        try:
+            claims = entra_auth.validate_id_token(external_id_cfg, id_token)
+            if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
+                _clear_external_auth_session()
+                return redirect(url_for("auth_login", next=request.full_path or request.path))
+
+            session["entra_user"] = entra_auth.extract_user(claims)
+            session["entra_id_token_exp"] = int(claims.get("exp", 0) or 0)
+        except Exception as exc:
+            log.warning("External ID token validation failed; forcing re-login: %s", exc)
+            _clear_external_auth_session()
+            return redirect(url_for("auth_login", next=request.full_path or request.path))
 
     @app.before_request
     def _check_setup():
@@ -3099,6 +3258,11 @@ def create_app():
     @app.route("/oauth", methods=["GET", "POST"])
     def oauth_config():
         """OAuth configuration form. Validates credentials and kicks off initial data poll."""
+
+        if app.config.get("EXTERNAL_ID_ENABLED") and request.method == "GET" and (
+            request.args.get("code") or request.args.get("error")
+        ):
+            return _handle_external_id_callback()
 
         if request.method == "POST":
             form = {

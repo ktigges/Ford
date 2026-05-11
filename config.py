@@ -60,6 +60,11 @@ def ssl_config() -> dict:
     return get_config().get("ssl", {})
 
 
+def external_id_config() -> dict:
+    """Return Entra External ID authentication settings."""
+    return get_config().get("external_id", {})
+
+
 def save_database(db_settings: dict) -> None:
     """Update the database section in config.json and reload."""
     global _CONFIG
