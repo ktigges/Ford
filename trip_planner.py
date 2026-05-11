@@ -1297,105 +1297,126 @@ def optimize_charging_stops(
     current_soc_percent: float,
     energy_needed_kwh: float
 ) -> list[ChargingStop]:
-    """Determine optimal charging stops along route.
-    
-    Returns list of recommended stops with:
-    - Location (charger)
-    - Arrival SOC
-    - Charge-to SOC
-    - Charging time
-    """
-    stops: list[ChargingStop] = []
+        """Determine optimal charging stops along route.
 
-    if total_distance_km <= 0:
-        return stops
+        When a real charger is found in the database near the needed stop location it
+        is used.  When none is found the stop is modelled as an *estimated* virtual
+        stop so the SOC/timing information is still meaningful even in areas with
+        sparse database coverage.
 
-    kwh_per_km = energy_needed_kwh / total_distance_km if energy_needed_kwh > 0 else DEFAULT_EFFICIENCY_KWH_PER_KM
-    distance_traveled = 0.0
-    current_soc = float(current_soc_percent)
-    max_stops = 8
+        Returns list of recommended stops with:
+        - Location (real charger or estimated)
+        - Arrival SOC
+        - Charge-to SOC
+        - Charging time
+        """
+        stops: list[ChargingStop] = []
 
-    for _ in range(max_stops):
-        usable_kwh = max(0.0, (current_soc - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH)
-        reachable_km = usable_kwh / kwh_per_km if kwh_per_km > 0 else total_distance_km
-        remaining_km = total_distance_km - distance_traveled
+        if total_distance_km <= 0:
+            return stops
 
-        if reachable_km >= remaining_km:
-            break
+        kwh_per_km = energy_needed_kwh / total_distance_km if energy_needed_kwh > 0 else DEFAULT_EFFICIENCY_KWH_PER_KM
+        distance_traveled = 0.0
+        current_soc = float(current_soc_percent)
+        max_stops = 8
 
-        # Place the next stop well before empty to reduce edge-case failures.
-        stop_location_km = distance_traveled + max(5.0, min(reachable_km * 0.75, remaining_km - 1.0))
-        segment_idx = min(int(stop_location_km / total_distance_km * max(1, len(polyline) - 1)), len(polyline) - 1)
-        stop_lat, stop_lon = polyline[segment_idx]
+        for _ in range(max_stops):
+            usable_kwh = max(0.0, (current_soc - MIN_SAFE_SOC_PERCENT) / 100 * BATTERY_CAPACITY_KWH)
+            reachable_km = usable_kwh / kwh_per_km if kwh_per_km > 0 else total_distance_km
+            remaining_km = total_distance_km - distance_traveled
 
-        nearby: list[dict] = []
-        for radius in (25, 40, 60):
-            nearby = find_nearby_chargers(stop_lat, stop_lon, radius_km=radius, limit=10)
-            if nearby:
+            if reachable_km >= remaining_km:
                 break
 
-        if not nearby:
-            log.warning("No chargers found near route km %.1f (lat=%.4f lon=%.4f)", stop_location_km, stop_lat, stop_lon)
-            break
+            # Place the next stop well before empty to reduce edge-case failures.
+            stop_location_km = distance_traveled + max(5.0, min(reachable_km * 0.75, remaining_km - 1.0))
+            segment_idx = min(int(stop_location_km / total_distance_km * max(1, len(polyline) - 1)), len(polyline) - 1)
+            stop_lat, stop_lon = polyline[segment_idx]
 
-        # Prefer high-power chargers among nearest options.
-        charger = max(
-            nearby,
-            key=lambda c: (
-                float(c.get("max_power_kw") or 0),
-                -float(c.get("distance_km") or 0),
-            ),
-        )
+            # ── SOC math (always computed, regardless of real charger availability) ──
+            distance_to_stop = stop_location_km - distance_traveled
+            energy_to_stop = distance_to_stop * kwh_per_km
+            arrival_soc = current_soc - (energy_to_stop / BATTERY_CAPACITY_KWH * 100)
+            if arrival_soc < MIN_SAFE_SOC_PERCENT:
+                arrival_soc = MIN_SAFE_SOC_PERCENT
 
-        distance_to_stop = stop_location_km - distance_traveled
-        energy_to_stop = distance_to_stop * kwh_per_km
-        arrival_soc = current_soc - (energy_to_stop / BATTERY_CAPACITY_KWH * 100)
-        if arrival_soc < MIN_SAFE_SOC_PERCENT:
-            arrival_soc = MIN_SAFE_SOC_PERCENT
+            remaining_after_stop_km = total_distance_km - stop_location_km
+            target_soc_for_destination = (
+                MIN_SAFE_SOC_PERCENT
+                + ((remaining_after_stop_km * kwh_per_km) / BATTERY_CAPACITY_KWH * 100)
+                + 5
+            )
+            charge_to_soc = max(70.0, min(90.0, target_soc_for_destination))
+            if charge_to_soc <= arrival_soc:
+                charge_to_soc = min(90.0, arrival_soc + 10.0)
 
-        remaining_after_stop_km = total_distance_km - stop_location_km
-        target_soc_for_destination = (
-            MIN_SAFE_SOC_PERCENT
-            + ((remaining_after_stop_km * kwh_per_km) / BATTERY_CAPACITY_KWH * 100)
-            + 5
-        )
-        charge_to_soc = max(70.0, min(90.0, target_soc_for_destination))
-        if charge_to_soc <= arrival_soc:
-            charge_to_soc = min(90.0, arrival_soc + 10.0)
+            energy_to_add = max(0.0, (charge_to_soc - arrival_soc) / 100 * BATTERY_CAPACITY_KWH)
 
-        energy_to_add = max(0.0, (charge_to_soc - arrival_soc) / 100 * BATTERY_CAPACITY_KWH)
-        charger_power = max(float(charger.get("max_power_kw") or DC_FAST_CHARGER_KW), 25.0)
-        charge_time_min = int(round((energy_to_add / charger_power) * 60))
+            # ── Try to find a real charger near this location ──
+            nearby: list[dict] = []
+            for radius in (25, 40, 60):
+                nearby = find_nearby_chargers(stop_lat, stop_lon, radius_km=radius, limit=10)
+                if nearby:
+                    break
 
-        stop = ChargingStop(
-            charger_id=charger["id"],
-            charger_name=charger["name"],
-            lat=charger["latitude"],
-            lon=charger["longitude"],
-            distance_km_from_start=stop_location_km,
-            arrival_soc_percent=arrival_soc,
-            charge_to_soc_percent=charge_to_soc,
-            charger_power_kw=charger_power,
-            charge_time_min=max(1, charge_time_min),
-            network=charger.get("network", "Unknown"),
-            address=charger.get("address", ""),
-        )
+            if nearby:
+                # Prefer high-power chargers among nearest options.
+                charger = max(
+                    nearby,
+                    key=lambda c: (
+                        float(c.get("max_power_kw") or 0),
+                        -float(c.get("distance_km") or 0),
+                    ),
+                )
+                charger_power = max(float(charger.get("max_power_kw") or DC_FAST_CHARGER_KW), 25.0)
+                charge_time_min = int(round((energy_to_add / charger_power) * 60))
+                stop = ChargingStop(
+                    charger_id=charger["id"],
+                    charger_name=charger["name"],
+                    lat=float(charger["latitude"]),
+                    lon=float(charger["longitude"]),
+                    distance_km_from_start=stop_location_km,
+                    arrival_soc_percent=round(arrival_soc, 1),
+                    charge_to_soc_percent=round(charge_to_soc, 1),
+                    charger_power_kw=charger_power,
+                    charge_time_min=max(1, charge_time_min),
+                    network=charger.get("network", "Unknown"),
+                    address=charger.get("address", ""),
+                )
+                log.info(
+                    "Stop %s: %s at km %.0f (%.0f mi), arrive %.0f%%, charge to %.0f%% (%s min)",
+                    len(stops) + 1, charger["name"], stop_location_km, stop_location_km * 0.621371,
+                    arrival_soc, charge_to_soc, stop.charge_time_min,
+                )
+            else:
+                # No DB charger found – create an estimated virtual stop so the
+                # SOC projection is still meaningful.
+                charger_power = DC_FAST_CHARGER_KW
+                charge_time_min = int(round((energy_to_add / charger_power) * 60))
+                stop = ChargingStop(
+                    charger_id=0,
+                    charger_name="Estimated Charging Stop",
+                    lat=round(stop_lat, 5),
+                    lon=round(stop_lon, 5),
+                    distance_km_from_start=stop_location_km,
+                    arrival_soc_percent=round(arrival_soc, 1),
+                    charge_to_soc_percent=round(charge_to_soc, 1),
+                    charger_power_kw=charger_power,
+                    charge_time_min=max(1, charge_time_min),
+                    network="Any DCFC",
+                    address="Estimated location along route",
+                )
+                log.info(
+                    "Stop %s: ESTIMATED at km %.0f (%.0f mi), arrive %.0f%%, charge to %.0f%% (%s min)",
+                    len(stops) + 1, stop_location_km, stop_location_km * 0.621371,
+                    arrival_soc, charge_to_soc, stop.charge_time_min,
+                )
 
-        stops.append(stop)
-        distance_traveled = stop_location_km
-        current_soc = charge_to_soc
+            stops.append(stop)
+            distance_traveled = stop_location_km
+            current_soc = charge_to_soc
 
-        log.info(
-            "Stop %s: %s at km %.0f, arrive %.0f%%, charge to %.0f%% (%s min)",
-            len(stops),
-            charger["name"],
-            stop_location_km,
-            arrival_soc,
-            charge_to_soc,
-            stop.charge_time_min,
-        )
-
-    return stops
+        return stops
 
 
 def _is_direct_trip_feasible(start_soc_percent: float, energy_needed_kwh: float) -> bool:

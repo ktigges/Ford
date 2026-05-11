@@ -320,34 +320,128 @@
                     </div>
 
                     <!-- Charging Stops -->
-                    {% if plan.charging_stops %}
+                    <!-- Dual-View Charging Stops (Baseline vs ML) -->
                     <hr>
-                    <h6>Recommended Charging Stops</h6>
-                    <div class="list-group">
-                        {% for stop in plan.charging_stops %}
-                            <div class="list-group-item">
-                            <div class="d-flex justify-content-between">
-                                <div>
-                                    <h6 class="mb-1">{{ stop.charger_name }}</h6>
-                                    <small class="text-muted">
-                                        {{ stop.address }}<br>
-                                        Network: {{ stop.network }} | Power: {{ stop.charger_power_kw|int }} kW
-                                    </small>
+                    <ul class="nav nav-tabs mb-2" id="stopTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="baseline-tab" data-bs-toggle="tab"
+                                    data-bs-target="#baseline-stops" type="button" role="tab">
+                                📊 Baseline
+                                {% if plan.baseline_charging_stops %}
+                                <span class="badge bg-warning text-dark ms-1">{{ plan.baseline_charging_stops|length }} stop{{ 's' if plan.baseline_charging_stops|length != 1 else '' }}</span>
+                                {% else %}
+                                <span class="badge bg-success ms-1">No stops needed</span>
+                                {% endif %}
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="ml-tab" data-bs-toggle="tab"
+                                    data-bs-target="#ml-stops" type="button" role="tab">
+                                🤖 ML Model
+                                {% if ml_energy_kwh %}
+                                    {% if plan.ml_charging_stops %}
+                                    <span class="badge bg-warning text-dark ms-1">{{ plan.ml_charging_stops|length }} stop{{ 's' if plan.ml_charging_stops|length != 1 else '' }}</span>
+                                    {% else %}
+                                    <span class="badge bg-success ms-1">No stops needed</span>
+                                    {% endif %}
+                                {% else %}
+                                <span class="badge bg-secondary ms-1">Not trained</span>
+                                {% endif %}
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="tab-content" id="stopTabContent">
+
+                        <!-- Baseline Tab -->
+                        <div class="tab-pane fade show active" id="baseline-stops" role="tabpanel">
+                            <p class="small text-muted mb-2">
+                                Fixed efficiency: {{ "%.2f"|format(0.28 * 1.60934) }} kWh/mi &nbsp;|&nbsp;
+                                Energy: <strong>{{ "%.1f"|format(baseline_energy_kwh) }} kWh</strong>
+                            </p>
+                            {% if plan.baseline_charging_stops %}
+                            <div class="list-group">
+                                {% for stop in plan.baseline_charging_stops %}
+                                {% set is_estimated = (stop.charger_id == 0) %}
+                                <div class="list-group-item {% if is_estimated %}list-group-item-warning{% endif %}">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <div class="fw-semibold">
+                                                Stop {{ loop.index }}: {{ stop.charger_name }}
+                                                {% if is_estimated %}<span class="badge bg-warning text-dark ms-1">Estimated</span>{% endif %}
+                                            </div>
+                                            <small class="text-muted">
+                                                {% if not is_estimated %}{{ stop.address }}<br>{% endif %}
+                                                Network: {{ stop.network }} | Power: {{ stop.charger_power_kw|int }} kW
+                                            </small>
+                                            <div class="mt-1 small">
+                                                <span class="text-danger fw-bold">▼ Arrive {{ stop.arrival_soc_percent|int }}%</span>
+                                                &nbsp;→&nbsp;
+                                                <span class="text-success fw-bold">▲ Charge to {{ stop.charge_to_soc_percent|int }}%</span>
+                                                &nbsp;(~{{ stop.charge_time_min }} min)
+                                            </div>
+                                        </div>
+                                        <div class="text-end ms-2">
+                                            <span class="badge bg-primary">
+                                                {% if unit_system == 'imperial' %}{{ "%.0f"|format(stop.distance_km_from_start * 0.621371) }} mi{% else %}{{ "%.0f"|format(stop.distance_km_from_start) }} km{% endif %}
+                                            </span>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="text-end">
-                                    <small><strong>{% if unit_system == 'imperial' %}{{ "%.0f"|format(stop.distance_km_from_start * 0.621371) }} mi{% else %}km {{ "%.0f"|format(stop.distance_km_from_start) }}{% endif %}</strong></small><br>
-                                    <small>Arrive: {{ stop.arrival_soc_percent|int }}%</small><br>
-                                    <small>Charge to: {{ stop.charge_to_soc_percent|int }}%</small><br>
-                                    <small class="text-muted">{{ stop.charge_time_min }} min</small>
-                                </div>
+                                {% endfor %}
                             </div>
+                            {% else %}
+                            <p class="text-success small"><strong>✓ No charging stops needed</strong> — battery is sufficient for this trip.</p>
+                            {% endif %}
                         </div>
-                        {% endfor %}
+
+                        <!-- ML Tab -->
+                        <div class="tab-pane fade" id="ml-stops" role="tabpanel">
+                            {% if ml_energy_kwh %}
+                            <p class="small text-muted mb-2">
+                                ML prediction &nbsp;|&nbsp;
+                                Energy: <strong>{{ "%.1f"|format(ml_energy_kwh) }} kWh</strong>
+                            </p>
+                            {% if plan.ml_charging_stops %}
+                            <div class="list-group">
+                                {% for stop in plan.ml_charging_stops %}
+                                {% set is_estimated = (stop.charger_id == 0) %}
+                                <div class="list-group-item {% if is_estimated %}list-group-item-warning{% endif %}">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <div class="fw-semibold">
+                                                Stop {{ loop.index }}: {{ stop.charger_name }}
+                                                {% if is_estimated %}<span class="badge bg-warning text-dark ms-1">Estimated</span>{% endif %}
+                                            </div>
+                                            <small class="text-muted">
+                                                {% if not is_estimated %}{{ stop.address }}<br>{% endif %}
+                                                Network: {{ stop.network }} | Power: {{ stop.charger_power_kw|int }} kW
+                                            </small>
+                                            <div class="mt-1 small">
+                                                <span class="text-danger fw-bold">▼ Arrive {{ stop.arrival_soc_percent|int }}%</span>
+                                                &nbsp;→&nbsp;
+                                                <span class="text-success fw-bold">▲ Charge to {{ stop.charge_to_soc_percent|int }}%</span>
+                                                &nbsp;(~{{ stop.charge_time_min }} min)
+                                            </div>
+                                        </div>
+                                        <div class="text-end ms-2">
+                                            <span class="badge bg-primary">
+                                                {% if unit_system == 'imperial' %}{{ "%.0f"|format(stop.distance_km_from_start * 0.621371) }} mi{% else %}{{ "%.0f"|format(stop.distance_km_from_start) }} km{% endif %}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <p class="text-success small"><strong>✓ No charging stops needed</strong> — ML model predicts sufficient battery for this trip.</p>
+                            {% endif %}
+                            {% else %}
+                            <div class="alert alert-secondary small mb-0">
+                                ML model is not yet trained. <a href="{{ url_for('settings_ai_page') }}">Train the model</a> using your real drive history for personalized predictions.
+                            </div>
+                            {% endif %}
+                        </div>
                     </div>
-                    {% else %}
-                    <hr>
-                    <p class="text-success"><strong>Baseline estimate complete.</strong></p>
-                    {% endif %}
 
                     {% if plan.route_weather %}
                     <hr>
