@@ -60,6 +60,15 @@ MAX_ROUTE_POLYLINE_POINTS = 1200
 MIN_ML_TRAINING_DRIVES = 30
 ML_MIN_CONFIDENCE_LEVELS = {"high", "medium"}
 ML_ENERGY_DEVIATION_LIMIT = 0.35
+DEFAULT_CONNECTOR_TYPE = "CCS1"
+DEFAULT_MIN_CHARGER_KW = 50.0
+
+CONNECTOR_TYPE_ALIASES = {
+    "CCS1": ["CCS1", "J1772COMBO", "CCS", "CCS_COMBO", "SAE_COMBO"],
+    "J1772COMBO": ["J1772COMBO", "CCS1", "CCS", "CCS_COMBO", "SAE_COMBO"],
+    "NACS": ["NACS", "TESLA"],
+    "CHADEMO": ["CHADEMO"],
+}
 
 US_STATE_ABBREVIATIONS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
@@ -191,8 +200,16 @@ class TripPlan:
     weather_summary: str
     estimate_source: str
     estimate_confidence: str
+    ml_training_drives: int
     ml_estimate_note: str
     created_at: str
+
+
+def _connector_candidates(connector_type: str) -> list[str]:
+    raw = str(connector_type or "").strip().upper()
+    if not raw or raw == "ANY":
+        return []
+    return CONNECTOR_TYPE_ALIASES.get(raw, [raw])
 
 
 OPEN_METEO_WEATHER_CODE_LABELS = {
@@ -1248,13 +1265,22 @@ def get_weather_forecast(
 # ── Charger Recommendations ────────────────────────────────────────
 
 def find_nearby_chargers(
-    lat: float, lon: float, radius_km: float = 50, limit: int = 5
+    lat: float,
+    lon: float,
+    radius_km: float = 50,
+    limit: int = 5,
+    preferred_connector_type: str = DEFAULT_CONNECTOR_TYPE,
+    min_charger_kw: float = DEFAULT_MIN_CHARGER_KW,
 ) -> list[dict]:
     """Find chargers near a location.
     
     Uses your existing EV stations database.
     """
     try:
+        connector_candidates = _connector_candidates(preferred_connector_type)
+        connector_filter_key = str(preferred_connector_type or "").strip().upper()
+        connector_candidates_param = connector_candidates if connector_candidates else [""]
+
         chargers = db.fetch_all("""
             SELECT 
                 s.id,
@@ -1271,12 +1297,14 @@ def find_nearby_chargers(
                     POW(s.longitude - %s, 2)
                 ) * 111 AS distance_km
             FROM ev_stations s
-            LEFT JOIN ev_charger_connectors c ON s.id = c.station_id
+            JOIN ev_charger_connectors c ON s.id = c.station_id
             WHERE 
                 SQRT(
                     POW(s.latitude - %s, 2) + 
                     POW(s.longitude - %s, 2)
                 ) * 111 < %s
+                AND COALESCE(c.power_kw, 0) >= %s
+                AND (%s = '' OR %s = 'ANY' OR UPPER(c.connector_type) = ANY(%s))
             GROUP BY
                 s.id,
                 s.station_name,
@@ -1288,7 +1316,19 @@ def find_nearby_chargers(
                 s.network_name
             ORDER BY distance_km ASC
             LIMIT %s
-        """, (DC_FAST_CHARGER_KW, lat, lon, lat, lon, radius_km, limit))
+        """, (
+            DC_FAST_CHARGER_KW,
+            lat,
+            lon,
+            lat,
+            lon,
+            radius_km,
+            float(min_charger_kw),
+            connector_filter_key,
+            connector_filter_key,
+            connector_candidates_param,
+            limit,
+        ))
         
         return chargers if chargers else []
     
@@ -1301,7 +1341,9 @@ def optimize_charging_stops(
     polyline: list[tuple[float, float]],
     total_distance_km: float,
     current_soc_percent: float,
-    energy_needed_kwh: float
+    energy_needed_kwh: float,
+    preferred_connector_type: str = DEFAULT_CONNECTOR_TYPE,
+    min_charger_kw: float = DEFAULT_MIN_CHARGER_KW,
 ) -> list[ChargingStop]:
         """Determine optimal charging stops along route.
 
@@ -1361,7 +1403,14 @@ def optimize_charging_stops(
             # ── Try to find a real charger near this location ──
             nearby: list[dict] = []
             for radius in (25, 40, 60):
-                nearby = find_nearby_chargers(stop_lat, stop_lon, radius_km=radius, limit=10)
+                nearby = find_nearby_chargers(
+                    stop_lat,
+                    stop_lon,
+                    radius_km=radius,
+                    limit=10,
+                    preferred_connector_type=preferred_connector_type,
+                    min_charger_kw=min_charger_kw,
+                )
                 if nearby:
                     break
 
@@ -1537,6 +1586,8 @@ def plan_trip(
     destination: str,
     current_soc_percent: float = 100,
     current_temp_c: float = 15,
+    preferred_connector_type: str = DEFAULT_CONNECTOR_TYPE,
+    min_charger_kw: float = DEFAULT_MIN_CHARGER_KW,
 ) -> TripPlan:
     """Plan a complete trip from source to destination.
     
@@ -1592,6 +1643,7 @@ def plan_trip(
             weather_summary="",
             estimate_source="Baseline",
             estimate_confidence="n/a",
+            ml_training_drives=0,
             ml_estimate_note="ML estimate unavailable; using baseline",
             created_at=datetime.now().isoformat()
         )
@@ -1630,6 +1682,7 @@ def plan_trip(
             weather_summary="",
             estimate_source="Baseline",
             estimate_confidence="n/a",
+            ml_training_drives=0,
             ml_estimate_note="ML estimate unavailable; using baseline",
             created_at=datetime.now().isoformat()
         )
@@ -1665,6 +1718,7 @@ def plan_trip(
     ml_energy_kwh = None
     estimate_source = "Baseline"
     estimate_confidence = "n/a"
+    ml_training_drives = 0
     ml_estimate_note = "ML estimate unavailable; using baseline"
 
     # Step 1: ML prediction (if available)
@@ -1685,6 +1739,7 @@ def plan_trip(
             ml_raw_energy_kwh = float(ml_pred.get("energy_used_kwh", baseline_energy_kwh))
             estimate_confidence = str(ml_pred.get("confidence") or "unknown").lower()
             training_drives = int((ml_pred.get("model_info") or {}).get("num_training_drives") or 0)
+            ml_training_drives = training_drives
 
             # Clamp ML estimate so undertrained models cannot create extreme plans.
             deviation_floor = baseline_energy_kwh * (1.0 - ML_ENERGY_DEVIATION_LIMIT)
@@ -1724,6 +1779,8 @@ def plan_trip(
             total_distance_km=distance_km,
             current_soc_percent=current_soc_percent,
             energy_needed_kwh=baseline_energy_kwh,
+            preferred_connector_type=preferred_connector_type,
+            min_charger_kw=min_charger_kw,
         ) or []
 
     ml_charging_stops = []
@@ -1735,6 +1792,8 @@ def plan_trip(
             total_distance_km=distance_km,
             current_soc_percent=current_soc_percent,
             energy_needed_kwh=ml_energy_for_stops,
+            preferred_connector_type=preferred_connector_type,
+            min_charger_kw=min_charger_kw,
         ) or []
 
     # Use the active estimate's stops
@@ -1815,6 +1874,7 @@ def plan_trip(
         weather_summary=weather_summary,
         estimate_source=estimate_source,
         estimate_confidence=estimate_confidence,
+        ml_training_drives=ml_training_drives,
         ml_estimate_note=ml_estimate_note,
         created_at=datetime.now().isoformat()
     )

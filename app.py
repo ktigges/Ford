@@ -4224,6 +4224,8 @@ def create_app():
             "destination": "",
             "start_soc": 85,
             "use_current_source": False,
+            "charger_type": "CCS1",
+            "min_charger_kw": 50,
         }
         unit_system = _get_setting("units") if db.is_available() else "imperial"
         timezone_name = _get_setting("timezone") if db.is_available() else "UTC"
@@ -4241,6 +4243,16 @@ def create_app():
                 form_data["start_soc"] = int(request.form.get("start_soc", 85))
             except (ValueError, TypeError):
                 form_data["start_soc"] = 85
+
+            form_data["charger_type"] = (request.form.get("charger_type", "CCS1") or "CCS1").strip().upper()
+            if form_data["charger_type"] not in {"CCS1", "NACS", "CHADEMO", "ANY"}:
+                form_data["charger_type"] = "CCS1"
+
+            try:
+                form_data["min_charger_kw"] = int(float(request.form.get("min_charger_kw", 50)))
+            except (ValueError, TypeError):
+                form_data["min_charger_kw"] = 50
+            form_data["min_charger_kw"] = max(0, min(500, form_data["min_charger_kw"]))
 
             form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
             action = (request.form.get("action") or "preview").strip().lower()
@@ -4274,6 +4286,8 @@ def create_app():
                             source=source_coords_text,
                             destination=destination_coords_text,
                             current_soc_percent=form_data["start_soc"],
+                            preferred_connector_type=form_data["charger_type"],
+                            min_charger_kw=float(form_data["min_charger_kw"]),
                         )
                         if plan:
                             plan.source_name = source_label

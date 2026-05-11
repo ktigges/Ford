@@ -173,6 +173,24 @@
                             </small>
                         </div>
 
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label for="charger_type" class="form-label">Connector Type</label>
+                                <select class="form-select" id="charger_type" name="charger_type">
+                                    <option value="CCS1" {% if form.charger_type == 'CCS1' %}selected{% endif %}>CCS1</option>
+                                    <option value="NACS" {% if form.charger_type == 'NACS' %}selected{% endif %}>NACS</option>
+                                    <option value="CHADEMO" {% if form.charger_type == 'CHADEMO' %}selected{% endif %}>CHAdeMO</option>
+                                    <option value="ANY" {% if form.charger_type == 'ANY' %}selected{% endif %}>Any</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="min_charger_kw" class="form-label">Minimum Charger kW</label>
+                                <input type="number" class="form-control" id="min_charger_kw" name="min_charger_kw"
+                                       value="{{ form.min_charger_kw }}" min="0" max="500" step="5">
+                            </div>
+                        </div>
+                        <small class="form-text text-muted d-block mt-1">Defaults: CCS1 and 50kW+</small>
+
                         <button type="submit" name="action" value="preview" class="btn btn-primary w-100">
                             <i class="bi bi-geo"></i> Preview Resolved Locations
                         </button>
@@ -195,6 +213,8 @@
                         <input type="hidden" name="source" value="{{ form.source }}">
                         <input type="hidden" name="destination" value="{{ form.destination }}">
                         <input type="hidden" name="start_soc" value="{{ form.start_soc }}">
+                        <input type="hidden" name="charger_type" value="{{ form.charger_type }}">
+                        <input type="hidden" name="min_charger_kw" value="{{ form.min_charger_kw }}">
                         {% if form.use_current_source %}
                         <input type="hidden" name="use_current_source" value="on">
                         {% endif %}
@@ -324,6 +344,15 @@
                     <div class="alert alert-info small mb-3">
                         <strong>Charging Strategy:</strong> charging points are estimated and marked directly in each step-by-step route view below.
                         <br>
+                        <strong>Charger Filter:</strong> {{ form.charger_type }} and {{ form.min_charger_kw|int }}kW+.
+                        <br>
+                        <strong>ML Confidence:</strong> {{ (plan.estimate_confidence or 'n/a')|upper }}
+                        {% if plan.ml_training_drives is not none %}(training drives: {{ plan.ml_training_drives }}){% endif %}
+                        <br>
+                        {% if (plan.estimate_confidence or '')|lower == 'low' %}
+                        <strong>More training data is needed.</strong> The ML estimate will improve over time as additional completed drives are collected.
+                        <br>
+                        {% endif %}
                         <strong>ML Status:</strong> {{ plan.ml_estimate_note|default('ML comparison only') }}
                     </div>
                     <div class="row g-3 mb-2">
