@@ -16,3 +16,6 @@ backups/
 
 # SSL certificates and private keys
 certs/
+
+# Local runtime configuration (contains secrets)
+config.json
