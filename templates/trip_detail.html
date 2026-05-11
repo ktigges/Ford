@@ -146,7 +146,7 @@
             <tbody>
               {% for stop in plan.baseline_charging_stops %}
               <tr>
-                <td><strong>{{ stop.charger_name }}</strong></td>
+                <td><strong>Charge Point {{ loop.index }}</strong></td>
                 <td>
                   {% if unit_system == 'imperial' %}
                     {{ "%.1f"|format(stop.distance_km_from_start * 0.621371) }} mi
@@ -189,7 +189,7 @@
             <tbody>
               {% for stop in plan.ml_charging_stops %}
               <tr>
-                <td><strong>{{ stop.charger_name }}</strong></td>
+                <td><strong>Charge Point {{ loop.index }}</strong></td>
                 <td>
                   {% if unit_system == 'imperial' %}
                     {{ "%.1f"|format(stop.distance_km_from_start * 0.621371) }} mi
