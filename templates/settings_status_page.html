@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}System Status – Settings{% endblock %}
+
+{% block content %}
+<style>
+  .status-section {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    border: 1px solid #ddd;
+    border-radius: 0.5rem;
+    background: #f9f9f9;
+  }
+
+  .status-section h3 {
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+    font-size: 1.2rem;
+    border-bottom: 2px solid #007bff;
+    padding-bottom: 0.5rem;
+  }
+
+  .component-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 150px;
+    gap: 1rem;
+    align-items: center;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #eee;
+  }
+
+  .component-row:last-child {
+    border-bottom: none;
+  }
+
+  .component-name {
+    font-weight: 600;
+    color: #333;
+  }
+
+  .component-info {
+    color: #666;
+    font-size: 0.95rem;
+  }
+
+  .status-badge {
+    display: inline-block;
+    padding: 0.35rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .status-ok {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+  }
+
+  .status-warning {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+  }
+
+  .status-error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+  }
+
+  .status-missing {
+    background: #e2e3e5;
+    color: #383d41;
+    border: 1px solid #d6d8db;
+  }
+
+  .timestamp {
+    text-align: center;
+    color: #999;
+    font-size: 0.9rem;
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #ddd;
+  }
+
+  .refresh-btn {
+    margin-bottom: 1rem;
+  }
+</style>
+
+<div class="settings-container">
+  <h1>System Status & Components</h1>
+  <p>Checks the current status of database, spatial extensions, and Python dependencies.</p>
+
+  <button class="btn btn-primary refresh-btn" onclick="location.reload()">Refresh Status</button>
+
+  <!-- Database Status -->
+  <div class="status-section">
+    <h3>Database</h3>
+    {% if status.database.connected %}
+      <div class="component-row">
+        <div class="component-name">Connection</div>
+        <div class="component-info">{{ status.database.version }}</div>
+        <div><span class="status-badge status-ok">{{ status.database.status }}</span></div>
+      </div>
+    {% else %}
+      <div class="component-row">
+        <div class="component-name">Connection</div>
+        <div class="component-info">Unable to connect</div>
+        <div><span class="status-badge status-error">{{ status.database.status }}</span></div>
+      </div>
+      {% if status.database.error %}
+        <div style="color: #721c24; font-size: 0.9rem; margin-top: 1rem;">Error: {{ status.database.error }}</div>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  <!-- PostGIS Status -->
+  <div class="status-section">
+    <h3>PostGIS (Spatial Queries)</h3>
+    {% if status.postgis.available %}
+      <div class="component-row">
+        <div class="component-name">Extension</div>
+        <div class="component-info">{{ status.postgis.version }}</div>
+        <div><span class="status-badge status-ok">{{ status.postgis.status }}</span></div>
+      </div>
+      <div class="component-row">
+        <div class="component-name">Spatial Index</div>
+        <div class="component-info">On ev_stations table</div>
+        <div>
+          {% if status.postgis.spatial_index == "EXISTS" %}
+            <span class="status-badge status-ok">EXISTS</span>
+          {% elif status.postgis.spatial_index == "MISSING" %}
+            <span class="status-badge status-warning">MISSING</span>
+          {% else %}
+            <span class="status-badge status-error">{{ status.postgis.spatial_index }}</span>
+          {% endif %}
+        </div>
+      </div>
+    {% else %}
+      <div class="component-row">
+        <div class="component-name">Extension</div>
+        <div class="component-info">Not installed in database</div>
+        <div><span class="status-badge status-warning">{{ status.postgis.status }}</span></div>
+      </div>
+      <p style="color: #856404; font-size: 0.9rem; margin-top: 1rem;">
+        PostGIS is optional. Charger lookups will use Haversine formula (slower) if unavailable.
+        To install: docker exec lightning-db apt-get install postgresql-16-postgis-3
+      </p>
+      {% if status.postgis.error %}
+        <div style="color: #721c24; font-size: 0.9rem; margin-top: 1rem;">Error: {{ status.postgis.error }}</div>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  <!-- Python Packages -->
+  <div class="status-section">
+    <h3>Python Dependencies</h3>
+    {% for package_name, package_status in status.python_packages.items() %}
+      <div class="component-row">
+        <div class="component-name">{{ package_name }}</div>
+        <div class="component-info">
+          {% if package_status.version and package_status.version != "installed" %}
+            v{{ package_status.version }}
+          {% else %}
+            installed
+          {% endif %}
+        </div>
+        <div>
+          {% if package_status.status == "OK" %}
+            <span class="status-badge status-ok">{{ package_status.status }}</span>
+          {% elif package_status.status == "MISSING" %}
+            <span class="status-badge status-error">{{ package_status.status }}</span>
+          {% else %}
+            <span class="status-badge status-error">{{ package_status.status }}</span>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="timestamp">
+    Last checked: {{ status.timestamp }}
+  </div>
+</div>
+{% endblock %}
