@@ -39,18 +39,30 @@
   </div>
   <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
     <legend><b>Polling Intervals (seconds)</b></legend>
-    <label>Ignition Off:
-      <input type="number" name="poll_interval_off" value="{{ settings.poll_interval_off }}" min="10" max="3600">
-    </label>
-    <label style="margin-left:2em;">Ignition On:
-      <input type="number" name="poll_interval_on" value="{{ settings.poll_interval_on }}" min="10" max="3600">
-    </label>
-    <label style="margin-left:2em;">Moving:
-      <input type="number" name="poll_interval_moving" value="{{ settings.poll_interval_moving }}" min="5" max="600">
-    </label>
-    <label style="margin-left:2em;">Charging:
-      <input type="number" name="poll_interval_charging" value="{{ settings.poll_interval_charging }}" min="10" max="3600">
-    </label>
+    <div style="margin-bottom:1rem;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Ignition Off</b>
+        <input type="number" name="poll_interval_off" value="{{ settings.poll_interval_off }}" min="10" max="3600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle when parked and off (slower to save battery)</small>
+    </div>
+    <div style="margin-bottom:1rem;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Ignition On</b>
+        <input type="number" name="poll_interval_on" value="{{ settings.poll_interval_on }}" min="10" max="3600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle when turned on but not moving</small>
+    </div>
+    <div style="margin-bottom:1rem;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Moving</b>
+        <input type="number" name="poll_interval_moving" value="{{ settings.poll_interval_moving }}" min="5" max="600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle while driving (highest frequency for real-time updates)</small>
+    </div>
+    <div style="margin-bottom:0;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Charging</b>
+        <input type="number" name="poll_interval_charging" value="{{ settings.poll_interval_charging }}" min="10" max="3600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle while charging (frequent updates for charging progress)</small>
+    </div>
   </fieldset>
   <button type="submit" name="action" value="save_settings">Save General Options</button>
 </form>
