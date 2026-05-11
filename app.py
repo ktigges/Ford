@@ -4915,16 +4915,30 @@ def create_app():
     app.config["STARTUP_DELAY_SECONDS"] = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
 
     def _delayed_startup():
+        import time
         developing_mode = "off"
         startup_delay_seconds = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
-        try:
-            if db.is_available():
-                developing_mode = _get_setting("developing")
-                startup_delay_raw = (_get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"]).strip()
-                startup_delay_seconds = int(startup_delay_raw)
-                startup_delay_seconds = max(0, min(300, startup_delay_seconds))
-        except Exception as exc:
-            log.warning("Failed reading developing mode at startup: %s", exc)
+        
+        # Try to read actual settings from DB, with retries for slow startup
+        db_retry_count = 0
+        db_max_retries = 5
+        while db_retry_count < db_max_retries:
+            try:
+                if db.is_available():
+                    developing_mode = _get_setting("developing") or "off"
+                    startup_delay_raw = (_get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"]).strip()
+                    startup_delay_seconds = int(startup_delay_raw)
+                    startup_delay_seconds = max(0, min(300, startup_delay_seconds))
+                    log.info("Read startup settings from database (develop=%s, delay=%ds)", developing_mode, startup_delay_seconds)
+                    break  # Successfully read from DB
+            except Exception as exc:
+                db_retry_count += 1
+                if db_retry_count < db_max_retries:
+                    log.debug("DB settings read attempt %d/%d failed, retrying in 1s: %s", db_retry_count, db_max_retries, exc)
+                    time.sleep(1)
+                else:
+                    log.warning("Could not read DB settings after %d attempts, using defaults: %s", db_max_retries, exc)
+        
         app.config["STARTUP_DELAY_SECONDS"] = startup_delay_seconds
 
         if developing_mode == "on":
@@ -4933,12 +4947,12 @@ def create_app():
         else:
             if startup_delay_seconds > 0:
                 log.info("Delaying poller/UI startup for %s seconds to allow normalization...", startup_delay_seconds)
-                import time
                 time.sleep(startup_delay_seconds)
             else:
                 log.info("Startup delay is 0 seconds; UI and poller will start immediately.")
             app.config["STARTUP_READY"] = True
             log.info("Startup pause complete. UI and poller now enabled.")
+        
         # Start poller if configured
         try:
             if db.is_available() and (_get_setting("autostart_poller") == "on"):
