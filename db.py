@@ -30,8 +30,8 @@ def init_pool() -> None:
     global _pool, _available
     db = config.database()
     _pool = ThreadedConnectionPool(
-        minconn=1,
-        maxconn=5,
+        minconn=2,
+        maxconn=15,
         host=db["host"],
         port=db["port"],
         dbname=db["name"],
