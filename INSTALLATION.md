@@ -3,14 +3,14 @@
 ## System Requirements
 
 ### Operating System
-- Linux (Ubuntu 20.04+, Debian 11+) or macOS with Homebrew
-- Python 3.10+
-- PostgreSQL 14+ with proper development libraries
+Linux (Ubuntu 20.04+, Debian 11+) or macOS with Homebrew
+Python 3.10+
+Docker (required for PostgreSQL container)
 
 ### Hardware (Recommended)
-- 2+ CPU cores
-- 4GB RAM minimum (8GB recommended for background jobs)
-- 100GB+ storage for telemetry history
+2+ CPU cores
+4GB RAM minimum (8GB recommended for background jobs)
+100GB+ storage for telemetry history
 
 ---
 
@@ -18,45 +18,32 @@
 
 ### On Ubuntu/Debian:
 
+Install Python, development tools, and Docker:
+
 ```bash
-# Update package manager
 sudo apt-get update
 sudo apt-get upgrade
 
-# Install Python and development tools
 sudo apt-get install python3 python3-venv python3-dev build-essential git
-
-# Install PostgreSQL and client tools (REQUIRED)
-sudo apt-get install postgresql postgresql-contrib postgresql-client
-
-# Install PostGIS (OPTIONAL but recommended for 5-10x charger lookup speedup)
-sudo apt-get install postgresql-16-postgis-3
-
-# Install PostgreSQL client tools for backups (RECOMMENDED)
-sudo apt-get install postgresql-client
-
-# Install system libraries for Python packages
+sudo apt-get install docker.io
 sudo apt-get install libpq-dev openssl libssl-dev
+```
+
+Add your user to the docker group:
+
+```bash
+sudo usermod -aG docker $USER
 ```
 
 ### On macOS (with Homebrew):
 
 ```bash
-# Update Homebrew
 brew update
-
-# Install Python
 brew install python@3.10
-
-# Install PostgreSQL (if not already installed)
-brew install postgresql
-
-# Install PostGIS (optional)
-brew install postgis
-
-# Verify PostgreSQL is running
-brew services list | grep postgresql
+brew install docker
 ```
+
+Verify Docker is running. If using Docker Desktop, it should be available automatically.
 
 ---
 
@@ -90,66 +77,83 @@ pip install --upgrade pip setuptools wheel
 ## Step 4: Install Python Dependencies
 
 ```bash
-# From the Ford-dev directory with venv activated
 pip install -r requirements.txt
 ```
 
-**What gets installed:**
-- `Flask` - Web framework
-- `psycopg2-binary` - PostgreSQL driver
-- `requests` - HTTP library
-- `xgboost` - ML model for energy prediction
-- `scikit-learn`, `pandas`, `numpy` - ML dependencies
-- `matplotlib`, `joblib` - Data visualization and utilities
+What gets installed: Flask, psycopg2-binary, requests, xgboost, scikit-learn, pandas, numpy, matplotlib, joblib
 
 ---
 
-## Step 5: PostgreSQL Database Setup
+## Step 5: PostgreSQL Database Setup (Docker Container)
 
-### 5A: Create Database and User (if not already done)
+### 5A: Run the Installation Script
+
+The install script automatically sets up a Docker container with PostgreSQL and PostGIS:
 
 ```bash
-# Connect to PostgreSQL default database
-sudo -u postgres psql
-
-# In psql, run:
-CREATE DATABASE lightning;
-CREATE USER lightning WITH PASSWORD 'your_secure_password';
-GRANT ALL PRIVILEGES ON DATABASE lightning TO lightning;
-\q
+cd /path/to/Ford-dev
+./scripts/install.sh
 ```
 
-### 5B: Initialize Database Schema
+This script will:
+1. Create a Docker volume for data persistence
+2. Pull the postgres:16-postgis image (includes PostGIS extension)
+3. Create and start the database container
+4. Initialize the schema
+5. Set up PostGIS spatial extension
+
+The database will be configured with:
+- Container: lightning-db
+- Host: localhost
+- Port: 5432
+- User: lightning
+- Password: lightningpass
+- Database: lightning
+
+### 5B: Verify Database Connection
 
 ```bash
-# From Ford-dev directory with venv activated
 python3 << 'EOF'
 import config
 import db
 
 config.load()
 db.init_pool()
-success, msg = db.apply_schema()
-print(f"Schema applied: {msg}")
+
+# Test connection
+try:
+    result = db.fetch_one("SELECT 1")
+    print("Database connection successful")
+except Exception as e:
+    print(f"Connection failed: {e}")
+
 db.close_pool()
 EOF
 ```
 
-### 5C: Enable PostGIS (if installed)
+### 5C: Verify PostGIS is Available
+
+PostGIS is automatically enabled during installation. Verify it:
 
 ```bash
-# If you installed postgresql-16-postgis-3
-python3 enable_postgis.py
-```
+python3 << 'EOF'
+import config
+import db
 
-**Output should be:**
-```
-Database connection pool initialised (host=localhost, db=lightning)
-Enabling PostGIS extension...
-✓ PostGIS extension enabled
-✓ PostGIS version: 3.4.0
-✓ Spatial index already exists (or created)
-✓ PostGIS setup complete!
+config.load()
+db.init_pool()
+
+try:
+    result = db.fetch_one("SELECT postgis_version();")
+    if result:
+        print(f"PostGIS is enabled: {result[0]}")
+    else:
+        print("PostGIS extension not found (charger lookups will use Haversine fallback)")
+except Exception as e:
+    print(f"PostGIS check failed: {e}")
+
+db.close_pool()
+EOF
 ```
 
 ---
@@ -159,11 +163,10 @@ Enabling PostGIS extension...
 ### Create `config.json`
 
 ```bash
-cp config.json.example config.json  # If example provided
-# OR create from scratch:
+cp config.json.example config.json
 ```
 
-**Minimal `config.json` template:**
+Or create manually:
 
 ```json
 {
@@ -178,158 +181,188 @@ cp config.json.example config.json  # If example provided
     "port": 5432,
     "name": "lightning",
     "user": "lightning",
-    "password": "your_secure_password",
+    "password": "lightningpass",
     "connect_timeout": 10
   },
   "ssl": {
     "enabled": true,
-    "cert_file": "/path/to/cert.pem",
-    "key_file": "/path/to/key.pem"
-  },
-  "collector": {
-    "poll_interval_default": 60,
-    "poll_interval_max_failures": 3
+    "cert_file": "certs/cert.pem",
+    "key_file": "certs/key.pem"
   }
 }
 ```
 
 ---
 
-## Step 7: Run the Application
+## Step 7: Backup Tool Setup (pg_dump)
 
-### Option A: Development Server
-
-```bash
-# Activate virtual environment
-source venv/bin/activate
-
-# Run Flask development server
-python3 app.py
-```
-
-**Output:**
-```
-Starting MLLighting app (env=development)
-Database connection pool initialised...
-WARNING: This is a development server. Do not use it in production deployment.
-Running on https://localhost:5000
-```
-
-### Option B: Production Server (with Gunicorn)
+Backups require pg_dump, which is installed inside the Docker container. The app uses docker exec to run backups:
 
 ```bash
-# Install Gunicorn
-pip install gunicorn
+docker exec lightning-db pg_dump -U lightning lightning > backup.sql
+```
 
-# Run with Gunicorn
-gunicorn --workers 4 --bind 0.0.0.0:5000 --certfile=cert.pem --keyfile=key.pem app:app
+This is automatically used by the backup scheduler in the app. Manual backup command:
+
+```bash
+# From Ford-dev directory
+python3 << 'EOF'
+import subprocess
+result = subprocess.run(
+    ["docker", "exec", "lightning-db", "pg_dump", "-U", "lightning", "lightning"],
+    capture_output=True,
+    text=True
+)
+with open("backup.sql", "w") as f:
+    f.write(result.stdout)
+print("Backup created: backup.sql")
+EOF
 ```
 
 ---
 
-## Step 8: Verify Installation
+## Step 8: Run the Application
+
+### Option A: Development Server
+
+```bash
+source venv/bin/activate
+python3 app.py
+```
+
+Expected output shows database pool initialization and Flask server starting.
+### Option B: Production Server (with Gunicorn)
+
+```bash
+pip install gunicorn
+gunicorn --workers 4 --bind 0.0.0.0:5000 --certfile=certs/cert.pem --keyfile=certs/key.pem app:app
+```
+
+---
+
+## Step 9: Verify Installation
 
 ### Check Database Connection
 
 ```bash
-# From Ford-dev directory with venv activated
+source venv/bin/activate
 python3 << 'EOF'
 import config
 import db
 
-try:
-    config.load()
-    db.init_pool()
-    if db.is_available():
-        print("✓ Database connection successful!")
-        
-        # Check for PostgreSQL version
-        result = db.fetch_one("SELECT version();")
-        print(f"✓ {result['version'].split(',')[0]}")
-        
-        # Check for PostGIS
-        postgis = db.fetch_one("SELECT postgis_version();")
-        if postgis:
-            print(f"✓ PostGIS available: {postgis['postgis_version']}")
-        else:
-            print("⚠ PostGIS not available (optional)")
-    else:
-        print("✗ Database not available")
-except Exception as e:
-    print(f"✗ Error: {e}")
-finally:
-    db.close_pool()
+config.load()
+db.init_pool()
+
+# Test connection
+result = db.fetch_one("SELECT version();")
+print(f"Database: {result[0]}")
+
+db.close_pool()
 EOF
 ```
 
-### Check Python Dependencies
+### Check PostGIS Availability
 
 ```bash
+source venv/bin/activate
 python3 << 'EOF'
-required = ['flask', 'psycopg2', 'requests', 'xgboost', 'sklearn', 'numpy', 'pandas']
-for pkg in required:
+import config
+import db
+
+config.load()
+db.init_pool()
+
+result = db.fetch_one("SELECT postgis_version();")
+if result:
+    print(f"PostGIS: {result[0]}")
+else:
+    print("PostGIS: Not available (charger lookups will use Haversine)")
+
+db.close_pool()
+EOF
+```
+
+### Check Python Packages
+
+```bash
+source venv/bin/activate
+python3 << 'EOF'
+packages = ['flask', 'psycopg2', 'requests', 'xgboost', 'sklearn', 'numpy', 'pandas']
+for pkg in packages:
     try:
         __import__(pkg)
-        print(f"✓ {pkg}")
+        print(f"OK: {pkg}")
     except ImportError:
-        print(f"✗ {pkg} - MISSING!")
+        print(f"MISSING: {pkg}")
 EOF
-```
-
-### Check Flask Routes
-
-```bash
-curl -k https://localhost:5000/
-# Should return HTML dashboard (or startup_wait.html if initializing)
 ```
 
 ---
 
 ## Troubleshooting
 
-### PostgreSQL Connection Failed
+### Docker Container Issues
+
+Check if container is running:
 
 ```bash
-# Check if PostgreSQL is running
-sudo systemctl status postgresql
-
-# Start if not running
-sudo systemctl start postgresql
-
-# Check connection
-psql -U lightning -d lightning -c "SELECT 1;"
+docker ps | grep lightning-db
 ```
 
-### PostGIS Not Found
+Start container if stopped:
 
 ```bash
-# Verify PostGIS package is installed
-sudo apt list --installed | grep postgis
-
-# If not, install:
-sudo apt-get install postgresql-16-postgis-3
-
-# Then enable:
-python3 enable_postgis.py
+./scripts/start_db_container.sh
 ```
 
-### pg_dump Not Found (Backups Failing)
+View container logs:
 
 ```bash
-# Check if postgresql-client is installed
-which pg_dump
+docker logs lightning-db
+```
 
-# If not found, install:
-sudo apt-get install postgresql-client
+### Database Connection Failed
 
-# Verify it works
-pg_dump --version
+Test from container:
+
+```bash
+docker exec lightning-db pg_isready -U lightning -d lightning
+```
+
+Check network:
+
+```bash
+docker network inspect bridge | grep lightning
+```
+
+### PostGIS Issues
+
+PostGIS is automatically installed in the postgres:16-postgis image. If queries fail, reinitialize:
+
+```bash
+docker exec lightning-db psql -U lightning -d lightning -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+docker exec lightning-db psql -U lightning -d lightning -c "CREATE INDEX IF NOT EXISTS idx_ev_stations_location ON ev_stations USING GIST(location);"
+```
+
+### Backup/pg_dump Issues
+
+pg_dump is available in the Docker container. Verify:
+
+```bash
+docker exec lightning-db pg_dump --version
+```
+
+Test backup:
+
+```bash
+docker exec lightning-db pg_dump -U lightning lightning | head -5
 ```
 
 ### Python Virtual Environment Issues
 
+Recreate if broken:
+
 ```bash
-# If venv is broken, recreate it
 rm -rf venv
 python3 -m venv venv
 source venv/bin/activate
@@ -338,8 +371,10 @@ pip install -r requirements.txt
 
 ### Database Schema Errors
 
+Reset schema (WARNING: deletes all data):
+
 ```bash
-# Reset database (WARNING: deletes all data!)
+source venv/bin/activate
 python3 << 'EOF'
 import config
 import db
@@ -347,11 +382,9 @@ import db
 config.load()
 db.init_pool()
 
-# Drop all tables
 db.execute("DROP SCHEMA public CASCADE;")
 db.execute("CREATE SCHEMA public;")
 
-# Re-apply schema
 success, msg = db.apply_schema()
 print(f"Schema reset: {msg}")
 db.close_pool()
@@ -360,41 +393,38 @@ EOF
 
 ---
 
-## Dependency Summary
+## Component Requirements
 
-| Component | Type | Status | Used For |
-|-----------|------|--------|----------|
-| Python 3.10+ | System | **Required** | Runtime |
-| PostgreSQL 14+ | System | **Required** | Data storage |
-| psycopg2-binary | Python | **Required** | DB connection |
-| Flask | Python | **Required** | Web framework |
-| xgboost | Python | **Required** | ML energy model |
-| PostGIS | System | Optional | 5-10x faster charger lookups |
-| postgresql-client | System | Recommended | Backups (pg_dump) |
-| Gunicorn | Python | Optional | Production WSGI server |
+Python 3.10+ - Required for runtime
+Docker - Required for PostgreSQL container
+Flask 3.1.3 - Required for web framework
+PostgreSQL 16 with PostGIS - Required (Docker container includes both)
+psycopg2-binary - Required for database driver
+xgboost, scikit-learn, pandas, numpy - Required for ML energy model
+Gunicorn - Optional for production deployment
 
 ---
 
-## Quick Start Checklist
+## Quick Start Steps
 
-- [ ] System dependencies installed (`postgresql`, `python3-dev`, `build-essential`)
-- [ ] Python virtual environment created and activated
-- [ ] Python dependencies installed (`pip install -r requirements.txt`)
-- [ ] PostgreSQL database created and `config.json` configured
-- [ ] Database schema applied (`python3 enable_postgis.py`)
-- [ ] Flask development server started (`python3 app.py`)
-- [ ] Dashboard accessible at https://localhost:5000/
-- [ ] PostGIS installed (optional, run `python3 enable_postgis.py` if available)
-- [ ] pg_dump available (optional, for backups: `apt-get install postgresql-client`)
+1. Install system dependencies (Python, Docker)
+2. Clone repository and checkout dev/server-sandbox
+3. Create Python virtual environment
+4. Install Python dependencies from requirements.txt
+5. Run ./scripts/install.sh to create Docker container and initialize database
+6. Update config.json with your settings
+7. Run the application (python3 app.py for development)
 
 ---
 
 ## Next Steps
 
-1. **Ford OAuth Configuration**: Add Ford API credentials to `config.json`
-2. **Vehicle Pairing**: Use Settings → OAuth Config to authorize your vehicle
-3. **Poller Setup**: Enable polling in Settings → General Options
-4. **Charger Database**: Import public charger data (Settings → Chargers)
-5. **Trip Planner**: Calculate test routes (Trip Planner page)
+After installation is complete:
 
-For detailed component documentation, see `README.md`.
+1. Ford OAuth Configuration: Add Ford API credentials to config.json
+2. Vehicle Pairing: Use Settings page to authorize your vehicle with OAuth
+3. Poller Setup: Enable vehicle polling in Settings for telemetry collection
+4. Charger Database: Import public charger data from Settings
+5. Trip Planner: Calculate test routes using the Trip Planner page
+
+For detailed component documentation, see README.md.

@@ -1,81 +1,78 @@
 # Startup Issues Diagnosis & Solutions
 
-## Issues Found
+## PostgreSQL and PostGIS Setup
 
-### 1. ❌ PostGIS Not Installed (System Level)
-**Problem**: PostGIS extension is not available on the system
-```
-Error: extension "postgis" is not available
-DETAIL: Could not open extension control file "/usr/share/postgresql/16/extension/postgis.control"
-```
+PostGIS is automatically included in your Docker PostgreSQL container. If charger lookups are slow, verify PostGIS is enabled:
 
-**Impact**: 
-- Spatial charger lookups use slow Haversine formula instead of efficient PostGIS ST_DWithin()
-- Trip planning is ~5-10x slower than optimal
-- Does NOT prevent app from working (fallback works fine)
+Check if PostGIS is available:
 
-**Solution** (Run on database server):
 ```bash
-# Install PostGIS system package for PostgreSQL 16
-sudo apt-get update
-sudo apt-get install postgresql-16-postgis-3
+source venv/bin/activate
+python3 << 'EOF'
+import config
+import db
 
-# Then run this script to enable it:
-python enable_postgis.py
+config.load()
+db.init_pool()
+
+result = db.fetch_one("SELECT postgis_version();")
+if result:
+    print(f"PostGIS enabled: {result[0]}")
+else:
+    print("PostGIS not available")
+    
+db.close_pool()
+EOF
+```
+
+If PostGIS is not available, enable it in the container:
+
+```bash
+docker exec lightning-db psql -U lightning -d lightning -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 ```
 
 ---
 
-### 2. ⚠️ pg_dump Not in PATH
-**Problem**: Scheduled backups fail because `pg_dump` is not accessible
-```
-WARNING: Scheduled backup failed: [Errno 2] No such file or directory: 'pg_dump'
-```
+## Backup (pg_dump) Setup
 
-**Impact**: 
-- Automatic backups are silently failing
-- No error reporting to users
-- Data loss risk if backup scheduler was intended
+pg_dump is available in the Docker container. The app automatically uses it for scheduled backups via docker exec.
 
-**Solution** (Run on backup system):
+Test backup functionality:
+
 ```bash
-# Option A: Install postgresql client tools
-sudo apt-get install postgresql-client
+docker exec lightning-db pg_dump -U lightning lightning | head -5
+```
 
-# Option B: Add PostgreSQL bin directory to PATH
-export PATH=$PATH:/usr/lib/postgresql/16/bin
-# Add to ~/.bashrc to persist
+If you need to restore a backup:
+
+```bash
+docker exec -i lightning-db psql -U lightning lightning < backup.sql
 ```
 
 ---
 
-### 3. ✅ FIXED: Startup "Loses Config" Issue
-**Problem**: App appears to lose settings on restart
+## Startup "Loses Config" Issue - What Was Fixed
 
-**Root Causes** (NOW FIXED):
-- Database settings read during startup would fail if DB was slow
+Previous versions had startup configuration issues that have been fixed:
+
+Problems that were occurring:
+- Database settings read during startup would timeout if DB was slow
 - No retries for slow database connections
-- UI would see "startup_wait.html" indefinitely without auto-refresh
+- Startup wait page did not auto-refresh
 - Settings would fall back to defaults
 
-**Solutions Applied**:
-- ✓ Added retry logic (up to 5 attempts) to read DB settings during startup
-- ✓ Added 1-second delays between retry attempts
-- ✓ Auto-refresh every 2 seconds on startup_wait.html page
-- ✓ Better logging for debugging startup issues
+Fixes applied:
+- Retry logic added (up to 5 attempts) to read DB settings during startup
+- 1-second delays between retry attempts
+- Auto-refresh every 2 seconds on startup_wait.html page
+- Better logging for debugging startup issues
 
 ---
 
-## Startup Sequence (Now Improved)
+## Startup Sequence
 
-### Before Changes ❌
-1. App starts immediately, accepts requests
-2. Daemon thread sleeps for 30 seconds (startup_delay)
-3. During sleep, all requests get 503 "startup_wait" page
-4. User must manually refresh after waiting
-5. If DB slow, settings read as defaults
+How the application starts:
 
-### After Changes ✓
 1. App starts immediately, accepts requests
 2. Daemon thread attempts to read DB settings (up to 5 retries)
 3. During delay, requests get 503 with auto-refresh every 2 seconds

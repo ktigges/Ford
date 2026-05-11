@@ -9,7 +9,7 @@ PYTHON_CMD="${PYTHON_CMD:-python3}"
 
 DB_CONTAINER="${DB_CONTAINER:-lightning-db}"
 DB_VOLUME="${DB_VOLUME:-lightning_pgdata}"
-POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16}"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgis/postgis:16-3.4}"
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-lightning}"
