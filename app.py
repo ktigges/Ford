@@ -778,6 +778,89 @@ def create_app():
             (key, value, description),
         )
 
+    def _get_component_status() -> dict:
+        """Check status of all system components and dependencies."""
+        status = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "database": {},
+            "postgis": {},
+            "python_packages": {},
+        }
+
+        try:
+            # Database connection
+            if db.is_available():
+                status["database"]["status"] = "OK"
+                status["database"]["connected"] = True
+                
+                # PostgreSQL version
+                version_row = db.fetch_one("SELECT version()")
+                if version_row:
+                    version_str = version_row[0].split(",")[0] if version_row[0] else "Unknown"
+                    status["database"]["version"] = version_str
+            else:
+                status["database"]["status"] = "FAILED"
+                status["database"]["connected"] = False
+        except Exception as e:
+            status["database"]["status"] = "ERROR"
+            status["database"]["connected"] = False
+            status["database"]["error"] = str(e)
+
+        try:
+            # PostGIS extension
+            postgis_row = db.fetch_one("SELECT postgis_version()")
+            if postgis_row:
+                postgis_ver = postgis_row[0] if postgis_row[0] else "Unknown"
+                status["postgis"]["available"] = True
+                status["postgis"]["version"] = postgis_ver
+                status["postgis"]["status"] = "OK"
+                
+                # Check spatial index
+                index_row = db.fetch_one(
+                    "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_ev_stations_location'"
+                )
+                status["postgis"]["spatial_index"] = "EXISTS" if index_row else "MISSING"
+            else:
+                status["postgis"]["available"] = False
+                status["postgis"]["status"] = "NOT INSTALLED"
+        except Exception as e:
+            status["postgis"]["available"] = False
+            status["postgis"]["status"] = "ERROR"
+            status["postgis"]["error"] = str(e)
+
+        # Python packages
+        packages = {
+            "flask": ("Flask", None),
+            "psycopg2": ("psycopg2", None),
+            "requests": ("requests", None),
+            "xgboost": ("xgboost", "xgboost.__version__"),
+            "sklearn": ("scikit-learn", "sklearn.__version__"),
+            "numpy": ("numpy", "numpy.__version__"),
+            "pandas": ("pandas", "pandas.__version__"),
+        }
+        
+        for pkg_name, (display_name, version_attr) in packages.items():
+            try:
+                mod = __import__(pkg_name)
+                version = "installed"
+                if version_attr:
+                    version = eval(version_attr)
+                status["python_packages"][display_name] = {
+                    "status": "OK",
+                    "version": version
+                }
+            except ImportError:
+                status["python_packages"][display_name] = {
+                    "status": "MISSING"
+                }
+            except Exception as e:
+                status["python_packages"][display_name] = {
+                    "status": "ERROR",
+                    "error": str(e)
+                }
+
+        return status
+
     def _charger_failure_class(run: dict | None) -> str:
         """Classify charger sync failures into clearer user-facing categories."""
         if not run:
@@ -2049,6 +2132,17 @@ def create_app():
             settings=current,
             backup_logs=backup_logs,
         )
+
+    # Status page
+    @app.route("/settings/status", methods=["GET"])
+    def settings_status_page():
+        status = _get_component_status()
+        return render_template("settings_status_page.html", status=status)
+
+    @app.route("/api/system-status", methods=["GET"])
+    def api_system_status():
+        status = _get_component_status()
+        return jsonify(status)
 
     # ── Log viewing routes ─────────────────────────────────────────────
     @app.route("/logs", methods=["GET"])
