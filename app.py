@@ -2032,6 +2032,7 @@ def create_app():
             return redirect(url_for("auth_login"))
 
     @app.route("/auth/login", methods=["GET"])
+    @app.route("/oauth/login", methods=["GET"])
     def auth_login():
         """Start Entra External ID login flow."""
         if not app.config.get("EXTERNAL_ID_ENABLED"):
@@ -2048,6 +2049,7 @@ def create_app():
             return redirect(url_for("dashboard"))
 
     @app.route("/auth/logout", methods=["GET"])
+    @app.route("/oauth/logout", methods=["GET"])
     def auth_logout():
         """Clear local auth session and optionally call Entra logout endpoint."""
         _clear_external_auth_session()
