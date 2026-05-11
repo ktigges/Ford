@@ -789,44 +789,77 @@ def create_app():
 
         try:
             # Database connection
-            if db.is_available():
+            result = db.fetch_one("SELECT 1")
+            if result is not None:
                 status["database"]["status"] = "OK"
                 status["database"]["connected"] = True
                 
                 # PostgreSQL version
-                version_row = db.fetch_one("SELECT version()")
-                if version_row:
-                    version_str = version_row[0].split(",")[0] if version_row[0] else "Unknown"
-                    status["database"]["version"] = version_str
+                try:
+                    version_row = db.fetch_one("SELECT version() as ver")
+                    if version_row:
+                        # Handle both dict-like and tuple-like results
+                        if isinstance(version_row, dict):
+                            version_str = version_row.get("ver", "Unknown")
+                        else:
+                            version_str = version_row[0] if version_row else "Unknown"
+                        
+                        if version_str and isinstance(version_str, str):
+                            version_str = version_str.split(",")[0]
+                        status["database"]["version"] = version_str
+                except Exception as ve:
+                    status["database"]["version"] = "Unable to fetch version"
             else:
-                status["database"]["status"] = "FAILED"
+                status["database"]["status"] = "NO RESULT"
                 status["database"]["connected"] = False
         except Exception as e:
             status["database"]["status"] = "ERROR"
             status["database"]["connected"] = False
-            status["database"]["error"] = str(e)
+            # Format the error message better
+            if hasattr(e, '__class__'):
+                error_msg = f"{e.__class__.__name__}: {str(e)}" if str(e) else e.__class__.__name__
+            else:
+                error_msg = str(e)
+            status["database"]["error"] = error_msg if error_msg and error_msg.strip() else "Connection failed"
 
         try:
             # PostGIS extension
-            postgis_row = db.fetch_one("SELECT postgis_version()")
+            postgis_row = db.fetch_one("SELECT postgis_version() as pgver")
             if postgis_row:
-                postgis_ver = postgis_row[0] if postgis_row[0] else "Unknown"
-                status["postgis"]["available"] = True
-                status["postgis"]["version"] = postgis_ver
-                status["postgis"]["status"] = "OK"
-                
-                # Check spatial index
-                index_row = db.fetch_one(
-                    "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_ev_stations_location'"
-                )
-                status["postgis"]["spatial_index"] = "EXISTS" if index_row else "MISSING"
+                # Handle both dict-like and tuple-like results
+                if isinstance(postgis_row, dict):
+                    postgis_ver = postgis_row.get("pgver")
+                else:
+                    postgis_ver = postgis_row[0] if postgis_row else None
+                    
+                if postgis_ver:
+                    status["postgis"]["available"] = True
+                    status["postgis"]["version"] = postgis_ver
+                    status["postgis"]["status"] = "OK"
+                    
+                    # Check spatial index
+                    try:
+                        index_row = db.fetch_one(
+                            "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_ev_stations_location'"
+                        )
+                        status["postgis"]["spatial_index"] = "EXISTS" if index_row else "MISSING"
+                    except Exception:
+                        status["postgis"]["spatial_index"] = "UNKNOWN"
+                else:
+                    status["postgis"]["available"] = False
+                    status["postgis"]["status"] = "NOT INSTALLED"
             else:
                 status["postgis"]["available"] = False
                 status["postgis"]["status"] = "NOT INSTALLED"
         except Exception as e:
             status["postgis"]["available"] = False
             status["postgis"]["status"] = "ERROR"
-            status["postgis"]["error"] = str(e)
+            # Format the error message better
+            if hasattr(e, '__class__'):
+                error_msg = f"{e.__class__.__name__}: {str(e)}" if str(e) else e.__class__.__name__
+            else:
+                error_msg = str(e)
+            status["postgis"]["error"] = error_msg if error_msg and error_msg.strip() else "Query failed"
 
         # Python packages
         packages = {
@@ -844,10 +877,13 @@ def create_app():
                 mod = __import__(pkg_name)
                 version = "installed"
                 if version_attr:
-                    version = eval(version_attr)
+                    try:
+                        version = eval(version_attr)
+                    except Exception:
+                        version = "installed"
                 status["python_packages"][display_name] = {
                     "status": "OK",
-                    "version": version
+                    "version": str(version)
                 }
             except ImportError:
                 status["python_packages"][display_name] = {
@@ -856,7 +892,7 @@ def create_app():
             except Exception as e:
                 status["python_packages"][display_name] = {
                     "status": "ERROR",
-                    "error": str(e)
+                    "error": str(e) if str(e) else "Unknown"
                 }
 
         return status
