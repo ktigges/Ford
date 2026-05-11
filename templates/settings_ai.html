@@ -1,6 +1,7 @@
 
 
-<form method="post" class="card form-card" style="margin-bottom:2rem;">
+<form method="post" action="{{ url_for('settings') }}" class="card form-card" style="margin-bottom:2rem;">
+  <input type="hidden" name="return_to" value="settings_ai_page">
   <h2 style="margin-bottom:1.5rem;">ML Model Retraining</h2>
   <div style="margin-bottom:1rem;">
     <label><input type="checkbox" name="ml_retrain_schedule_enabled" {% if settings.ml_retrain_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Retraining</label>

@@ -179,6 +179,7 @@ def create_app():
         "conservative_polling": "off",
         "autostart_poller": "off",
         "developing": "off",
+        "startup_delay_seconds": "30",
         "poll_interval_off": "120",
         "poll_interval_on": "60",
         "poll_interval_moving": "15",
@@ -1853,6 +1854,7 @@ def create_app():
             "conservative_polling": _get_setting("conservative_polling"),
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
+            "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -1864,6 +1866,30 @@ def create_app():
             "settings_options_page.html",
             settings=current,
             sequence_alignment=sequence_alignment,
+            ssl=ssl_cfg,
+            ssl_status=ssl_status,
+        )
+
+    # SSL / TLS sub-page
+    @app.route("/settings/ssl-page", methods=["GET"])
+    def settings_ssl_page():
+        ssl_cfg = config.ssl_config()
+        ssl_status = {
+            "active": app.config.get("SSL_ACTIVE", False),
+            "recovery": app.config.get("SSL_RECOVERY", False),
+        }
+        # Validate current user certs if they exist
+        if ssl_cfg.get("cert") and ssl_cfg.get("key"):
+            if os.path.isfile(ssl_cfg["cert"]) and os.path.isfile(ssl_cfg["key"]):
+                valid, msg = crypto.validate_ssl_files(ssl_cfg["cert"], ssl_cfg["key"])
+                ssl_status["cert_valid"] = valid
+                ssl_status["cert_message"] = msg
+            else:
+                ssl_status["cert_valid"] = False
+                ssl_status["cert_message"] = "Certificate or key file not found on disk"
+
+        return render_template(
+            "settings_ssl_page.html",
             ssl=ssl_cfg,
             ssl_status=ssl_status,
         )
@@ -3083,6 +3109,16 @@ def create_app():
         """Application settings: display units, polling intervals, log level."""
         if request.method == "POST":
             action = (request.form.get("action") or "save_settings").strip()
+            redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+            if redirect_endpoint not in {
+                "settings",
+                "settings_options_page",
+                "settings_chargers_page",
+                "settings_ai_page",
+                "settings_backup_page",
+                "settings_ssl_page",
+            }:
+                redirect_endpoint = "settings"
 
             if action in ("save_retrain_options", "run_retrain_now"):
                 retrain_schedule_enabled = (
@@ -3143,7 +3179,7 @@ def create_app():
                         f"({retrain_after_x} drives).",
                         "success",
                     )
-                    return redirect(url_for("settings"))
+                    return redirect(url_for(redirect_endpoint))
 
                 started, reason = _start_ml_retrain_job(trigger="manual_settings")
                 if not started:
@@ -3155,7 +3191,7 @@ def create_app():
                         "You can leave this page; status updates below.",
                         "success",
                     )
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
 
             if action == "save_backup_schedule":
                 backup_enabled = "on" if request.form.get("backup_schedule_enabled") == "on" else "off"
@@ -3173,7 +3209,7 @@ def create_app():
                     f"Backup schedule saved ({'enabled' if backup_enabled == 'on' else 'disabled'}, every {backup_hours}h).",
                     "success",
                 )
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
 
             if action in ("save_charger_api_key", "save_charger_options", "save_charger_schedule", "run_charger_import"):
                 nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
@@ -3233,15 +3269,15 @@ def create_app():
                         f"Charger auto-update schedule saved ({'enabled' if auto_update == 'on' else 'disabled'}, every {auto_hours}h).",
                         "success",
                     )
-                    return redirect(url_for("settings"))
+                    return redirect(url_for(redirect_endpoint))
 
                 if action == "save_charger_api_key":
                     flash("NIL/NLR API key saved.", "success")
-                    return redirect(url_for("settings"))
+                    return redirect(url_for(redirect_endpoint))
 
                 if action == "save_charger_options":
                     flash("Charger import options saved.", "success")
-                    return redirect(url_for("settings"))
+                    return redirect(url_for(redirect_endpoint))
 
                 state_for_import = state_filter if charger_scope == "single_state" and state_filter else None
                 started, reason = _start_charger_import_job(
@@ -3266,7 +3302,7 @@ def create_app():
                         "Charger import started in background. You can leave this page; progress is logged and status updates below.",
                         "success",
                     )
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
 
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
 
@@ -3299,6 +3335,18 @@ def create_app():
             # Developing mode toggle
             developing = "on" if request.form.get("developing") == "on" else "off"
             _set_setting("developing", developing, "Disable startup delay for development")
+
+            startup_delay_raw = (request.form.get("startup_delay_seconds", _SETTINGS_DEFAULTS["startup_delay_seconds"]) or _SETTINGS_DEFAULTS["startup_delay_seconds"]).strip()
+            try:
+                startup_delay = int(startup_delay_raw)
+            except (ValueError, TypeError):
+                startup_delay = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
+            startup_delay = max(0, min(300, startup_delay))
+            _set_setting(
+                "startup_delay_seconds",
+                str(startup_delay),
+                "Startup delay before UI/poller become available (seconds); ignored in developing mode",
+            )
 
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
@@ -3342,7 +3390,7 @@ def create_app():
                 )
 
             flash("Settings saved.", "success")
-            return redirect(url_for("settings"))
+            return redirect(url_for(redirect_endpoint))
 
         current = {
             "units": _get_setting("units"),
@@ -3355,6 +3403,7 @@ def create_app():
             "conservative_polling": _get_setting("conservative_polling"),
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
+            "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
             "nlr_api_key": _get_setting("nlr_api_key") or "",
             "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
             "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
@@ -3454,6 +3503,16 @@ def create_app():
     def sequence_alignment_settings():
         """Manage database ID sequence alignment controls from the Settings page."""
         action = (request.form.get("action") or "").strip()
+        redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+        if redirect_endpoint not in {
+            "settings",
+            "settings_options_page",
+            "settings_chargers_page",
+            "settings_ai_page",
+            "settings_backup_page",
+            "settings_ssl_page",
+        }:
+            redirect_endpoint = "settings"
 
         if action == "run_now":
             aligned_tables = _run_sequence_alignment(force=True)
@@ -3481,28 +3540,32 @@ def create_app():
         else:
             flash("Unknown sequence-alignment action.", "warning")
 
-        return redirect(url_for("settings"))
+        return redirect(url_for(redirect_endpoint))
 
     @app.route("/settings/upload-image", methods=["POST"])
     def upload_vehicle_image():
         """Handle vehicle image upload from the settings page."""
+        redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+        if redirect_endpoint not in {"settings", "settings_ssl_page"}:
+            redirect_endpoint = "settings"
+
         file = request.files.get("vehicle_image")
         if not file or file.filename == "":
             flash("No file selected.", "error")
-            return redirect(url_for("settings"))
+            return redirect(url_for(redirect_endpoint))
 
         ALLOWED = {"png", "jpg", "jpeg", "gif", "webp"}
         ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
         if ext not in ALLOWED:
             flash(f"Invalid file type. Allowed: {', '.join(ALLOWED)}", "error")
-            return redirect(url_for("settings"))
+            return redirect(url_for(redirect_endpoint))
 
         filename = secure_filename(f"vehicle.{ext}")
         save_path = os.path.join(app.static_folder, filename)
         file.save(save_path)
         _set_setting("vehicle_image", filename, "Custom vehicle image filename")
         flash("Vehicle image updated.", "success")
-        return redirect(url_for("settings"))
+        return redirect(url_for(redirect_endpoint))
 
     @app.route("/settings/ssl", methods=["POST"])
     def ssl_settings():
@@ -3512,6 +3575,10 @@ def create_app():
         Paths and enabled flag are persisted to config.json.
         A restart is required for SSL changes to take effect.
         """
+        redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+        if redirect_endpoint not in {"settings", "settings_ssl_page"}:
+            redirect_endpoint = "settings"
+
         certs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
         os.makedirs(certs_dir, exist_ok=True)
 
@@ -3523,7 +3590,7 @@ def create_app():
             cert_ext = cert_file.filename.rsplit(".", 1)[-1].lower() if "." in cert_file.filename else ""
             if cert_ext not in ("pem", "crt", "cer"):
                 flash("Certificate must be .pem, .crt, or .cer", "error")
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
             cert_path = os.path.join(certs_dir, "server.crt")
             cert_file.save(cert_path)
             ssl_cfg["cert"] = cert_path
@@ -3535,7 +3602,7 @@ def create_app():
             key_ext = key_file.filename.rsplit(".", 1)[-1].lower() if "." in key_file.filename else ""
             if key_ext not in ("pem", "key"):
                 flash("Key must be .pem or .key", "error")
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
             key_path = os.path.join(certs_dir, "server.key")
             key_file.save(key_path)
             # Restrict permissions on the private key
@@ -3548,7 +3615,7 @@ def create_app():
 
         config.save_ssl(ssl_cfg)
         flash("SSL settings saved. Restart the application for changes to take effect.", "success")
-        return redirect(url_for("settings"))
+        return redirect(url_for(redirect_endpoint))
 
     # ── Manage Vehicles ──────────────────────────────────────────────
 
@@ -4750,22 +4817,31 @@ def create_app():
 
     # ── Startup pause and UI suppression ──
     app.config["STARTUP_READY"] = False
+    app.config["STARTUP_DELAY_SECONDS"] = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
 
     def _delayed_startup():
         developing_mode = "off"
+        startup_delay_seconds = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
         try:
             if db.is_available():
                 developing_mode = _get_setting("developing")
+                startup_delay_raw = (_get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"]).strip()
+                startup_delay_seconds = int(startup_delay_raw)
+                startup_delay_seconds = max(0, min(300, startup_delay_seconds))
         except Exception as exc:
             log.warning("Failed reading developing mode at startup: %s", exc)
+        app.config["STARTUP_DELAY_SECONDS"] = startup_delay_seconds
 
         if developing_mode == "on":
             app.config["STARTUP_READY"] = True
             log.info("Developing mode enabled: skipping startup delay.")
         else:
-            log.info("Delaying poller/UI startup for 30 seconds to allow normalization...")
-            import time
-            time.sleep(30)
+            if startup_delay_seconds > 0:
+                log.info("Delaying poller/UI startup for %s seconds to allow normalization...", startup_delay_seconds)
+                import time
+                time.sleep(startup_delay_seconds)
+            else:
+                log.info("Startup delay is 0 seconds; UI and poller will start immediately.")
             app.config["STARTUP_READY"] = True
             log.info("Startup pause complete. UI and poller now enabled.")
         # Start poller if configured
@@ -4806,7 +4882,10 @@ def create_app():
         safe = {"db_setup", "db_setup_test", "db_setup_create", "db_setup_restore", "db_setup_upload", "static"}
         if request.endpoint in safe or (request.endpoint and request.endpoint.startswith("static")):
             return
-        return render_template("startup_wait.html"), 503
+        return render_template(
+            "startup_wait.html",
+            startup_delay_seconds=app.config.get("STARTUP_DELAY_SECONDS", int(_SETTINGS_DEFAULTS["startup_delay_seconds"])),
+        ), 503
 
     return app
 

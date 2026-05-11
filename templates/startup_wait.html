@@ -34,7 +34,7 @@
     <div class="spinner"></div>
     <h2>MLLighting is starting up…</h2>
     <p>Please wait while the system normalizes and prepares the dashboard.<br>
-    This may take up to <b>30 seconds</b> after a restart or upgrade.</p>
+    This may take up to <b>{{ startup_delay_seconds|default(30) }} seconds</b> after a restart or upgrade.</p>
     <p style="color:#8ec6ff; font-size:1.1em; margin-top:2em;">If this message does not disappear after a minute, check your database and logs.</p>
   </div>
 </body>
