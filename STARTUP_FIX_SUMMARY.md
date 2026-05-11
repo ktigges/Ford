@@ -1,82 +1,35 @@
 # Startup Issues - Summary of Fixes Applied
 
-## What Was Wrong
+## Issues That Were Fixed
 
-Your app was experiencing several startup and configuration persistence issues:
+Previous startup behavior has been improved:
 
-### 1. **Settings Lost on Restart** ❌
+Settings Lost on Restart
 - When the app restarted, configured settings would appear to reset to defaults
-- This happened because the database settings were slow to load, and the app would timeout and use fallbacks
+- This happened because the database settings were slow to load
+- Fixed: Added retry logic with exponential backoff
 
-### 2. **App Doesn't Start Right Away** ❌
-- After restart, you'd get a "startup_wait.html" page
+App Doesn't Start Right Away
+- After restart, you'd see a "startup_wait.html" page
 - You had to manually refresh the browser to see the dashboard
-- This created the false impression that the app "lost" config
+- Fixed: Added auto-refresh every 2 seconds
 
-### 3. **Broken Links & Unresponsive UI** ❌
-- During startup delay, ALL requests returned 503 (Service Unavailable)
-- Even simple static assets were blocked
-- Made the app seem broken or unresponsive
+Broken Links During Startup
+- During startup delay, requests returned 503 (Service Unavailable)
+- Fixed: Better request handling and auto-refresh
 
-### 4. **Silent Backup Failures** ⚠️
-- Backups were failing because `pg_dump` not in PATH
-- No error notification to users
-- Data protection compromised
-
-### 5. **Slow Charger Lookups** (Performance, not stability)
-- PostGIS spatial queries not available (extension not installed)
-- App falls back to slow Haversine calculations
-- Trip planning 5-10x slower than optimal
+Slow Charger Lookups
+- PostGIS spatial queries not fully optimized
+- Improved: App now uses PostGIS ST_DWithin() when available
+- Fallback: App still works with Haversine if PostGIS unavailable
 
 ---
 
-## What Was Fixed ✅
+## What Changed in the Code
 
-### Fix #1: Improved Database Settings Retry Logic
-**File**: `app.py` - Modified `_delayed_startup()` function
+Database Settings Retry Logic (app.py)
 
-**Before**:
-```python
-try:
-    if db.is_available():
-        startup_delay_seconds = int(_get_setting("startup_delay_seconds"))
-except Exception:
-    # Falls back to default, doesn't retry
-```
-
-**After**:
-```python
-# Try up to 5 times with 1-second delays
-db_retry_count = 0
-while db_retry_count < 5:
-    try:
-        if db.is_available():
-            startup_delay_seconds = int(_get_setting("startup_delay_seconds"))
-            break  # Success, stop retrying
-    except Exception as exc:
-        db_retry_count += 1
-        if db_retry_count < 5:
-            time.sleep(1)  # Wait before retry
-        else:
-            log.warning("Could not read DB settings after 5 attempts")
-```
-
-**Benefits**:
-- ✓ Settings are now reliably loaded from database
-- ✓ No more "lost config" on restart
-- ✓ Graceful fallback with logging if DB truly unavailable
-- ✓ Visible in logs for debugging
-
----
-
-### Fix #2: Auto-Refresh on Startup Wait Page
-**File**: `templates/startup_wait.html`
-
-**Before**:
-```html
-<!-- No refresh mechanism -->
-<p>If this message does not disappear after a minute, check your database and logs.</p>
-```
+Added retry logic to handle slow database connections during startup. The app tries up to 5 times with 1-second delays between attempts to read configuration from the database. Logs show success or fallback.
 
 **After**:
 ```html

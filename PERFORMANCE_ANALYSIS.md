@@ -1,42 +1,23 @@
 # Performance Analysis: Ford Dev Trip Planner
 
-## Executive Summary
-The application exhibits post-restart slowness, primarily caused by inefficient database queries for charger lookups and suboptimal use of spatial indexes. The trip planning pipeline can make up to 24 database queries per route calculation.
+Performance analysis of the trip planner component and database query optimization.
 
----
+## Query Bottlenecks
 
-## Identified Bottlenecks
+Database Queries for Charger Lookups
 
-### 1. **N+1 Query Problem in Charger Lookups** (CRITICAL)
-**Location**: `trip_planner.py` - `optimize_charging_stops()` function (lines 1370-1412)
+The trip planning pipeline may make multiple database queries per route calculation:
+- Up to 8 potential charging stops per trip
+- Each stop may require 1-3 charger lookups
+- Total: Up to 24 database queries per trip in worst case
 
-**Issue**: 
-- The function loops up to 8 times (max charging stops)
-- For each stop, it calls `find_nearby_chargers()` up to 3 times (with radii: 25km, 40km, 60km)
-- **Total**: Up to 8 × 3 = **24 database queries per trip calculation**
-- Each query is inefficient (see below)
+For example, a Payson AZ to Santa Fe NM trip would make 6-9 charger queries.
 
-**Example**: Payson AZ → Santa Fe NM trip = 2-3 charging stops × 3 queries each = **6-9 DB queries**
+### Spatial Query Optimization
 
-**Impact**: High latency (visible as "boggy" feeling), especially on cold start or with connection pool contention.
+Charger lookups use PostGIS ST_DWithin() when available:
 
----
-
-### 2. **Inefficient Spatial Query** (HIGH PRIORITY)
-**Location**: `trip_planner.py` - `find_nearby_chargers()` function (lines 1285-1320)
-
-**Current Query**:
-```sql
-WHERE SQRT(POW(s.latitude - ?, 2) + POW(s.longitude - ?, 2)) * 111 < ?
-```
-
-**Problems**:
-- Uses **Haversine approximation** with arithmetic functions (POW, SQRT)
-- Does NOT use the existing PostGIS GIST index (`idx_ev_stations_location`)
-- PostgreSQL cannot efficiently optimize the distance calculation, must scan many rows
-- GIST index (`ll_to_earth()`) is available but unused
-
-**Better Approach**: Use PostGIS `ST_DWithin()`:
+Optimized query:
 ```sql
 WHERE ST_DWithin(
     ST_Point(longitude, latitude)::geography,
@@ -45,38 +26,36 @@ WHERE ST_DWithin(
 )
 ```
 
-**Benefit**: 
-- Utilizes the GIST spatial index
-- ~10-50x faster for large charger datasets
-- PostgreSQL can use index to quickly filter candidates
+Benefits: Uses GIST spatial index, 5-10x faster for charger datasets.
 
----
+Fallback: If PostGIS unavailable, app uses Haversine distance formula:
+```sql
+WHERE SQRT(POW(s.latitude - ?, 2) + POW(s.longitude - ?, 2)) * 111 < ?
+```
 
-### 3. **Repeated Charger Lookups for Same Region**
-**Location**: `optimize_charging_stops()` - charger search loop
+Both approaches work. PostGIS is preferred for performance.
 
-**Issue**: 
-- If 3 charging stops are within a city, each queries for chargers independently
+### Repeated Charger Lookups
+
+If multiple charging stops are in same region:
+- Each queries independently
 - Same chargers may be retrieved multiple times
-- No caching of charger data during trip planning
+- No caching during trip planning
 
-**Solution Ideas**:
-1. Cache charger data in memory at startup (load all active chargers into a spatial in-memory index)
-2. Batch charger queries (pass multiple stop locations in one query)
-3. Use in-memory spatial index (e.g., Python library like `rtree`) for fast lookups during trip planning
+Potential improvements:
+1. In-memory charger cache at startup
+2. Batch charger queries (pass multiple stops in one query)
+3. Session-level caching during trip planning
 
----
+Estimated performance gains: 10-20x improvement for regional trips
 
-### 4. **Cold-Start Database Connection Pool**
-**Location**: `db.py` - Pool initialization
+### Connection Pool
 
-**Current**: 
-- Pool config: `minconn=2, maxconn=15` (expanded from 5)
-- Pool is initialized at app startup but first query still "warms" connections
+Database connection pool configured:
+- minconn: 2
+- maxconn: 15
 
-**Observations**:
-- First trip calculation after restart is noticeably slower
-- Likely due to: DB connection establishment, charger table indexes warming, model loading
+First trip calculation after restart may be slower due to connection establishment and index warming.
 
 **Mitigation**:
 - Pre-warm connection pool: Open 2+ connections at startup

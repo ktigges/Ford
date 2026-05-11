@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Enable PostGIS extension for the lightning database.
+
 This script creates the PostGIS extension and the required spatial index.
+PostGIS is included in the Docker container (postgis/postgis:16-3.4 image).
 
 Usage:
     python enable_postgis.py
 
-This should be run once after updating the schema.
+Run once after database initialization to create the spatial index.
 """
 
 import sys
@@ -27,12 +29,12 @@ def enable_postgis():
         
         log.info("Enabling PostGIS extension...")
         db.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
-        log.info("✓ PostGIS extension enabled")
+        log.info("PostGIS extension enabled")
         
         # Verify the extension is available
         result = db.fetch_one("SELECT extversion FROM pg_extension WHERE extname = 'postgis';")
         if result:
-            log.info("✓ PostGIS version: %s", result.get('extversion'))
+            log.info("PostGIS version: %s", result.get('extversion'))
         else:
             log.warning("PostGIS extension not found in pg_extension table")
         
@@ -46,7 +48,7 @@ def enable_postgis():
         )
         
         if has_index:
-            log.info("✓ Spatial index already exists")
+            log.info("Spatial index already exists")
         else:
             log.info("Creating spatial index...")
             db.execute("""
@@ -54,14 +56,14 @@ def enable_postgis():
                     ll_to_earth(latitude, longitude)
                 );
             """)
-            log.info("✓ Spatial index created")
+            log.info("Spatial index created")
         
-        log.info("\n✓ PostGIS setup complete!")
-        log.info("  Trip planner charger lookups will now use efficient spatial queries.")
+        log.info("\nPostGIS setup complete!")
+        log.info("Trip planner charger lookups will now use efficient spatial queries.")
         return True
         
     except Exception as e:
-        log.error("✗ Failed to enable PostGIS: %s", e)
+        log.error("Failed to enable PostGIS: %s", e)
         import traceback
         traceback.print_exc()
         return False
