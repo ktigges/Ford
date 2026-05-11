@@ -30,6 +30,7 @@ import sys
 import threading
 import json
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify, session
@@ -223,6 +224,37 @@ def create_app():
 
     _backup_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
     _backup_scheduler_stop_event = threading.Event()
+
+    # Keep large trip plans server-side and store only a small key in cookie session.
+    _trip_plan_cache_lock = threading.Lock()
+    _trip_plan_cache: dict[str, dict] = {}
+    _trip_plan_cache_order: list[str] = []
+    _TRIP_PLAN_CACHE_MAX = 64
+
+    def _store_trip_plan_for_session(plan_dict: dict) -> None:
+        key = str(uuid4())
+        with _trip_plan_cache_lock:
+            _trip_plan_cache[key] = plan_dict
+            _trip_plan_cache_order.append(key)
+            while len(_trip_plan_cache_order) > _TRIP_PLAN_CACHE_MAX:
+                stale = _trip_plan_cache_order.pop(0)
+                _trip_plan_cache.pop(stale, None)
+        session["last_trip_plan_key"] = key
+        session.pop("last_trip_plan", None)
+
+    def _get_trip_plan_for_session() -> dict | None:
+        key = session.get("last_trip_plan_key")
+        if key:
+            with _trip_plan_cache_lock:
+                cached = _trip_plan_cache.get(str(key))
+            if isinstance(cached, dict):
+                return cached
+
+        # Backward compatibility for any previously stored session payload.
+        legacy = session.get("last_trip_plan")
+        if isinstance(legacy, dict):
+            return legacy
+        return None
 
 
 
@@ -4227,6 +4259,29 @@ def create_app():
             "charger_type": "CCS1",
             "min_charger_kw": 50,
         }
+
+        saved_form = session.get("last_trip_form")
+        if isinstance(saved_form, dict):
+            form_data["source"] = str(saved_form.get("source") or "").strip()
+            form_data["destination"] = str(saved_form.get("destination") or "").strip()
+            form_data["use_current_source"] = bool(saved_form.get("use_current_source", False))
+
+            try:
+                form_data["start_soc"] = int(saved_form.get("start_soc", 85))
+            except (ValueError, TypeError):
+                form_data["start_soc"] = 85
+
+            form_data["charger_type"] = str(saved_form.get("charger_type") or "CCS1").strip().upper()
+            if form_data["charger_type"] not in {"CCS1", "NACS", "CHADEMO", "ANY"}:
+                form_data["charger_type"] = "CCS1"
+
+            try:
+                form_data["min_charger_kw"] = int(float(saved_form.get("min_charger_kw", 50)))
+            except (ValueError, TypeError):
+                form_data["min_charger_kw"] = 50
+            form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
+            form_data["min_charger_kw"] = max(0, min(500, form_data["min_charger_kw"]))
+
         unit_system = _get_setting("units") if db.is_available() else "imperial"
         timezone_name = _get_setting("timezone") if db.is_available() else "UTC"
         try:
@@ -4255,6 +4310,16 @@ def create_app():
             form_data["min_charger_kw"] = max(0, min(500, form_data["min_charger_kw"]))
 
             form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
+
+            session["last_trip_form"] = {
+                "source": form_data["source"],
+                "destination": form_data["destination"],
+                "start_soc": form_data["start_soc"],
+                "use_current_source": form_data["use_current_source"],
+                "charger_type": form_data["charger_type"],
+                "min_charger_kw": form_data["min_charger_kw"],
+            }
+
             action = (request.form.get("action") or "preview").strip().lower()
 
             if action == "calculate":
@@ -4306,7 +4371,7 @@ def create_app():
                             plan_dict = asdict(plan)
                             # Serialize charging stops properly
                             plan_dict["charging_stops"] = [asdict(stop) for stop in plan.charging_stops]
-                            session["last_trip_plan"] = plan_dict
+                            _store_trip_plan_for_session(plan_dict)
                     except Exception as exc:
                         log.exception(f"Trip planning failed: {exc}")
                         flash(f"Trip planning failed: {exc}", "error")
@@ -4378,7 +4443,7 @@ def create_app():
     @app.route("/trip-detail", methods=["GET"])
     def trip_detail():
         """Detailed trip analysis view comparing baseline and ML estimates."""
-        plan = session.get("last_trip_plan")
+        plan = _get_trip_plan_for_session()
         if not plan:
             flash("No trip plan available. Please calculate a trip first.", "warning")
             return redirect(url_for("trip_planner"))
