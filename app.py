@@ -2036,8 +2036,11 @@ def create_app():
     def auth_login():
         """Start Entra External ID login flow."""
         if not app.config.get("EXTERNAL_ID_ENABLED"):
-            flash("External ID auth is disabled in config.", "warning")
-            return redirect(url_for("dashboard"))
+            return (
+                "External ID auth is disabled in config. "
+                "Enable external_id.enabled in config.json.",
+                503,
+            )
 
         next_url = _safe_next_url(request.args.get("next"))
         try:
@@ -2045,8 +2048,12 @@ def create_app():
             return redirect(authorize_url)
         except Exception as exc:
             log.exception("Failed to start Entra login: %s", exc)
-            flash(f"Unable to start sign-in flow: {exc}", "error")
-            return redirect(url_for("dashboard"))
+            return (
+                "Unable to start Entra sign-in flow. "
+                "Check external_id.authority or external_id.metadata_url, and verify client settings. "
+                f"Error: {exc}",
+                500,
+            )
 
     @app.route("/auth/logout", methods=["GET"])
     @app.route("/oauth/logout", methods=["GET"])
