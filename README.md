@@ -622,55 +622,6 @@ Requires PostgreSQL client tools: `dropdb`, `createdb`, and `psql`.
 
 ---
 
-## Changelog
-
-### v0.4.0 — 2026-05-02
-- Added an in-app Analytics page with unit-aware charts for distance vs energy, battery/range drop, and efficiency trends.
-- Added a latest-drive route map preview directly in the app UI (OpenStreetMap/Leaflet).
-- Added configurable timezone display and local-time rendering for drive timestamps.
-- Refreshed the UI to a blue-grey eye-friendly theme while keeping the existing layout and controls.
-
-### v0.3.2 — 2026-05-02
-- Drive detection no longer leaves stale `In Progress` drives visible while the truck is parked and charging.
-- Added `charging_history` for sampled charging sessions, including charge rate, voltage/current, SOC, and temperatures.
-- Added a dedicated Charging page and made dashboard charging state much more prominent.
-- Drives list now shows only active drives while they are actually happening.
-
-### v0.3.1 — 2026-05-02
-- OAuth setup updated for manual authorization-code paste flow.
-- Added authorization-code exchange path to obtain and persist both access and refresh tokens.
-- Added `scripts/reset_db_from_schema.sh` to rebuild the database from `schema.sql`.
-
-### v0.2.1 — 2026-04-28
-- **Conservative polling mode** — when enabled, idle vehicles are still polled at normal intervals but telemetry records are only written to the DB when the vehicle state changes or once every 60 minutes. Active states (ignition on/run/start, gear in drive/reverse, speed > 0, charging) always write normally.
-- Broadened active-vehicle detection: added `gearLeverPosition` (drive/reverse) and `ignitionStatus` value `start` to both `_vehicle_is_active()` and `_get_poll_interval()`.
-- Fixed encrypted `client_secret` being sent to Ford during initial setup (VIN-less `db.fetch_one` path was missing decryption).
-
-### v0.2.0 — 2026-04-26
-- Database setup mode, SSL/TLS with recovery certs, client secret encryption, runtime log level switching, configurable Flask port, backup/restore with cross-host encryption portability.
-
----
-
-## Phase 1 Scope
-
-- [x] OAuth2 authentication with Ford's Azure AD B2C
-- [x] Garage and telemetry API polling
-- [x] Raw telemetry storage (JSONB) + parsed state tables
-- [x] Web dashboard with unit conversion (metric/imperial)
-- [x] Background poller with adaptive intervals
-- [x] Database viewer and vehicle management
-- [x] Backup and restore (SQL dump + portable JSON)
-- [x] Database setup mode (no-DB startup, web-based configuration)
-- [x] SSL/TLS support (cert + key PEM files via config.json)
-- [x] Client secret encryption (Fernet AES-128-CBC)
-- [x] Runtime log level switching (DEBUG/INFO/WARNING/ERROR)
-- [x] Conservative polling mode (idle writes once per hour)
-- [ ] GEO information integration (Phase 2)
-- [ ] Charger location data (Phase 2)
-- [ ] AI model training pipeline (Phase 3)
-
----
-
 ## License
 
 Private prototype — not for distribution.
