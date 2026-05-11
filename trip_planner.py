@@ -57,6 +57,9 @@ HTTP_TIMEOUT_ROUTE_SEC = 8
 HTTP_TIMEOUT_WEATHER_SEC = 4
 WEATHER_FETCH_WORKERS = 4
 MAX_ROUTE_POLYLINE_POINTS = 1200
+MIN_ML_TRAINING_DRIVES = 30
+ML_MIN_CONFIDENCE_LEVELS = {"high", "medium"}
+ML_ENERGY_DEVIATION_LIMIT = 0.35
 
 US_STATE_ABBREVIATIONS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
@@ -186,6 +189,9 @@ class TripPlan:
     ml_route_steps: list[dict]  # Route steps with SOC based on ML energy estimate
     route_weather: list[dict]
     weather_summary: str
+    estimate_source: str
+    estimate_confidence: str
+    ml_estimate_note: str
     created_at: str
 
 
@@ -1584,6 +1590,9 @@ def plan_trip(
             ml_route_steps=[],
             route_weather=[],
             weather_summary="",
+            estimate_source="Baseline",
+            estimate_confidence="n/a",
+            ml_estimate_note="ML estimate unavailable; using baseline",
             created_at=datetime.now().isoformat()
         )
     
@@ -1619,6 +1628,9 @@ def plan_trip(
             ml_route_steps=[],
             route_weather=[],
             weather_summary="",
+            estimate_source="Baseline",
+            estimate_confidence="n/a",
+            ml_estimate_note="ML estimate unavailable; using baseline",
             created_at=datetime.now().isoformat()
         )
     
@@ -1653,6 +1665,7 @@ def plan_trip(
     ml_energy_kwh = None
     estimate_source = "Baseline"
     estimate_confidence = "n/a"
+    ml_estimate_note = "ML estimate unavailable; using baseline"
 
     # Step 1: ML prediction (if available)
     try:
@@ -1669,15 +1682,38 @@ def plan_trip(
                 duration_min=max(1.0, duration_sec / 60.0),
             )
 
-            ml_energy_kwh = float(ml_pred.get("energy_used_kwh", baseline_energy_kwh))
+            ml_raw_energy_kwh = float(ml_pred.get("energy_used_kwh", baseline_energy_kwh))
+            estimate_confidence = str(ml_pred.get("confidence") or "unknown").lower()
+            training_drives = int((ml_pred.get("model_info") or {}).get("num_training_drives") or 0)
+
+            # Clamp ML estimate so undertrained models cannot create extreme plans.
+            deviation_floor = baseline_energy_kwh * (1.0 - ML_ENERGY_DEVIATION_LIMIT)
+            deviation_ceiling = baseline_energy_kwh * (1.0 + ML_ENERGY_DEVIATION_LIMIT)
+            ml_energy_kwh = max(deviation_floor, min(deviation_ceiling, ml_raw_energy_kwh))
             ml_energy_kwh = max(min_plausible_kwh, min(max_plausible_kwh, ml_energy_kwh))
-            estimate_source = "ML"
-            estimate_confidence = str(ml_pred.get("confidence") or "unknown")
+
+            ml_reliable = (
+                training_drives >= MIN_ML_TRAINING_DRIVES
+                and estimate_confidence in ML_MIN_CONFIDENCE_LEVELS
+            )
+
+            if ml_reliable:
+                estimate_source = "ML"
+                ml_estimate_note = (
+                    f"ML active ({training_drives} training drives, confidence {estimate_confidence})"
+                )
+            else:
+                estimate_source = "Baseline"
+                ml_estimate_note = (
+                    f"ML shown for comparison only ({training_drives} training drives, confidence {estimate_confidence}); "
+                    "baseline used for primary planning"
+                )
     except Exception as exc:
         log.warning("ML prediction unavailable, using baseline estimate: %s", exc)
 
-    # Use ML if available, else baseline
-    energy_needed_kwh = ml_energy_kwh if ml_energy_kwh is not None else baseline_energy_kwh
+    # Use ML only when model quality is sufficient; otherwise use baseline for primary planning.
+    use_ml_for_primary = estimate_source == "ML" and ml_energy_kwh is not None
+    energy_needed_kwh = ml_energy_kwh if use_ml_for_primary else baseline_energy_kwh
 
     # Step 2: Calculate charging stops for BOTH baseline and ML estimates
     baseline_charging_stops = []
@@ -1703,7 +1739,7 @@ def plan_trip(
 
     # Use the active estimate's stops
     feasible_direct = _is_direct_trip_feasible(current_soc_percent, energy_needed_kwh)
-    charging_stops = ml_charging_stops if ml_energy_kwh is not None else baseline_charging_stops
+    charging_stops = ml_charging_stops if use_ml_for_primary else baseline_charging_stops
     arrival_soc = _estimate_arrival_soc(current_soc_percent, energy_needed_kwh)
     feasible = feasible_direct
 
@@ -1777,6 +1813,9 @@ def plan_trip(
         ml_route_steps=ml_route_steps,
         route_weather=route_weather,
         weather_summary=weather_summary,
+        estimate_source=estimate_source,
+        estimate_confidence=estimate_confidence,
+        ml_estimate_note=ml_estimate_note,
         created_at=datetime.now().isoformat()
     )
     
