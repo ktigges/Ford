@@ -1,7 +1,7 @@
 # 🧠 MLLighting EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.8.0  
+**Version:** 0.8.5  
 **Date:** 2026-05-08
 
 ---
