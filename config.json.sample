@@ -25,10 +25,14 @@
     "enabled": true,
     "client_id": "CHANGE_ME_APP_ID",
     "client_secret": "CHANGE_ME_CLIENT_SECRET",
-    "redirect_uri": "https://your-hostname:8443/oauth",
-    "scope": "openid profile email",
-    "authority": "https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0",
-    "metadata_url": "",
+    "redirect_uri": "https://your-hostname/oidc/callback",
+    "scope": "openid profile email offline_access",
+    "authority": "https://yourtenant.ciamlogin.com/YOUR_TENANT_ID",
+    "metadata_url": "https://yourtenant.ciamlogin.com/YOUR_TENANT_ID/v2.0/.well-known/openid-configuration",
+    "allowed_tenants": [
+      "YOUR_TENANT_ID"
+    ],
+    "consent_authority": "https://login.microsoftonline.com",
     "allowed_groups": [
       "YOUR_GROUP_OBJECT_ID"
     ],

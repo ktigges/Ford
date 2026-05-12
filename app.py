@@ -1997,6 +1997,14 @@ def create_app():
                 return redirect(url_for("auth_login"))
 
             claims = entra_auth.validate_id_token(external_id_cfg, id_token, expected_nonce=nonce)
+            if not entra_auth.user_allowed_by_tenant(external_id_cfg, claims):
+                _clear_external_auth_session()
+                log.warning(
+                    "Denied login for user %s - tenant %s not allowed",
+                    claims.get("preferred_username") or claims.get("oid") or claims.get("sub"),
+                    claims.get("tid"),
+                )
+                return "Access denied: tenant is not allowed.", 403
             if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
                 _clear_external_auth_session()
                 log.warning(
@@ -2069,6 +2077,11 @@ def create_app():
             return redirect(provider_logout)
         return redirect(url_for("auth_login"))
 
+    @app.route("/oidc/callback", methods=["GET"])
+    def oidc_callback():
+        """OIDC callback endpoint for Entra External ID."""
+        return _handle_external_id_callback()
+
     # Run startup DB migrations once the table helpers are available.
     if db.is_available():
         try:
@@ -2096,7 +2109,7 @@ def create_app():
     _SETUP_SAFE_ENDPOINTS = frozenset({
         "db_setup", "db_setup_test", "db_setup_create",
         "db_setup_restore", "db_setup_upload",
-        "auth_login", "auth_logout",
+        "auth_login", "auth_logout", "oidc_callback",
         "oauth_config", "reset", "manage", "manage_delete_vin",
         "manage_repoll", "db_browser", "db_table", "db_delete_row",
         "settings", "backup_page", "backup_create", "backup_restore",
@@ -2121,12 +2134,20 @@ def create_app():
         ):
             return
 
+        if endpoint == "oidc_callback" and request.method == "GET" and (
+            request.args.get("code") or request.args.get("error")
+        ):
+            return
+
         id_token = session.get("entra_id_token")
         if not id_token:
             return redirect(url_for("auth_login", next=request.full_path or request.path))
 
         try:
             claims = entra_auth.validate_id_token(external_id_cfg, id_token)
+            if not entra_auth.user_allowed_by_tenant(external_id_cfg, claims):
+                _clear_external_auth_session()
+                return redirect(url_for("auth_login", next=request.full_path or request.path))
             if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
                 _clear_external_auth_session()
                 return redirect(url_for("auth_login", next=request.full_path or request.path))

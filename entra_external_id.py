@@ -173,6 +173,15 @@ def user_allowed_by_group(cfg: dict, claims: dict) -> bool:
     return False
 
 
+def user_allowed_by_tenant(cfg: dict, claims: dict) -> bool:
+    """Check tenant allow-list from External ID config."""
+    allowed_tenants = set(_to_list(cfg.get("allowed_tenants")))
+    if not allowed_tenants:
+        return True
+    tid = str(claims.get("tid") or "").strip()
+    return bool(tid and tid in allowed_tenants)
+
+
 def build_logout_url(cfg: dict, post_logout_redirect_uri: str | None = None) -> str | None:
     """Build provider logout URL when available."""
     try:
