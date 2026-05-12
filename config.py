@@ -62,7 +62,11 @@ def ssl_config() -> dict:
 
 def external_id_config() -> dict:
     """Return Entra External ID authentication settings."""
-    return get_config().get("external_id", {})
+    cfg = dict(get_config().get("external_id", {}))
+    env_secret = (os.environ.get("LIGHTNING_EXTERNAL_ID_CLIENT_SECRET") or "").strip()
+    if env_secret:
+        cfg["client_secret"] = env_secret
+    return cfg
 
 
 def save_database(db_settings: dict) -> None:
