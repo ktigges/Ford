@@ -89,9 +89,45 @@ def exchange_code_for_tokens(cfg: dict, code: str) -> dict:
         "code": code,
         "scope": str(cfg.get("scope", "openid profile email")).strip(),
     }
-    resp = requests.post(oidc["token_endpoint"], data=payload, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(oidc["token_endpoint"], data=payload, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as exc:
+        from datetime import datetime as _dt, timezone as _tz
+        
+        status = getattr(getattr(exc, "response", None), "status_code", "unknown")
+        body = ""
+        headers = {}
+        if getattr(exc, "response", None) is not None:
+            body = (exc.response.text or "")
+            # Extract correlation IDs and diagnostic headers from Entra response
+            resp_obj = exc.response
+            for key in ("x-ms-request-id", "x-ms-diagnostics-id", "x-correlation-id", "request-id"):
+                if key in resp_obj.headers:
+                    headers[key] = resp_obj.headers[key]
+        
+        # Log full diagnostic details to debug log (server-side only)
+        log.error(
+            "[TOKEN_EXCHANGE_FAILED] status=%s endpoint=%s redirect_uri=%s client_id=%s",
+            status,
+            oidc.get("token_endpoint", ""),
+            cfg.get("redirect_uri", ""),
+            cfg.get("client_id", ""),
+        )
+        log.error(
+            "[TOKEN_EXCHANGE_FAILED] Entra response headers: %s",
+            headers,
+        )
+        log.error(
+            "[TOKEN_EXCHANGE_FAILED] Entra response body (full): %s",
+            body,
+        )
+        log.error(
+            "[TOKEN_EXCHANGE_FAILED] Exception: %s",
+            str(exc),
+        )
+        raise
 
 
 def _jwks_client(cfg: dict) -> jwt.PyJWKClient:

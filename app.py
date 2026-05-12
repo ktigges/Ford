@@ -100,6 +100,7 @@ def _setup_logging() -> None:
         "poller": "debug_poller.log",
         "nlr_chargers": "debug_chargers.log",
         "nlr_api": "debug_nlr_api.log",
+        "entra_external_id": "debug_entra.log",
     }
     for logger_name, filename in debug_files.items():
         fh = logging.FileHandler(os.path.join(log_dir, filename))
@@ -1969,48 +1970,68 @@ def create_app():
             session.pop(key, None)
 
     def _handle_external_id_callback():
-        """Process Entra redirect callback and establish authenticated session."""
+        """Process Entra redirect callback and establish authenticated session.
+        
+        All auth debug details are logged to logs/debug_entra.log for server-side analysis.
+        """
+        auth_log = logging.getLogger("entra_external_id")
+        auth_log.debug(f"Callback initiated from IP {request.remote_addr}")
+
         if request.args.get("error"):
             err = request.args.get("error_description") or request.args.get("error")
+            auth_log.warning(f"Entra error in callback: {err}")
             flash(f"Entra login failed: {err}", "error")
             return redirect(url_for("auth_login"))
 
         code = (request.args.get("code") or "").strip()
         state = (request.args.get("state") or "").strip()
         if not code or not state:
+            auth_log.warning(f"Callback missing params: code={bool(code)}, state={bool(state)}")
             flash("Missing Entra callback parameters.", "error")
             return redirect(url_for("auth_login"))
 
         expected_state = session.get("entra_auth_state")
         nonce = session.get("entra_auth_nonce")
         if not expected_state or state != expected_state:
+            auth_log.warning(
+                f"State mismatch in callback: expected={expected_state}, received={state}"
+            )
             _clear_external_auth_session()
             flash("Invalid Entra auth state. Please sign in again.", "error")
             return redirect(url_for("auth_login"))
 
         try:
+            auth_log.debug(f"Exchanging code for tokens (code length: {len(code)})")
             token_response = entra_auth.exchange_code_for_tokens(external_id_cfg, code)
             id_token = token_response.get("id_token")
             access_token = token_response.get("access_token", "")
+            
+            auth_log.debug(f"Token response keys: {sorted(token_response.keys())}")
+            
             if not id_token:
+                auth_log.error("Token response missing id_token")
                 flash("Token response did not include id_token.", "error")
                 return redirect(url_for("auth_login"))
 
+            auth_log.debug("Validating id_token signature and claims")
             claims = entra_auth.validate_id_token(external_id_cfg, id_token, expected_nonce=nonce)
+            auth_log.debug(f"Validated token claims: {json.dumps(claims, default=str)}")
+            
             if not entra_auth.user_allowed_by_tenant(external_id_cfg, claims):
-                _clear_external_auth_session()
-                log.warning(
-                    "Denied login for user %s - tenant %s not allowed",
-                    claims.get("preferred_username") or claims.get("oid") or claims.get("sub"),
-                    claims.get("tid"),
+                auth_log.warning(
+                    f"User denied: tenant mismatch. user_tid={claims.get('tid')}, "
+                    f"allowed_tenants={external_id_cfg.get('allowed_tenants')}"
                 )
+                _clear_external_auth_session()
                 return "Access denied: tenant is not allowed.", 403
+            
             if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
-                _clear_external_auth_session()
-                log.warning(
-                    "Denied login for user %s - not in allowed group",
-                    claims.get("preferred_username") or claims.get("oid") or claims.get("sub"),
+                auth_log.warning(
+                    f"User denied: group mismatch. user_groups={claims.get('groups')}, "
+                    f"allowed_groups={external_id_cfg.get('allowed_groups')}, "
+                    f"allowed_group_names={external_id_cfg.get('allowed_group_names')}"
                 )
+                _clear_external_auth_session()
                 return "Access denied: account is not in an allowed subscriber group.", 403
 
             session["entra_id_token"] = id_token
@@ -2031,13 +2052,19 @@ def create_app():
             session.pop("entra_auth_nonce", None)
 
             destination = _safe_next_url(session.pop("entra_auth_next", None))
+            user_id = claims.get("preferred_username") or claims.get("oid") or "unknown"
+            auth_log.info(f"Auth successful: user={user_id}, destination={destination}")
             flash("Signed in successfully.", "success")
             return redirect(destination)
         except Exception as exc:
             _clear_external_auth_session()
-            log.exception("Entra callback processing failed: %s", exc)
-            flash(f"Sign-in failed: {exc}", "error")
-            return redirect(url_for("auth_login"))
+            auth_log.exception(f"Entra callback processing failed: {exc}")
+            # Return direct error (no loop), guide to logs
+            return (
+                "External ID authentication failed. "
+                "Contact administrator and check logs/debug_entra.log for details.",
+                502,
+            )
 
     @app.route("/auth/login", methods=["GET"])
     @app.route("/oauth/login", methods=["GET"])
