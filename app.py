@@ -166,6 +166,10 @@ def create_app():
         secret_key = "lightning-dev-bootstrap-secret-change-me"
     app.config["SECRET_KEY"] = secret_key
     app.secret_key = secret_key
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
     # Stamp the build time and version once so every template can display them.
     from datetime import datetime as _dt
     app.config["APP_VERSION"] = "0.8.5"
@@ -175,8 +179,27 @@ def create_app():
     log.info("Starting MLLighting app (env=%s)", config.environment())
     external_id_cfg = config.external_id_config()
     app.config["EXTERNAL_ID_ENABLED"] = entra_auth.is_enabled(external_id_cfg)
+
+    def _external_id_config_ready(cfg: dict) -> tuple[bool, str]:
+        """Return whether required External ID fields are present."""
+        if not app.config.get("EXTERNAL_ID_ENABLED"):
+            return True, "disabled"
+        required = ["client_id", "client_secret", "redirect_uri"]
+        missing = [key for key in required if not str(cfg.get(key, "")).strip()]
+        has_discovery = bool(str(cfg.get("authority", "")).strip() or str(cfg.get("metadata_url", "")).strip())
+        if not has_discovery:
+            missing.append("authority|metadata_url")
+        if missing:
+            return False, ", ".join(missing)
+        return True, "ok"
+
+    external_ready, external_reason = _external_id_config_ready(external_id_cfg)
+    app.config["EXTERNAL_ID_READY"] = external_ready
+    app.config["EXTERNAL_ID_READY_REASON"] = external_reason
     if app.config["EXTERNAL_ID_ENABLED"]:
         log.info("Entra External ID authentication is enabled")
+        if not external_ready:
+            log.error("External ID auth config is incomplete: %s", external_reason)
 
     # Initialize DB pool at startup so normal routes don't fall into setup mode.
     try:
@@ -2076,6 +2099,12 @@ def create_app():
                 "Enable external_id.enabled in config.json.",
                 503,
             )
+        if not app.config.get("EXTERNAL_ID_READY"):
+            return (
+                "External ID auth config is incomplete. "
+                f"Missing: {app.config.get('EXTERNAL_ID_READY_REASON', 'unknown')}",
+                503,
+            )
 
         next_url = _safe_next_url(request.args.get("next"))
         try:
@@ -2165,6 +2194,13 @@ def create_app():
             request.args.get("code") or request.args.get("error")
         ):
             return
+
+        if not app.config.get("EXTERNAL_ID_READY"):
+            return (
+                "External ID auth config is incomplete. "
+                f"Missing: {app.config.get('EXTERNAL_ID_READY_REASON', 'unknown')}",
+                503,
+            )
 
         id_token = session.get("entra_id_token")
         if not id_token:

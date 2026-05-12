@@ -152,11 +152,14 @@ def validate_id_token(cfg: dict, id_token: str, expected_nonce: str | None = Non
         algorithms=["RS256"],
         audience=cfg["client_id"],
         issuer=oidc["issuer"],
-        options={"require": ["exp", "iat", "iss", "aud"]},
+        options={"require": ["exp", "iat", "iss", "aud", "sub"]},
     )
 
     if expected_nonce and claims.get("nonce") != expected_nonce:
         raise ValueError("ID token nonce mismatch")
+
+    if _to_list(cfg.get("allowed_tenants")) and not str(claims.get("tid") or "").strip():
+        raise ValueError("ID token missing tenant claim 'tid'")
 
     return claims
 
