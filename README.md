@@ -239,6 +239,26 @@ If PostgreSQL is unreachable at startup, the app enters **setup mode** instead o
 
 The Settings page includes a **Console / App Log Level** dropdown (DEBUG, INFO, WARNING, ERROR). Changing the level takes effect immediately — the console handler and combined app-file handler are updated at runtime. Per-module debug files (`logs/debug_*.log`) always capture DEBUG regardless of this setting. The selected level is persisted in the `app_config` database table and restored on startup.
 
+#### Security / Local Auth Configuration
+
+The local-auth flow uses server-side sessions and MFA. Use the following environment variables to control security behavior:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LIGHTNING_SECRET_KEY` | _(required in production)_ | Flask/session signing secret. Must be unique and high entropy. |
+| `LIGHTNING_SESSION_TYPE` | `cachelib` | Server-side session backend. `cachelib` keeps sessions in-memory (recommended). `filesystem` writes to disk. |
+| `LIGHTNING_SESSION_COOKIE_SECURE` | `1` | Marks session cookie Secure; only sent over HTTPS when enabled. |
+| `LIGHTNING_REQUIRE_HTTPS_SENSITIVE` | `1` | Enforces HTTPS on auth/profile/settings routes. Insecure requests are redirected when SSL is active, otherwise blocked. |
+| `LIGHTNING_LOCAL_AUTH_STORE_CLIENT_META` | `0` | Stores client IP/User-Agent in auth sessions when enabled. Keep disabled to minimize retained client metadata. |
+| `LIGHTNING_LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS` | `8` | Absolute local-auth session lifetime (hours). |
+| `LIGHTNING_LOCAL_AUTH_IDLE_TIMEOUT_MINUTES` | `30` | Idle timeout fallback used when DB settings are unavailable. |
+
+Additional hardening now enabled in the app:
+
+- CSRF tokens are required on local-auth and settings POST forms.
+- Auth/profile/settings pages send `no-store` and `no-cache` response headers.
+- Local sign-in attempts are rate-limited with temporary lockout after repeated failures.
+
 ---
 
 ### `crypto.py` — Credential Encryption
