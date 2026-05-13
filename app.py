@@ -3156,6 +3156,10 @@ def create_app():
         distance_values_km = [float(d["distance_km"]) for d in drives if d.get("distance_km") is not None]
         energy_values_kwh = [float(d["energy_used_kwh"]) for d in drives if d.get("energy_used_kwh") is not None]
         max_speed_values_kmh = [float(d["max_speed_kmh"]) for d in drives if d.get("max_speed_kmh") is not None]
+        weather_temp_values = [float(d["weather_temp_c"]) for d in drives if d.get("weather_temp_c") is not None]
+        wind_speed_values = [float(d["wind_speed_avg_kmh"]) for d in drives if d.get("wind_speed_avg_kmh") is not None]
+        headwind_values = [float(d["headwind_component_kmh"]) for d in drives if d.get("headwind_component_kmh") is not None]
+        tailwind_values = [float(d["tailwind_component_kmh"]) for d in drives if d.get("tailwind_component_kmh") is not None]
 
         drive_stats = {
             "total_distance_km": sum(distance_values_km) if distance_values_km else None,
@@ -3163,6 +3167,10 @@ def create_app():
             "total_energy_kwh": sum(energy_values_kwh) if energy_values_kwh else None,
             "avg_energy_kwh": (sum(energy_values_kwh) / len(energy_values_kwh)) if energy_values_kwh else None,
             "avg_max_speed_kmh": (sum(max_speed_values_kmh) / len(max_speed_values_kmh)) if max_speed_values_kmh else None,
+            "avg_weather_temp_c": (sum(weather_temp_values) / len(weather_temp_values)) if weather_temp_values else None,
+            "avg_wind_speed_kmh": (sum(wind_speed_values) / len(wind_speed_values)) if wind_speed_values else None,
+            "avg_headwind_kmh": (sum(headwind_values) / len(headwind_values)) if headwind_values else None,
+            "avg_tailwind_kmh": (sum(tailwind_values) / len(tailwind_values)) if tailwind_values else None,
         }
 
         return render_template(

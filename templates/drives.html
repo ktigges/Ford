@@ -56,6 +56,38 @@
         {% else %}–{% endif %}
       </div>
     </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Temperature</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_weather_temp_c is not none %}
+          {{ "%.1f"|format(drive_stats.avg_weather_temp_c) }}°C
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Wind Speed</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_wind_speed_kmh is not none %}
+          {{ "%.1f"|format(drive_stats.avg_wind_speed_kmh) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Headwind</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_headwind_kmh is not none %}
+          {{ "%.1f"|format(drive_stats.avg_headwind_kmh) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Avg Tailwind</div>
+      <div class="drive-kpi-value">
+        {% if drive_stats.avg_tailwind_kmh is not none %}
+          {{ "%.1f"|format(drive_stats.avg_tailwind_kmh) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
   </div>
 </div>
 {% endif %}
