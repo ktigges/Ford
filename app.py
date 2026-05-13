@@ -35,6 +35,7 @@ from uuid import uuid4
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from cachelib import SimpleCache
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify, session
 from flask_session import Session
 import requests
@@ -170,11 +171,16 @@ def create_app():
     app.secret_key = secret_key
 
     # Server-side session store keeps auth tokens off browser cookies.
-    session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".flask_session")
-    os.makedirs(session_dir, exist_ok=True)
-    app.config["SESSION_TYPE"] = os.environ.get("LIGHTNING_SESSION_TYPE", "filesystem").strip() or "filesystem"
-    app.config["SESSION_FILE_DIR"] = session_dir
-    app.config["SESSION_FILE_THRESHOLD"] = int(os.environ.get("LIGHTNING_SESSION_FILE_THRESHOLD", "2000"))
+    # Default to in-memory session storage to avoid persisting auth state on disk.
+    app.config["SESSION_TYPE"] = os.environ.get("LIGHTNING_SESSION_TYPE", "cachelib").strip() or "cachelib"
+    if app.config["SESSION_TYPE"] == "filesystem":
+        session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".flask_session")
+        os.makedirs(session_dir, exist_ok=True)
+        app.config["SESSION_FILE_DIR"] = session_dir
+        app.config["SESSION_FILE_THRESHOLD"] = int(os.environ.get("LIGHTNING_SESSION_FILE_THRESHOLD", "2000"))
+    elif app.config["SESSION_TYPE"] == "cachelib":
+        app.config["SESSION_CACHELIB"] = SimpleCache(default_timeout=60 * 60 * 8)
+
     app.config["SESSION_USE_SIGNER"] = True
     app.config["SESSION_PERMANENT"] = False
     app.config["SESSION_COOKIE_NAME"] = "lightning_session"
@@ -2165,6 +2171,26 @@ def create_app():
         if app.config.get("SSL_ACTIVE") and not request.is_secure:
             url = request.url.replace("http://", "https://", 1)
             return redirect(url, code=301)
+
+    @app.after_request
+    def _security_headers(response):
+        """Apply baseline security headers and no-store policy for auth pages."""
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+
+        endpoint = request.endpoint or ""
+        if endpoint in {
+            "auth_login",
+            "auth_mfa_setup",
+            "auth_mfa_verify",
+            "auth_logout",
+            "profile",
+        }:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
 
     # ── Request hook: redirect to setup if not configured ──────────
 
