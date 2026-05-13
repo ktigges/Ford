@@ -1,12 +1,9 @@
-"""Unit conversion helpers for display-time metric ↔ imperial conversion.
+"""Ford Lightning source file.
 
-Ford sends ALL numeric telemetry in SI / metric units regardless of the
-vehicle's displaySystemOfMeasure setting.  We store raw metric in the DB
-and convert only at presentation time.
-
-Usage in templates via Jinja globals:
-    {{ convert(value, 'km', 'mi') }}
-    {{ unit_label('distance') }}
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 

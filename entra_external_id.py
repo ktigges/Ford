@@ -1,6 +1,9 @@
-"""Entra External ID authentication helpers for Flask app routes.
+"""Ford Lightning source file.
 
-Implements OIDC authorization-code login for server-side sessions.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 from __future__ import annotations

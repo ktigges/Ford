@@ -1,24 +1,13 @@
-"""Flask application for MLLighting telemetry dashboard.
+"""Main Flask application for the Ford Lightning telemetry dashboard.
 
-Serves the web UI for vehicle state monitoring, OAuth configuration,
-poller control, database browsing, settings, and vehicle management.
+This file contains the primary app factory, route registration, scheduler
+coordination, background jobs, settings persistence, and dashboard/API glue.
 
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.7
-Date:        2026-05-09
-
-3rd Party APIs (Trip Planner):
-- Nominatim (OpenStreetMap): Geocoding - NO KEY REQUIRED
-- US Census Bureau Geocoder: US address geocoding - NO KEY REQUIRED
-- ArcGIS World Geocoder: Geocoding fallback - NO KEY REQUIRED
-- Photon: OSM-based geocoding fallback - NO KEY REQUIRED
-- OSRM: Open Source Routing Machine - NO KEY REQUIRED
-- OpenRouteService: Routing fallback - REQUIRES API KEY (optional)
-- Open-Meteo: Weather forecasting - NO KEY REQUIRED
-
-3rd Party APIs (Core):
-- Ford Connected Vehicle API: Vehicle telemetry - REQUIRES OAUTH CREDENTIALS
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
+Version: 0.8.6
 """
 
 import logging
@@ -211,9 +200,9 @@ def create_app():
         hours=max(1, app.config["LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS"])
     )
     Session(app)
-    # Stamp the build time and version once so every template can display them.
+    # Stamp build metadata once so templates can show the active build.
     from datetime import datetime as _dt
-    app.config["APP_VERSION"] = "0.8.5"
+    app.config["APP_VERSION"] = "0.8.6"
     app.config["APP_BUILD_TIME"] = _dt.now().strftime("%Y-%m-%d %H:%M")
     _setup_logging()
     log = logging.getLogger(__name__)
@@ -579,6 +568,28 @@ def create_app():
             return schema_count
 
         return _count_completed_training_drives()
+
+    def _ml_confidence_from_training_data() -> dict:
+        """Estimate model confidence level from current training-drive coverage."""
+        schema = _read_model_schema()
+        trained_drives = schema.get("num_training_drives")
+        if not isinstance(trained_drives, int) or trained_drives < 0:
+            trained_drives = 0
+
+        if trained_drives >= 30:
+            level = "high"
+        elif trained_drives >= 15:
+            level = "medium"
+        elif trained_drives > 0:
+            level = "low"
+        else:
+            level = "n/a"
+
+        return {
+            "level": level,
+            "training_drives": trained_drives,
+            "training_date": schema.get("training_date") or "",
+        }
 
     def _run_ml_retrain_background(trigger: str) -> None:
         started_at = datetime.now(timezone.utc)
@@ -2686,6 +2697,7 @@ def create_app():
         # Determine vehicle image filename
         vehicle_img = _get_setting("vehicle_image") or "vehicle.png"
         refresh_interval = request.args.get("refresh", 0, type=int)
+        ml_status = _ml_confidence_from_training_data()
 
         return render_template(
             "dashboard.html",
@@ -2703,6 +2715,9 @@ def create_app():
             vehicle_img=vehicle_img,
             poller_running=poller.is_running(),
             refresh_interval=refresh_interval,
+            ml_confidence_level=ml_status["level"],
+            ml_training_drives=ml_status["training_drives"],
+            ml_training_date=ml_status["training_date"],
         )
 
     @app.route("/vehicle")

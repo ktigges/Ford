@@ -1,17 +1,9 @@
-"""
-Train energy consumption prediction model from Ford telemetry.
+"""Ford Lightning source file.
 
-This script:
-1. Extracts features from drives + drive_points tables
-2. Trains XGBoost model to predict energy_used_kwh
-3. Validates with cross-validation
-4. Saves model + metadata for inference
-
-Run on schedule (daily/weekly) as new drives accumulate.
-No data export needed—queries PostgreSQL directly.
-
-Author:      Kevin Tigges
-Date:        2026-05-09
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import json

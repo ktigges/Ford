@@ -1,6 +1,9 @@
-"""Standalone local user administration app.
+"""Local user administration app for the Ford Lightning prototype.
 
-Run separately from the main app to bootstrap/manage local users.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 from __future__ import annotations

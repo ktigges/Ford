@@ -1,17 +1,9 @@
-"""Trip planner service for personalized EV routing.
+"""Ford Lightning source file.
 
-Orchestrates:
-1. Route analysis (distance, elevation, polyline)
-2. Weather forecast along route
-3. Energy consumption prediction (using trained model)
-4. Charging stop optimization
-5. Charger network recommendations
-
-Outputs trip plan with:
-- Total distance & duration
-- Energy needed & available capacity
-- Recommended charging stops
-- Charging duration at each stop
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import json

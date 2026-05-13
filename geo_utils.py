@@ -1,7 +1,9 @@
-"""Timezone to country code inference for multi-region support.
+"""Ford Lightning source file.
 
-Maps common timezone identifiers to ISO 3166-1 alpha-2 country codes.
-Used for geo-based features (charger region, route planning bounds).
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 from typing import Optional

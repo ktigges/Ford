@@ -1,11 +1,9 @@
-"""Backup and restore module for Ford Lightning telemetry database.
+"""Ford Lightning source file.
 
-Provides two backup strategies:
-1. **SQL dump** — Uses pg_dump/psql for full-fidelity PostgreSQL backup & restore.
-2. **JSON export** — Python-native export of all tables to a portable JSON file
-   that can be restored without pg_dump/psql installed.
-
-Backups are stored in the `backups/` directory (relative to the project root).
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 

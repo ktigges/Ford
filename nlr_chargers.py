@@ -1,9 +1,9 @@
-"""NIR (National Renewable Energy Laboratory) Alt Fuel Stations API integration.
+"""Ford Lightning source file.
 
-Fetches EV charging station data for route planning and AI model training.
-- Manual import via /chargers/sync route
-- Scheduled delta syncs (optional)
-- Stores connector inventory normalized for ML feature engineering
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import json

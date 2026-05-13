@@ -1,8 +1,9 @@
-"""Background telemetry poller.
+"""Ford Lightning source file.
 
-Runs in a daemon thread. Only one instance at a time.
-Uses the reusable oauth module to obtain tokens and writes telemetry + state.
-Extracts metrics from Ford's API response and upserts into PostgreSQL state tables.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import hashlib

@@ -1,8 +1,9 @@
-"""Reusable OAuth authentication module.
+"""Ford Lightning source file.
 
-Handles token refresh, rotation-safe storage, and credential management
-for Ford's Azure AD B2C OAuth2 endpoint. This module is independent of Flask
-and can be used by the poller, UI, or CLI.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import base64

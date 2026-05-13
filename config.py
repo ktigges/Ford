@@ -1,6 +1,9 @@
-"""Configuration loader for the Lightning application.
+"""Ford Lightning source file.
 
-Reads config.json once and exposes typed accessors for each section.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import json

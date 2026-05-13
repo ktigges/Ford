@@ -1,10 +1,9 @@
-"""Symmetric encryption helpers and SSL certificate utilities.
+"""Ford Lightning source file.
 
-Uses Fernet (AES-128-CBC with HMAC-SHA256) from the ``cryptography`` library.
-The encryption key is stored in a local file (``secret.key``) which is
-generated automatically on first use.
-
-Also provides self-signed certificate generation for SSL recovery mode.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import logging

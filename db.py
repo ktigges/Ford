@@ -1,7 +1,9 @@
-"""Database helper – thin wrapper around psycopg2 connection pooling.
+"""Ford Lightning source file.
 
-Provides a thread-safe PostgreSQL connection pool with convenience methods
-for common query patterns (fetch_one, fetch_all, execute).
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import logging

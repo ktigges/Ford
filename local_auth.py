@@ -1,7 +1,9 @@
-"""Local username/password + TOTP MFA helpers.
+"""Ford Lightning source file.
 
-This module owns local auth schema management, password verification,
-MFA secret lifecycle, and server-side authenticated session validation.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 from __future__ import annotations

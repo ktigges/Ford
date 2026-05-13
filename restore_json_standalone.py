@@ -1,10 +1,9 @@
-"""
-Standalone script to restore a JSON backup into the Ford Lightning DB.
+"""Ford Lightning source file.
 
-Usage:
-  python restore_json_standalone.py /path/to/lightning_backup_YYYYMMDD_HHMMSS.json
-
-If no path is provided, the script restores the newest JSON file in backups/.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import os

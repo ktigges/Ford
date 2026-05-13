@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""
-Enable PostGIS extension for the lightning database.
+"""Ford Lightning source file.
 
-This script creates the PostGIS extension and the required spatial index.
-PostGIS is included in the Docker container (postgis/postgis:16-3.4 image).
-
-Usage:
-    python enable_postgis.py
-
-Run once after database initialization to create the spatial index.
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import sys

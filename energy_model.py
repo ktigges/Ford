@@ -1,14 +1,9 @@
-"""Load and use the trained energy consumption model for predictions.
+"""Ford Lightning source file.
 
-This module provides a simple API to:
-1. Load the trained model and scaler from disk
-2. Make predictions given trip features
-3. Handle model versioning and error cases
-
-Used by:
-- Trip planner service (/predict/trip)
-- Chat bot backend (/chat)
-- Analytics dashboard
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import json
