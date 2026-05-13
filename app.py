@@ -30,6 +30,8 @@ import sys
 import threading
 import json
 import time
+import hmac
+import secrets
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from urllib.parse import urlparse
@@ -191,6 +193,14 @@ def create_app():
         os.environ.get("LIGHTNING_SESSION_COOKIE_SECURE", "1") or "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
     app.config["SESSION_COOKIE_SECURE"] = session_cookie_secure
+    app.config["REQUIRE_HTTPS_SENSITIVE"] = (
+        (os.environ.get("LIGHTNING_REQUIRE_HTTPS_SENSITIVE", "1") or "1").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    app.config["LOCAL_AUTH_STORE_CLIENT_META"] = (
+        (os.environ.get("LIGHTNING_LOCAL_AUTH_STORE_CLIENT_META", "0") or "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     app.config["LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS"] = int(
         os.environ.get("LIGHTNING_LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", "8") or "8"
     )
@@ -2018,6 +2028,22 @@ def create_app():
             return url_for("dashboard")
         return candidate
 
+    def _csrf_token() -> str:
+        token = str(session.get("csrf_token") or "")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+        return token
+
+    def _csrf_valid() -> bool:
+        expected = str(session.get("csrf_token") or "")
+        provided = str(request.form.get("csrf_token") or "")
+        return bool(expected and provided and hmac.compare_digest(expected, provided))
+
+    @app.context_processor
+    def _inject_csrf_token():
+        return {"csrf_token": _csrf_token}
+
     def _clear_local_auth_session() -> None:
         """Revoke and clear local auth session values."""
         local_auth.revoke_session(session)
@@ -2037,13 +2063,15 @@ def create_app():
         return max(1, min(1440, value))
 
     def _complete_local_login(user: dict, next_url: str) -> str:
+        client_meta_enabled = bool(app.config.get("LOCAL_AUTH_STORE_CLIENT_META", False))
         local_auth.issue_authenticated_session(
             session,
             user,
-            ip_address=request.remote_addr or "",
-            user_agent=request.headers.get("User-Agent", ""),
+            ip_address=(request.remote_addr or "") if client_meta_enabled else "",
+            user_agent=(request.headers.get("User-Agent", "") if client_meta_enabled else ""),
             lifetime_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
         )
+        local_auth.clear_login_attempts(str(user.get("username") or ""), request.remote_addr or "")
         flash("Signed in successfully.", "success")
         return redirect(_safe_next_url(next_url))
 
@@ -2057,6 +2085,10 @@ def create_app():
         no_users = local_auth.user_count() == 0
         next_url = _safe_next_url(request.values.get("next"))
         if request.method == "POST":
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for("auth_login", next=next_url))
+
             if no_users:
                 flash("No local users exist yet. Use the standalone user admin app first.", "error")
                 return render_template("local_auth_login.html", next_url=next_url, no_users=True)
@@ -2064,16 +2096,26 @@ def create_app():
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
             otp_code = (request.form.get("otp_code") or "").strip()
+
+            is_locked, seconds_left = local_auth.login_is_locked(username, request.remote_addr or "")
+            if is_locked:
+                mins = max(1, (seconds_left + 59) // 60)
+                flash(f"Too many failed sign-in attempts. Try again in about {mins} minute(s).", "error")
+                return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+
             user = local_auth.verify_password(username, password)
             if not user:
+                local_auth.register_failed_login(username, request.remote_addr or "")
                 flash("Invalid username or password.", "error")
                 return render_template("local_auth_login.html", next_url=next_url, no_users=False)
 
             if bool(user.get("mfa_enabled")):
                 if not otp_code:
+                    local_auth.register_failed_login(username, request.remote_addr or "")
                     flash("Enter your OTP code to sign in.", "error")
                     return render_template("local_auth_login.html", next_url=next_url, no_users=False)
                 if not local_auth.verify_totp(str(user.get("mfa_secret") or ""), otp_code):
+                    local_auth.register_failed_login(username, request.remote_addr or "")
                     flash("Invalid OTP code.", "error")
                     return render_template("local_auth_login.html", next_url=next_url, no_users=False)
                 return _complete_local_login(user, next_url)
@@ -2104,8 +2146,13 @@ def create_app():
         qr_data_uri = local_auth.otp_qr_data_uri(otp_uri)
 
         if request.method == "POST":
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for("auth_mfa_setup"))
+
             code = request.form.get("code") or ""
             if not local_auth.verify_totp(secret, code):
+                local_auth.register_failed_login(str(user.get("username") or ""), request.remote_addr or "")
                 flash("Invalid MFA code. Try again.", "error")
             else:
                 local_auth.enable_mfa(int(user["id"]), secret)
@@ -2133,8 +2180,13 @@ def create_app():
             return redirect(url_for("auth_login"))
 
         if request.method == "POST":
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for("auth_mfa_verify"))
+
             code = request.form.get("code") or ""
             if not local_auth.verify_totp(str(user.get("mfa_secret") or ""), code):
+                local_auth.register_failed_login(str(user.get("username") or ""), request.remote_addr or "")
                 flash("Invalid MFA code.", "error")
             else:
                 next_url = pending["next_url"] or url_for("dashboard")
@@ -2165,6 +2217,41 @@ def create_app():
 
     # ── Request hook: force HTTPS when SSL is active ─────────────
 
+    _SENSITIVE_HTTPS_ENDPOINTS = frozenset({
+        "auth_login",
+        "auth_mfa_setup",
+        "auth_mfa_verify",
+        "auth_logout",
+        "profile",
+        "settings",
+        "settings_options_page",
+        "settings_chargers_page",
+        "settings_ai_page",
+        "settings_backup_page",
+        "settings_ssl_page",
+        "settings_status_page",
+    })
+
+    @app.before_request
+    def _enforce_https_sensitive_routes():
+        """Require HTTPS for sensitive auth/settings routes."""
+        if not bool(app.config.get("REQUIRE_HTTPS_SENSITIVE", True)):
+            return
+
+        endpoint = request.endpoint or ""
+        if endpoint not in _SENSITIVE_HTTPS_ENDPOINTS:
+            return
+
+        forwarded_proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        is_secure = bool(request.is_secure or forwarded_proto == "https")
+        if is_secure:
+            return
+
+        if app.config.get("SSL_ACTIVE"):
+            url = request.url.replace("http://", "https://", 1)
+            return redirect(url, code=301)
+        return ("HTTPS is required for this operation.", 403)
+
     @app.before_request
     def _force_https():
         """Redirect HTTP requests to HTTPS when SSL is enabled."""
@@ -2186,6 +2273,12 @@ def create_app():
             "auth_mfa_verify",
             "auth_logout",
             "profile",
+            "settings",
+            "settings_options_page",
+            "settings_chargers_page",
+            "settings_ai_page",
+            "settings_backup_page",
+            "settings_ssl_page",
         }:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
@@ -3574,6 +3667,9 @@ def create_app():
                 "settings_ssl_page",
             }:
                 redirect_endpoint = "settings"
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for(redirect_endpoint))
 
             if action in ("save_retrain_options", "run_retrain_now"):
                 retrain_schedule_enabled = (

@@ -1,6 +1,7 @@
 
 <form method="post" action="{{ url_for('settings') }}" class="card form-card" style="margin-bottom:2rem;">
   <input type="hidden" name="return_to" value="settings_chargers_page">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <h2 style="margin-bottom:1.5rem;">EV Charger Network (NIL/NLR/NREL)</h2>
   <div style="margin-bottom:1rem;">
     <label>NLR API Key:<br>

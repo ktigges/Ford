@@ -2,6 +2,7 @@
 
 <form method="post" action="{{ url_for('settings') }}" class="card form-card" style="margin-bottom:2rem;">
   <input type="hidden" name="return_to" value="settings_backup_page">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <h2 style="margin-bottom:1.5rem;">Scheduled Backups</h2>
   <div style="margin-bottom:1rem;">
     <label><input type="checkbox" name="backup_schedule_enabled" {% if settings.backup_schedule_enabled == 'on' %}checked{% endif %}> Enable Scheduled Backups</label>

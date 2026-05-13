@@ -93,6 +93,110 @@ def ensure_schema() -> None:
         WHERE last_seen_at IS NULL
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS local_auth_login_attempts (
+            key TEXT PRIMARY KEY,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            first_failed_at TIMESTAMPTZ,
+            last_failed_at TIMESTAMPTZ,
+            locked_until TIMESTAMPTZ
+        )
+        """
+    )
+
+
+def _attempt_key(username: str, ip_address: str) -> str:
+    uname = (username or "").strip().lower()
+    ip = (ip_address or "").strip()
+    return f"{uname}|{ip}" if uname else f"ip:{ip or 'unknown'}"
+
+
+def login_is_locked(username: str, ip_address: str) -> tuple[bool, int]:
+    """Return lock status and seconds remaining for this username/IP tuple."""
+    row = db.fetch_one(
+        "SELECT locked_until FROM local_auth_login_attempts WHERE key = %s",
+        (_attempt_key(username, ip_address),),
+    )
+    if not row:
+        return False, 0
+
+    locked_until = row.get("locked_until")
+    if not isinstance(locked_until, datetime):
+        return False, 0
+
+    now = datetime.now(timezone.utc)
+    lu = locked_until if locked_until.tzinfo else locked_until.replace(tzinfo=timezone.utc)
+    if lu <= now:
+        return False, 0
+    return True, int((lu - now).total_seconds())
+
+
+def register_failed_login(
+    username: str,
+    ip_address: str,
+    *,
+    threshold: int = 5,
+    window_minutes: int = 15,
+    lock_minutes: int = 15,
+) -> None:
+    """Track failed logins and lock account/IP tuple after repeated failures."""
+    key = _attempt_key(username, ip_address)
+    now = datetime.now(timezone.utc)
+    row = db.fetch_one(
+        """
+        SELECT failed_count, first_failed_at, locked_until
+        FROM local_auth_login_attempts
+        WHERE key = %s
+        """,
+        (key,),
+    )
+
+    failed_count = int((row or {}).get("failed_count") or 0)
+    first_failed_at = (row or {}).get("first_failed_at") or now
+    locked_until = (row or {}).get("locked_until")
+
+    if isinstance(locked_until, datetime):
+        lu = locked_until if locked_until.tzinfo else locked_until.replace(tzinfo=timezone.utc)
+        if lu > now:
+            return
+
+    if isinstance(first_failed_at, datetime):
+        ff = first_failed_at if first_failed_at.tzinfo else first_failed_at.replace(tzinfo=timezone.utc)
+        if (now - ff) > timedelta(minutes=max(1, window_minutes)):
+            failed_count = 0
+            first_failed_at = now
+        else:
+            first_failed_at = ff
+    else:
+        first_failed_at = now
+
+    failed_count += 1
+    new_locked_until = None
+    if failed_count >= max(2, int(threshold)):
+        new_locked_until = now + timedelta(minutes=max(1, int(lock_minutes)))
+
+    db.execute(
+        """
+        INSERT INTO local_auth_login_attempts (
+            key, failed_count, first_failed_at, last_failed_at, locked_until
+        )
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (key) DO UPDATE SET
+            failed_count = EXCLUDED.failed_count,
+            first_failed_at = EXCLUDED.first_failed_at,
+            last_failed_at = EXCLUDED.last_failed_at,
+            locked_until = EXCLUDED.locked_until
+        """,
+        (key, failed_count, first_failed_at, now, new_locked_until),
+    )
+
+
+def clear_login_attempts(username: str, ip_address: str) -> None:
+    db.execute(
+        "DELETE FROM local_auth_login_attempts WHERE key = %s",
+        (_attempt_key(username, ip_address),),
+    )
 
 
 def clear_session(session_obj: dict) -> None:

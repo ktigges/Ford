@@ -20,6 +20,7 @@
     {% endwith %}
 
     <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label>Authenticator Code</label>
       <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required>
       <button type="submit">Sign In</button>

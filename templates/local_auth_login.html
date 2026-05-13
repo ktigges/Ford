@@ -257,6 +257,7 @@
 
         <form method="post" class="login-form">
           <input type="hidden" name="next" value="{{ next_url }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
           <div>
             <label for="username">Username</label>
