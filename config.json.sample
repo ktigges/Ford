@@ -35,7 +35,7 @@
     "consent_authority": "https://login.microsoftonline.com",
     "allowed_groups": [],
     "allowed_group_names": [
-      "1cfd6b96-bd1e-4947-8130-a30b09b51ebc"
+      "YOUR_ROLE_GUID"
     ]
   }
 }
