@@ -2057,14 +2057,20 @@ def create_app():
 
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
+            otp_code = (request.form.get("otp_code") or "").strip()
             user = local_auth.verify_password(username, password)
             if not user:
                 flash("Invalid username or password.", "error")
                 return render_template("local_auth_login.html", next_url=next_url, no_users=False)
 
             if bool(user.get("mfa_enabled")):
-                local_auth.begin_pending_login(session, int(user["id"]), next_url, "verify")
-                return redirect(url_for("auth_mfa_verify"))
+                if not otp_code:
+                    flash("Enter your OTP code to sign in.", "error")
+                    return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+                if not local_auth.verify_totp(str(user.get("mfa_secret") or ""), otp_code):
+                    flash("Invalid OTP code.", "error")
+                    return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+                return _complete_local_login(user, next_url)
 
             local_auth.begin_pending_login(session, int(user["id"]), next_url, "setup")
             session["local_pending_mfa_secret"] = local_auth.generate_mfa_secret()
