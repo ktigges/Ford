@@ -5,36 +5,275 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local Sign In</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .login-shell {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 2rem 1rem;
+      background:
+        radial-gradient(1200px 500px at 12% 8%, rgba(66, 135, 245, 0.24), transparent 50%),
+        radial-gradient(900px 420px at 90% 88%, rgba(84, 163, 219, 0.2), transparent 58%),
+        linear-gradient(180deg, #dce6f0 0%, #e9eef3 100%);
+    }
+
+    .login-card {
+      width: min(1020px, 100%);
+      background: #f8fbff;
+      border: 1px solid #c9d6e2;
+      border-radius: 14px;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1.12fr 0.88fr;
+      box-shadow: 0 18px 42px rgba(36, 62, 92, 0.22);
+    }
+
+    .login-hero {
+      position: relative;
+      padding: 2.25rem 2rem;
+      color: #f4fbff;
+      background: linear-gradient(150deg, #1d3552 0%, #2d5f9a 42%, #4f86bb 100%);
+    }
+
+    .login-hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px) 0 0 / 34px 34px,
+        linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px) 0 0 / 34px 34px;
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.26);
+      border-radius: 999px;
+      padding: 0.35rem 0.8rem;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      margin-bottom: 1rem;
+    }
+
+    .hero-title {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      font-size: clamp(1.7rem, 3.2vw, 2.35rem);
+      line-height: 1.12;
+      letter-spacing: 0.01em;
+    }
+
+    .hero-copy {
+      position: relative;
+      z-index: 1;
+      margin: 0.9rem 0 0;
+      color: rgba(242, 250, 255, 0.92);
+      max-width: 38ch;
+    }
+
+    .hero-art {
+      position: relative;
+      z-index: 1;
+      margin-top: 1.4rem;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: linear-gradient(180deg, rgba(248, 255, 255, 0.15), rgba(248, 255, 255, 0.05));
+      padding: 0.8rem;
+      backdrop-filter: blur(1.5px);
+    }
+
+    .hero-art svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .login-form-wrap {
+      padding: 2.2rem 1.75rem;
+      background: linear-gradient(180deg, #f8fbff 0%, #f1f6fb 100%);
+    }
+
+    .login-form-wrap h1 {
+      margin: 0;
+      font-size: 1.7rem;
+      color: #213547;
+    }
+
+    .login-subtitle {
+      margin: 0.55rem 0 1.2rem;
+      color: #4e6277;
+      font-size: 0.95rem;
+    }
+
+    .login-form {
+      display: grid;
+      gap: 0.95rem;
+    }
+
+    .login-form label {
+      font-size: 0.9rem;
+      color: #34495d;
+      font-weight: 600;
+      margin-bottom: 0.28rem;
+      display: inline-block;
+    }
+
+    .login-form input {
+      width: 100%;
+      padding: 0.64rem 0.72rem;
+      border: 1px solid #b9cbdc;
+      border-radius: 7px;
+      font-size: 0.95rem;
+      background: #fff;
+    }
+
+    .login-form input:focus {
+      outline: none;
+      border-color: #2d5f9a;
+      box-shadow: 0 0 0 3px rgba(45, 95, 154, 0.18);
+    }
+
+    .signin-btn {
+      margin-top: 0.35rem;
+      width: 100%;
+      padding: 0.72rem 0.95rem;
+      border: 0;
+      border-radius: 8px;
+      color: #f8fdff;
+      background: linear-gradient(180deg, #2f6fb0 0%, #275c92 100%);
+      font-size: 0.98rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: transform 0.14s ease, box-shadow 0.14s ease;
+      box-shadow: 0 8px 18px rgba(39, 92, 146, 0.28);
+    }
+
+    .signin-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 11px 22px rgba(39, 92, 146, 0.35);
+    }
+
+    .signin-btn:active {
+      transform: translateY(0);
+    }
+
+    .login-note {
+      margin-top: 1rem;
+      font-size: 0.84rem;
+      color: #587089;
+    }
+
+    @media (max-width: 920px) {
+      .login-card {
+        grid-template-columns: 1fr;
+      }
+
+      .login-hero {
+        padding: 1.4rem 1.2rem 1.2rem;
+      }
+
+      .login-form-wrap {
+        padding: 1.4rem 1.2rem 1.3rem;
+      }
+
+      .hero-copy {
+        max-width: 100%;
+      }
+    }
+  </style>
 </head>
 <body>
-  <main style="max-width: 560px; margin: 40px auto;">
-    <h1>Sign In</h1>
-    <p>Use your local account credentials to access MLLighting.</p>
+  <main class="login-shell">
+    <section class="login-card" aria-label="Local authentication">
+      <aside class="login-hero" aria-hidden="true">
+        <div class="hero-badge">
+          <span>High Voltage</span>
+        </div>
+        <h2 class="hero-title">MLLighting Local Access</h2>
+        <p class="hero-copy">
+          Secure local sign-in for your EV telemetry stack with enforced MFA and session protection.
+        </p>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for cat, msg in messages %}
-        <div class="flash {{ cat }}">{{ msg }}</div>
-      {% endfor %}
-    {% endif %}
-    {% endwith %}
+        <div class="hero-art">
+          <svg viewBox="0 0 760 360" role="img" aria-label="Lightning and pickup graphic">
+            <defs>
+              <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#f9e77a" />
+                <stop offset="100%" stop-color="#f0ba2d" />
+              </linearGradient>
+              <linearGradient id="truckBody" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#d7ebff" />
+                <stop offset="100%" stop-color="#9fc2e4" />
+              </linearGradient>
+            </defs>
 
-    {% if no_users %}
-      <div class="flash warning">
-        No local users exist yet. Start the standalone user admin app and create at least one user first.
-      </div>
-    {% endif %}
+            <rect x="0" y="0" width="760" height="360" fill="rgba(8, 20, 36, 0.24)" />
 
-    <form method="post">
-      <input type="hidden" name="next" value="{{ next_url }}">
-      <label>Username</label>
-      <input type="text" name="username" autocomplete="username" required>
+            <path d="M230 20 L328 20 L282 118 L350 118 L190 302 L248 174 L180 174 Z" fill="url(#bolt)" stroke="#ffe896" stroke-width="4" />
 
-      <label>Password</label>
-      <input type="password" name="password" autocomplete="current-password" required>
+            <rect x="355" y="174" width="250" height="72" rx="12" fill="url(#truckBody)" stroke="#e8f4ff" stroke-width="3" />
+            <path d="M412 138 L530 138 L566 174 L380 174 Z" fill="#c8e0f7" stroke="#e8f4ff" stroke-width="3" />
+            <rect x="434" y="148" width="74" height="20" rx="4" fill="#42698b" opacity="0.9" />
+            <rect x="514" y="148" width="44" height="20" rx="4" fill="#375a79" opacity="0.9" />
+            <rect x="360" y="198" width="26" height="15" rx="3" fill="#f2c54d" />
+            <rect x="578" y="198" width="22" height="15" rx="3" fill="#f2c54d" />
 
-      <button type="submit">Continue</button>
-    </form>
+            <circle cx="430" cy="252" r="34" fill="#1f2e3d" />
+            <circle cx="430" cy="252" r="17" fill="#7fa9cb" />
+            <circle cx="546" cy="252" r="34" fill="#1f2e3d" />
+            <circle cx="546" cy="252" r="17" fill="#7fa9cb" />
+
+            <line x1="0" y1="286" x2="760" y2="286" stroke="#6a92b8" stroke-width="3" opacity="0.68" />
+            <line x1="0" y1="302" x2="760" y2="302" stroke="#8cb0cf" stroke-width="1" opacity="0.45" />
+          </svg>
+        </div>
+      </aside>
+
+      <section class="login-form-wrap">
+        <h1>Sign In</h1>
+        <p class="login-subtitle">Use your local account credentials to access MLLighting.</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for cat, msg in messages %}
+            <div class="flash {{ cat }}">{{ msg }}</div>
+          {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        {% if no_users %}
+          <div class="flash warning">
+            No local users exist yet. Start the standalone user admin app and create at least one user first.
+          </div>
+        {% endif %}
+
+        <form method="post" class="login-form">
+          <input type="hidden" name="next" value="{{ next_url }}">
+
+          <div>
+            <label for="username">Username</label>
+            <input id="username" type="text" name="username" autocomplete="username" required>
+          </div>
+
+          <div>
+            <label for="password">Password</label>
+            <input id="password" type="password" name="password" autocomplete="current-password" required>
+          </div>
+
+          <button class="signin-btn" type="submit">Continue</button>
+        </form>
+
+        <p class="login-note">MFA verification is required after credentials are accepted.</p>
+      </section>
+    </section>
   </main>
 </body>
 </html>
