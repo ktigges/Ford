@@ -105,6 +105,10 @@
       <th>Energy Used</th>
       <th>SOC Start → End</th>
       <th>Max Speed ({{ ulabel('speed') }})</th>
+      <th>Avg Temp</th>
+      <th>Wind Speed</th>
+      <th>Headwind</th>
+      <th>Tailwind</th>
       <th>Points</th>
       <th>Status</th>
     </tr>
@@ -158,6 +162,26 @@
       <td>
         {% if d.max_speed_kmh is not none %}
           {{ convert(d.max_speed_kmh, 'max_speed_kmh')|round(0)|int }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.weather_temp_c is not none %}
+          {{ "%.1f"|format(d.weather_temp_c) }}°C
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.wind_speed_avg_kmh is not none %}
+          {{ "%.1f"|format(d.wind_speed_avg_kmh) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.headwind_component_kmh is not none %}
+          {{ "%.1f"|format(d.headwind_component_kmh) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </td>
+      <td>
+        {% if d.tailwind_component_kmh is not none %}
+          {{ "%.1f"|format(d.tailwind_component_kmh) }} {{ ulabel('speed') }}
         {% else %}–{% endif %}
       </td>
       <td>{{ d.point_count }}</td>
