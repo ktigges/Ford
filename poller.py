@@ -1075,8 +1075,8 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
              duration if duration is not None else 0)
 
 
-def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
-    """Insert a drive point with all relevant metrics."""
+def _record_drive_point(drive_id: int, ts: datetime, metrics: dict, weather: dict | None = None) -> None:
+    """Insert a drive point with all relevant metrics and optional weather data."""
     db.execute(
         """
         INSERT INTO drive_points (drive_id, recorded_at, speed_kmh, odometer_km,
@@ -1087,8 +1087,11 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
             motor_current, motor_voltage, torque_at_transmission,
             accelerator_pedal_pct, brake_torque, hybrid_mode,
             trip_distance_km, trip_regen_range_km, trip_regen_charge_kwh, trip_fuel_economy,
-            ambient_temp_c, outside_temp_c, engine_coolant_temp_c)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ambient_temp_c, outside_temp_c, engine_coolant_temp_c,
+            weather_temp_c, weather_humidity_pct, weather_pressure_hpa, precipitation_mm,
+            wind_speed_avg_kmh, wind_direction_avg_deg, headwind_component_kmh,
+            tailwind_component_kmh, sidewind_component_kmh)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,
         (drive_id, ts,
          _speed_to_kmh(_v(metrics, "speed", "value")),
@@ -1119,7 +1122,16 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
          _v(metrics, "tripFuelEconomy", "value"),
          _v(metrics, "ambientTemp", "value"),
          _v(metrics, "outsideTemperature", "value"),
-         _v(metrics, "engineCoolantTemp", "value")),
+         _v(metrics, "engineCoolantTemp", "value"),
+         weather.get("weather_temp_c") if weather else None,
+         weather.get("weather_humidity_pct") if weather else None,
+         weather.get("weather_pressure_hpa") if weather else None,
+         weather.get("precipitation_mm") if weather else None,
+         weather.get("wind_speed_avg_kmh") if weather else None,
+         weather.get("wind_direction_avg_deg") if weather else None,
+         weather.get("headwind_component_kmh") if weather else None,
+         weather.get("tailwind_component_kmh") if weather else None,
+         weather.get("sidewind_component_kmh") if weather else None),
     )
 
 
@@ -1128,6 +1140,7 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
 # This prevents short stops (red lights, brief park) from splitting a drive.
 _DRIVE_END_GRACE_POLLS = 2
 _drive_stop_count: int = 0
+_record_drive_point._last_weather_time = None  # Track when we last fetched weather for drive points
 
 
 def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
@@ -1153,19 +1166,31 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
             _drive_stop_count = 0
             active_drive = None
 
+    # Fetch weather every ~5 minutes (300 seconds) to avoid API overload
+    lat = _v(metrics, "position", "value", "location", "lat")
+    lon = _v(metrics, "position", "value", "location", "lon")
+    weather_data = None
+    if lat is not None and lon is not None and (not hasattr(_record_drive_point, "_last_weather_time") or 
+                                                 (ts - _record_drive_point._last_weather_time).total_seconds() >= 300):
+        try:
+            weather_data = _fetch_weather_snapshot(lat, lon, ts)
+            _record_drive_point._last_weather_time = ts
+        except Exception:
+            pass
+
     if driving and not active_drive:
         # Drive just started
         _drive_stop_count = 0
         drive_id = _start_drive(vin, ts, metrics)
-        _record_drive_point(drive_id, ts, metrics)
+        _record_drive_point(drive_id, ts, metrics, weather_data)
     elif driving and active_drive:
         # Drive in progress — record point, reset stop counter
         _drive_stop_count = 0
-        _record_drive_point(active_drive["id"], ts, metrics)
+        _record_drive_point(active_drive["id"], ts, metrics, weather_data)
     elif not driving and active_drive:
         _drive_stop_count += 1
         # Still record this point (captures the stop/park transition)
-        _record_drive_point(active_drive["id"], ts, metrics)
+        _record_drive_point(active_drive["id"], ts, metrics, weather_data)
 
         ign = _v(metrics, "ignitionStatus", "value")
         ign_off = ign and str(ign).lower() not in _IGNITION_ACTIVE

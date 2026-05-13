@@ -477,6 +477,17 @@ CREATE TABLE drive_points (
     outside_temp_c REAL,
     engine_coolant_temp_c REAL,
 
+    -- Weather (at point location/time)
+    weather_temp_c REAL,
+    weather_humidity_pct REAL,
+    weather_pressure_hpa REAL,
+    precipitation_mm REAL,
+    wind_speed_avg_kmh REAL,
+    wind_direction_avg_deg REAL,
+    headwind_component_kmh REAL,
+    tailwind_component_kmh REAL,
+    sidewind_component_kmh REAL,
+
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
