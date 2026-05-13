@@ -29,12 +29,16 @@ import subprocess
 import sys
 import threading
 import json
+import time
+import hmac
+import ipaddress
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify, session
+from flask_session import Session
 import requests
 from werkzeug.utils import secure_filename
 
@@ -166,10 +170,22 @@ def create_app():
         secret_key = "lightning-dev-bootstrap-secret-change-me"
     app.config["SECRET_KEY"] = secret_key
     app.secret_key = secret_key
+
+    # Server-side session store keeps auth tokens off browser cookies.
+    session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".flask_session")
+    os.makedirs(session_dir, exist_ok=True)
+    app.config["SESSION_TYPE"] = os.environ.get("LIGHTNING_SESSION_TYPE", "filesystem").strip() or "filesystem"
+    app.config["SESSION_FILE_DIR"] = session_dir
+    app.config["SESSION_FILE_THRESHOLD"] = int(os.environ.get("LIGHTNING_SESSION_FILE_THRESHOLD", "2000"))
+    app.config["SESSION_USE_SIGNER"] = True
+    app.config["SESSION_PERMANENT"] = False
+    app.config["SESSION_COOKIE_NAME"] = "lightning_session"
+
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = True
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
+    Session(app)
     # Stamp the build time and version once so every template can display them.
     from datetime import datetime as _dt
     app.config["APP_VERSION"] = "0.8.5"
@@ -1989,8 +2005,68 @@ def create_app():
             "entra_claims",
             "entra_user",
             "entra_id_token_exp",
+            "auth_mode",
+            "breakglass_expires_at",
         ):
             session.pop(key, None)
+
+    def _external_metadata_url(cfg: dict) -> str:
+        meta = str(cfg.get("metadata_url", "")).strip()
+        if meta:
+            return meta
+        authority = str(cfg.get("authority", "")).rstrip("/")
+        if authority:
+            return f"{authority}/.well-known/openid-configuration"
+        return ""
+
+    def _ciam_healthy() -> bool:
+        """Best-effort CIAM health probe for breakglass gating."""
+        meta_url = _external_metadata_url(external_id_cfg)
+        if not meta_url:
+            return False
+        try:
+            resp = requests.get(meta_url, timeout=3)
+            return bool(resp.ok)
+        except Exception:
+            return False
+
+    def _breakglass_enabled() -> bool:
+        return (os.environ.get("LIGHTNING_BREAKGLASS_ENABLED", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _breakglass_only_when_ciam_down() -> bool:
+        raw = (os.environ.get("LIGHTNING_BREAKGLASS_ONLY_WHEN_CIAM_DOWN", "1") or "1").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    def _breakglass_token_valid(provided: str) -> bool:
+        expected = (os.environ.get("LIGHTNING_BREAKGLASS_TOKEN", "") or "").strip()
+        provided = (provided or "").strip()
+        if not expected or not provided:
+            return False
+        return hmac.compare_digest(expected, provided)
+
+    def _breakglass_remote_allowed() -> bool:
+        remote = (request.remote_addr or "").strip()
+        if not remote:
+            return False
+
+        explicit_allow = (os.environ.get("LIGHTNING_BREAKGLASS_ALLOWED_IPS", "") or "").strip()
+        if explicit_allow:
+            allowed = {item.strip() for item in explicit_allow.split(",") if item.strip()}
+            return remote in allowed
+
+        try:
+            ip = ipaddress.ip_address(remote)
+            return ip.is_private or ip.is_loopback
+        except ValueError:
+            return False
+
+    def _breakglass_session_valid() -> bool:
+        if session.get("auth_mode") != "breakglass":
+            return False
+        if not _breakglass_enabled():
+            return False
+        exp = int(session.get("breakglass_expires_at") or 0)
+        return exp > int(time.time())
 
     def _handle_external_id_callback():
         """Process Entra redirect callback and establish authenticated session.
@@ -2119,6 +2195,68 @@ def create_app():
                 500,
             )
 
+    @app.route("/internal/breakglass/login", methods=["POST"])
+    def breakglass_login():
+        """Emergency local bypass for CIAM outage. Disabled by default."""
+        # Return 404 on all failures so this endpoint is not easily enumerable.
+        if not _breakglass_enabled():
+            return "Not Found", 404
+        if _breakglass_only_when_ciam_down() and _ciam_healthy():
+            return "Not Found", 404
+        if not _breakglass_remote_allowed():
+            return "Not Found", 404
+
+        token = request.headers.get("X-Breakglass-Token", "") or request.form.get("token", "")
+        if not _breakglass_token_valid(token):
+            return "Not Found", 404
+
+        ttl = int(os.environ.get("LIGHTNING_BREAKGLASS_TTL_SECONDS", "900") or "900")
+        ttl = max(60, min(ttl, 3600))
+        exp = int(time.time()) + ttl
+        username = (os.environ.get("LIGHTNING_BREAKGLASS_USER", "internal-breakglass") or "internal-breakglass").strip()
+
+        session["auth_mode"] = "breakglass"
+        session["breakglass_expires_at"] = exp
+        session["entra_id_token"] = "__breakglass__"
+        session["entra_access_token"] = ""
+        session["entra_claims"] = {
+            "oid": "breakglass",
+            "preferred_username": username,
+            "name": "Internal Breakglass",
+            "tid": "breakglass",
+            "groups": [],
+            "roles": ["breakglass"],
+            "exp": exp,
+        }
+        session["entra_user"] = {
+            "oid": "breakglass",
+            "name": "Internal Breakglass",
+            "username": username,
+            "tenant": "breakglass",
+            "groups": [],
+            "roles": ["breakglass"],
+        }
+        session["entra_id_token_exp"] = exp
+
+        logging.getLogger("entra_external_id").critical(
+            "BREAKGLASS login activated remote=%s user=%s expires_at=%s",
+            request.remote_addr,
+            username,
+            exp,
+        )
+
+        destination = _safe_next_url(request.form.get("next") or request.args.get("next"))
+        return redirect(destination)
+
+    @app.route("/internal/breakglass/logout", methods=["POST"])
+    def breakglass_logout():
+        if session.get("auth_mode") == "breakglass":
+            logging.getLogger("entra_external_id").critical(
+                "BREAKGLASS logout remote=%s", request.remote_addr
+            )
+        _clear_external_auth_session()
+        return redirect(url_for("auth_login"))
+
     @app.route("/auth/logout", methods=["GET"])
     @app.route("/oauth/logout", methods=["GET"])
     def auth_logout():
@@ -2165,14 +2303,14 @@ def create_app():
     _SETUP_SAFE_ENDPOINTS = frozenset({
         "db_setup", "db_setup_test", "db_setup_create",
         "db_setup_restore", "db_setup_upload",
-        "auth_login", "auth_logout", "oidc_callback",
+        "auth_login", "auth_logout", "breakglass_login", "breakglass_logout", "oidc_callback",
         "oauth_config", "reset", "manage", "manage_delete_vin",
         "manage_repoll", "db_browser", "db_table", "db_delete_row",
         "settings", "backup_page", "backup_create", "backup_restore",
         "backup_download", "backup_delete", "backup_upload", "static",
     })
 
-    _AUTH_SAFE_ENDPOINTS = frozenset({"static", "auth_login", "auth_logout"})
+    _AUTH_SAFE_ENDPOINTS = frozenset({"static", "auth_login", "auth_logout", "breakglass_login", "breakglass_logout"})
 
     @app.before_request
     def _check_external_auth():
@@ -2193,6 +2331,9 @@ def create_app():
         if endpoint == "oidc_callback" and request.method == "GET" and (
             request.args.get("code") or request.args.get("error")
         ):
+            return
+
+        if _breakglass_session_valid():
             return
 
         if not app.config.get("EXTERNAL_ID_READY"):
