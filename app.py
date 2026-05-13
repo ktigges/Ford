@@ -220,6 +220,7 @@ def create_app():
         "units": "imperial",
         "timezone": "UTC",
         "log_level": "INFO",
+        "local_auth_idle_timeout_minutes": "30",
         "conservative_polling": "off",
         "autostart_poller": "off",
         "developing": "off",
@@ -2016,6 +2017,19 @@ def create_app():
         local_auth.revoke_session(session)
         local_auth.clear_session(session)
 
+    def _effective_local_auth_idle_timeout_minutes() -> int:
+        """Resolve idle timeout from settings with safe fallback and bounds."""
+        default_idle = max(1, int(app.config.get("LOCAL_AUTH_IDLE_TIMEOUT_MINUTES", 30)))
+        if not db.is_available():
+            return default_idle
+
+        raw = (_get_setting("local_auth_idle_timeout_minutes") or str(default_idle)).strip()
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            value = default_idle
+        return max(1, min(1440, value))
+
     def _complete_local_login(user: dict, next_url: str) -> str:
         local_auth.issue_authenticated_session(
             session,
@@ -2121,7 +2135,8 @@ def create_app():
     def auth_logout():
         """Clear local auth session."""
         _clear_local_auth_session()
-        return redirect(url_for("auth_login"))
+        flash("Signed out.", "success")
+        return redirect(url_for("auth_login", signed_out="1"))
 
     # Run startup DB migrations once the table helpers are available.
     if db.is_available():
@@ -2172,7 +2187,7 @@ def create_app():
         user = local_auth.validate_authenticated_session(
             session,
             absolute_timeout_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
-            idle_timeout_minutes=max(1, int(app.config.get("LOCAL_AUTH_IDLE_TIMEOUT_MINUTES", 30))),
+            idle_timeout_minutes=_effective_local_auth_idle_timeout_minutes(),
         )
         if not user:
             _clear_local_auth_session()
@@ -2181,6 +2196,23 @@ def create_app():
         session["local_user_id"] = int(user["id"])
         session["local_username"] = str(user.get("username") or "")
         session["local_is_admin"] = bool(user.get("is_admin"))
+
+    @app.route("/profile", methods=["GET"])
+    def profile():
+        """Show local authenticated user details and active session timeout policy."""
+        current_user = {
+            "id": int(session.get("local_user_id") or 0),
+            "username": str(session.get("local_username") or ""),
+            "is_admin": bool(session.get("local_is_admin")),
+        }
+        idle_timeout_minutes = _effective_local_auth_idle_timeout_minutes()
+        absolute_timeout_hours = max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8)))
+        return render_template(
+            "profile.html",
+            current_user=current_user,
+            idle_timeout_minutes=idle_timeout_minutes,
+            absolute_timeout_hours=absolute_timeout_hours,
+        )
 
     @app.before_request
     def _check_setup():
@@ -2234,6 +2266,7 @@ def create_app():
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
             "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
+            "local_auth_idle_timeout_minutes": _get_setting("local_auth_idle_timeout_minutes") or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -3738,6 +3771,25 @@ def create_app():
                 "Startup delay before UI/poller become available (seconds); ignored in developing mode",
             )
 
+            idle_timeout_raw = (
+                request.form.get(
+                    "local_auth_idle_timeout_minutes",
+                    _get_setting("local_auth_idle_timeout_minutes")
+                    or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
+                )
+                or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"]
+            ).strip()
+            try:
+                idle_timeout_minutes = int(idle_timeout_raw)
+            except (ValueError, TypeError):
+                idle_timeout_minutes = int(_SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"])
+            idle_timeout_minutes = max(1, min(1440, idle_timeout_minutes))
+            _set_setting(
+                "local_auth_idle_timeout_minutes",
+                str(idle_timeout_minutes),
+                "Auto-logout idle timeout for local auth sessions (minutes)",
+            )
+
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
             iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
@@ -3794,6 +3846,7 @@ def create_app():
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
             "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
+            "local_auth_idle_timeout_minutes": _get_setting("local_auth_idle_timeout_minutes") or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
             "nlr_api_key": _get_setting("nlr_api_key") or "",
             "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
             "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],

@@ -37,6 +37,12 @@
     <small style="display:block; color:#666; margin-top:0.35rem;">Used at app startup before UI/poller become available. Ignored when Developing Mode is enabled.</small>
     <small style="display:block; color:#666; margin-top:0.35rem;">Current behavior: {% if settings.developing == 'on' %}Developer Mode is ON, startup timeout is bypassed.{% else %}Startup timeout applies for {{ settings.startup_delay_seconds }} seconds.{% endif %}</small>
   </div>
+  <div style="margin-bottom:1rem;">
+    <label>Auto Logout on Inactivity (minutes):
+      <input type="number" name="local_auth_idle_timeout_minutes" value="{{ settings.local_auth_idle_timeout_minutes }}" min="1" max="1440">
+    </label>
+    <small style="display:block; color:#666; margin-top:0.35rem;">If no activity occurs for this duration, the current user session is signed out automatically.</small>
+  </div>
   <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
     <legend><b>Polling Intervals (seconds)</b></legend>
     <div style="margin-bottom:1rem;">
@@ -76,6 +82,7 @@
     <li>Conservative Polling: <b>{{ settings.conservative_polling }}</b></li>
     <li>Autostart Poller: <b>{{ settings.autostart_poller }}</b></li>
     <li>Developing Mode: <b>{{ settings.developing }}</b></li>
+    <li>Auth Idle Timeout: <b>{{ settings.local_auth_idle_timeout_minutes }}</b> min</li>
     <li>Polling Off: <b>{{ settings.poll_interval_off }}</b> sec</li>
     <li>Polling On: <b>{{ settings.poll_interval_on }}</b> sec</li>
     <li>Polling Moving: <b>{{ settings.poll_interval_moving }}</b> sec</li>
