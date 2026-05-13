@@ -188,25 +188,23 @@ def _to_list(value: Any) -> list[str]:
 
 
 def user_allowed_by_group(cfg: dict, claims: dict) -> bool:
-    """Check group/role allow-list from External ID config."""
+    """Check role allow-list from External ID config (uses allowed_group_names for role GUIDs)."""
     allowed_group_ids = set(_to_list(cfg.get("allowed_groups")))
-    allowed_group_names = set(_to_list(cfg.get("allowed_group_names")))
+    allowed_role_ids = set(_to_list(cfg.get("allowed_group_names")))
 
     token_groups = set(_to_list(claims.get("groups")))
     token_roles = set(_to_list(claims.get("roles")))
-    token_group_names = set(_to_list(claims.get("groups_displayname")))
 
-    if not allowed_group_ids and not allowed_group_names:
+    # If no allow-list configured, allow all authenticated users
+    if not allowed_group_ids and not allowed_role_ids:
         return True
 
+    # Check against group IDs (legacy support)
     if allowed_group_ids and token_groups.intersection(allowed_group_ids):
         return True
 
-    # Some tenants emit display names or app roles; support both.
-    if allowed_group_names and (
-        token_group_names.intersection(allowed_group_names)
-        or token_roles.intersection(allowed_group_names)
-    ):
+    # Check against role IDs (primary method)
+    if allowed_role_ids and token_roles.intersection(allowed_role_ids):
         return True
 
     return False
