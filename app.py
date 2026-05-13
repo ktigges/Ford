@@ -30,8 +30,6 @@ import sys
 import threading
 import json
 import time
-import hmac
-import ipaddress
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from urllib.parse import urlparse
@@ -49,7 +47,7 @@ import poller
 import units
 import backup
 import crypto
-import entra_external_id as entra_auth
+import local_auth
 import nlr_chargers
 import trip_planner as tp_service
 import energy_model
@@ -104,7 +102,7 @@ def _setup_logging() -> None:
         "poller": "debug_poller.log",
         "nlr_chargers": "debug_chargers.log",
         "nlr_api": "debug_nlr_api.log",
-        "entra_external_id": "debug_entra.log",
+        "local_auth": "debug_local_auth.log",
     }
     for logger_name, filename in debug_files.items():
         fh = logging.FileHandler(os.path.join(log_dir, filename))
@@ -193,35 +191,19 @@ def create_app():
     _setup_logging()
     log = logging.getLogger(__name__)
     log.info("Starting MLLighting app (env=%s)", config.environment())
-    external_id_cfg = config.external_id_config()
-    app.config["EXTERNAL_ID_ENABLED"] = entra_auth.is_enabled(external_id_cfg)
-
-    def _external_id_config_ready(cfg: dict) -> tuple[bool, str]:
-        """Return whether required External ID fields are present."""
-        if not app.config.get("EXTERNAL_ID_ENABLED"):
-            return True, "disabled"
-        required = ["client_id", "client_secret", "redirect_uri"]
-        missing = [key for key in required if not str(cfg.get(key, "")).strip()]
-        has_discovery = bool(str(cfg.get("authority", "")).strip() or str(cfg.get("metadata_url", "")).strip())
-        if not has_discovery:
-            missing.append("authority|metadata_url")
-        if missing:
-            return False, ", ".join(missing)
-        return True, "ok"
-
-    external_ready, external_reason = _external_id_config_ready(external_id_cfg)
-    app.config["EXTERNAL_ID_READY"] = external_ready
-    app.config["EXTERNAL_ID_READY_REASON"] = external_reason
-    if app.config["EXTERNAL_ID_ENABLED"]:
-        log.info("Entra External ID authentication is enabled")
-        if not external_ready:
-            log.error("External ID auth config is incomplete: %s", external_reason)
+    app.config["LOCAL_AUTH_ENABLED"] = True
 
     # Initialize DB pool at startup so normal routes don't fall into setup mode.
     try:
         db.init_pool()
     except Exception as exc:
         log.warning("Database pool init failed at startup: %s", exc)
+
+    if db.is_available():
+        try:
+            local_auth.ensure_schema()
+        except Exception as exc:
+            log.error("Local auth schema init failed: %s", exc)
 
     _SETTINGS_DEFAULTS = {
         "units": "imperial",
@@ -2018,287 +2000,111 @@ def create_app():
             return url_for("dashboard")
         return candidate
 
-    def _clear_external_auth_session() -> None:
-        """Remove all session keys used by Entra External ID auth."""
-        for key in (
-            "entra_auth_state",
-            "entra_auth_nonce",
-            "entra_auth_next",
-            "entra_id_token",
-            "entra_access_token",
-            "entra_claims",
-            "entra_user",
-            "entra_id_token_exp",
-            "auth_mode",
-            "breakglass_expires_at",
-        ):
-            session.pop(key, None)
+    def _clear_local_auth_session() -> None:
+        """Revoke and clear local auth session values."""
+        local_auth.revoke_session(session)
+        local_auth.clear_session(session)
 
-    def _external_metadata_url(cfg: dict) -> str:
-        meta = str(cfg.get("metadata_url", "")).strip()
-        if meta:
-            return meta
-        authority = str(cfg.get("authority", "")).rstrip("/")
-        if authority:
-            return f"{authority}/.well-known/openid-configuration"
-        return ""
-
-    def _ciam_healthy() -> bool:
-        """Best-effort CIAM health probe for breakglass gating."""
-        meta_url = _external_metadata_url(external_id_cfg)
-        if not meta_url:
-            return False
-        try:
-            resp = requests.get(meta_url, timeout=3)
-            return bool(resp.ok)
-        except Exception:
-            return False
-
-    def _breakglass_enabled() -> bool:
-        return (os.environ.get("LIGHTNING_BREAKGLASS_ENABLED", "") or "").strip().lower() in {"1", "true", "yes", "on"}
-
-    def _breakglass_only_when_ciam_down() -> bool:
-        raw = (os.environ.get("LIGHTNING_BREAKGLASS_ONLY_WHEN_CIAM_DOWN", "1") or "1").strip().lower()
-        return raw in {"1", "true", "yes", "on"}
-
-    def _breakglass_token_valid(provided: str) -> bool:
-        expected = (os.environ.get("LIGHTNING_BREAKGLASS_TOKEN", "") or "").strip()
-        provided = (provided or "").strip()
-        if not expected or not provided:
-            return False
-        return hmac.compare_digest(expected, provided)
-
-    def _breakglass_remote_allowed() -> bool:
-        remote = (request.remote_addr or "").strip()
-        if not remote:
-            return False
-
-        explicit_allow = (os.environ.get("LIGHTNING_BREAKGLASS_ALLOWED_IPS", "") or "").strip()
-        if explicit_allow:
-            allowed = {item.strip() for item in explicit_allow.split(",") if item.strip()}
-            return remote in allowed
-
-        try:
-            ip = ipaddress.ip_address(remote)
-            return ip.is_private or ip.is_loopback
-        except ValueError:
-            return False
-
-    def _breakglass_session_valid() -> bool:
-        if session.get("auth_mode") != "breakglass":
-            return False
-        if not _breakglass_enabled():
-            return False
-        exp = int(session.get("breakglass_expires_at") or 0)
-        return exp > int(time.time())
-
-    def _handle_external_id_callback():
-        """Process Entra redirect callback and establish authenticated session.
-        
-        All auth debug details are logged to logs/debug_entra.log for server-side analysis.
-        """
-        auth_log = logging.getLogger("entra_external_id")
-        auth_log.debug(f"Callback initiated from IP {request.remote_addr}")
-
-        if request.args.get("error"):
-            err = request.args.get("error_description") or request.args.get("error")
-            auth_log.warning(f"Entra error in callback: {err}")
-            flash(f"Entra login failed: {err}", "error")
-            return redirect(url_for("auth_login"))
-
-        code = (request.args.get("code") or "").strip()
-        state = (request.args.get("state") or "").strip()
-        if not code or not state:
-            auth_log.warning(f"Callback missing params: code={bool(code)}, state={bool(state)}")
-            flash("Missing Entra callback parameters.", "error")
-            return redirect(url_for("auth_login"))
-
-        expected_state = session.get("entra_auth_state")
-        nonce = session.get("entra_auth_nonce")
-        if not expected_state or state != expected_state:
-            auth_log.warning(
-                f"State mismatch in callback: expected={expected_state}, received={state}"
-            )
-            _clear_external_auth_session()
-            flash("Invalid Entra auth state. Please sign in again.", "error")
-            return redirect(url_for("auth_login"))
-
-        try:
-            auth_log.debug(f"Exchanging code for tokens (code length: {len(code)})")
-            token_response = entra_auth.exchange_code_for_tokens(external_id_cfg, code)
-            id_token = token_response.get("id_token")
-            access_token = token_response.get("access_token", "")
-            
-            auth_log.debug(f"Token response keys: {sorted(token_response.keys())}")
-            
-            if not id_token:
-                auth_log.error("Token response missing id_token")
-                flash("Token response did not include id_token.", "error")
-                return redirect(url_for("auth_login"))
-
-            auth_log.debug("Validating id_token signature and claims")
-            claims = entra_auth.validate_id_token(external_id_cfg, id_token, expected_nonce=nonce)
-            auth_log.debug(f"Validated token claims: {json.dumps(claims, default=str)}")
-            
-            if not entra_auth.user_allowed_by_tenant(external_id_cfg, claims):
-                auth_log.warning(
-                    f"User denied: tenant mismatch. user_tid={claims.get('tid')}, "
-                    f"allowed_tenants={external_id_cfg.get('allowed_tenants')}"
-                )
-                _clear_external_auth_session()
-                return "Access denied: tenant is not allowed.", 403
-            
-            if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
-                auth_log.warning(
-                    f"User denied: group mismatch. user_groups={claims.get('groups')}, "
-                    f"allowed_groups={external_id_cfg.get('allowed_groups')}, "
-                    f"allowed_group_names={external_id_cfg.get('allowed_group_names')}"
-                )
-                _clear_external_auth_session()
-                return "Access denied: account is not in an allowed subscriber group.", 403
-
-            session["entra_id_token"] = id_token
-            session["entra_access_token"] = access_token
-            session["entra_claims"] = {
-                "oid": claims.get("oid") or claims.get("sub"),
-                "preferred_username": claims.get("preferred_username", ""),
-                "name": claims.get("name", ""),
-                "tid": claims.get("tid", ""),
-                "groups": claims.get("groups", []),
-                "roles": claims.get("roles", []),
-                "exp": claims.get("exp"),
-            }
-            session["entra_user"] = entra_auth.extract_user(claims)
-            session["entra_id_token_exp"] = int(claims.get("exp", 0) or 0)
-
-            session.pop("entra_auth_state", None)
-            session.pop("entra_auth_nonce", None)
-
-            destination = _safe_next_url(session.pop("entra_auth_next", None))
-            user_id = claims.get("preferred_username") or claims.get("oid") or "unknown"
-            auth_log.info(f"Auth successful: user={user_id}, destination={destination}")
-            flash("Signed in successfully.", "success")
-            return redirect(destination)
-        except Exception as exc:
-            _clear_external_auth_session()
-            auth_log.exception(f"Entra callback processing failed: {exc}")
-            # Return direct error (no loop), guide to logs
-            return (
-                "External ID authentication failed. "
-                "Contact administrator and check logs/debug_entra.log for details.",
-                502,
-            )
-
-    @app.route("/auth/login", methods=["GET"])
-    @app.route("/oauth/login", methods=["GET"])
-    def auth_login():
-        """Start Entra External ID login flow."""
-        if not app.config.get("EXTERNAL_ID_ENABLED"):
-            return (
-                "External ID auth is disabled in config. "
-                "Enable external_id.enabled in config.json.",
-                503,
-            )
-        if not app.config.get("EXTERNAL_ID_READY"):
-            return (
-                "External ID auth config is incomplete. "
-                f"Missing: {app.config.get('EXTERNAL_ID_READY_REASON', 'unknown')}",
-                503,
-            )
-
-        next_url = _safe_next_url(request.args.get("next"))
-        try:
-            authorize_url = entra_auth.build_authorize_url(external_id_cfg, session, next_url=next_url)
-            return redirect(authorize_url)
-        except Exception as exc:
-            log.exception("Failed to start Entra login: %s", exc)
-            return (
-                "Unable to start Entra sign-in flow. "
-                "Check external_id.authority or external_id.metadata_url, and verify client settings. "
-                f"Error: {exc}",
-                500,
-            )
-
-    @app.route("/internal/breakglass/login", methods=["POST"])
-    def breakglass_login():
-        """Emergency local bypass for CIAM outage. Disabled by default."""
-        # Return 404 on all failures so this endpoint is not easily enumerable.
-        if not _breakglass_enabled():
-            return "Not Found", 404
-        if _breakglass_only_when_ciam_down() and _ciam_healthy():
-            return "Not Found", 404
-        if not _breakglass_remote_allowed():
-            return "Not Found", 404
-
-        token = request.headers.get("X-Breakglass-Token", "") or request.form.get("token", "")
-        if not _breakglass_token_valid(token):
-            return "Not Found", 404
-
-        ttl = int(os.environ.get("LIGHTNING_BREAKGLASS_TTL_SECONDS", "900") or "900")
-        ttl = max(60, min(ttl, 3600))
-        exp = int(time.time()) + ttl
-        username = (os.environ.get("LIGHTNING_BREAKGLASS_USER", "internal-breakglass") or "internal-breakglass").strip()
-
-        session["auth_mode"] = "breakglass"
-        session["breakglass_expires_at"] = exp
-        session["entra_id_token"] = "__breakglass__"
-        session["entra_access_token"] = ""
-        session["entra_claims"] = {
-            "oid": "breakglass",
-            "preferred_username": username,
-            "name": "Internal Breakglass",
-            "tid": "breakglass",
-            "groups": [],
-            "roles": ["breakglass"],
-            "exp": exp,
-        }
-        session["entra_user"] = {
-            "oid": "breakglass",
-            "name": "Internal Breakglass",
-            "username": username,
-            "tenant": "breakglass",
-            "groups": [],
-            "roles": ["breakglass"],
-        }
-        session["entra_id_token_exp"] = exp
-
-        logging.getLogger("entra_external_id").critical(
-            "BREAKGLASS login activated remote=%s user=%s expires_at=%s",
-            request.remote_addr,
-            username,
-            exp,
+    def _complete_local_login(user: dict, next_url: str) -> str:
+        local_auth.issue_authenticated_session(
+            session,
+            user,
+            ip_address=request.remote_addr or "",
+            user_agent=request.headers.get("User-Agent", ""),
+            lifetime_hours=8,
         )
+        flash("Signed in successfully.", "success")
+        return redirect(_safe_next_url(next_url))
 
-        destination = _safe_next_url(request.form.get("next") or request.args.get("next"))
-        return redirect(destination)
+    @app.route("/auth/login", methods=["GET", "POST"])
+    @app.route("/oauth/login", methods=["GET", "POST"])
+    def auth_login():
+        """Authenticate local user credentials, then require MFA setup/verification."""
+        if not db.is_available():
+            return redirect(url_for("db_setup"))
 
-    @app.route("/internal/breakglass/logout", methods=["POST"])
-    def breakglass_logout():
-        if session.get("auth_mode") == "breakglass":
-            logging.getLogger("entra_external_id").critical(
-                "BREAKGLASS logout remote=%s", request.remote_addr
-            )
-        _clear_external_auth_session()
-        return redirect(url_for("auth_login"))
+        no_users = local_auth.user_count() == 0
+        next_url = _safe_next_url(request.values.get("next"))
+        if request.method == "POST":
+            if no_users:
+                flash("No local users exist yet. Use the standalone user admin app first.", "error")
+                return render_template("local_auth_login.html", next_url=next_url, no_users=True)
+
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            user = local_auth.verify_password(username, password)
+            if not user:
+                flash("Invalid username or password.", "error")
+                return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+
+            if bool(user.get("mfa_enabled")):
+                local_auth.begin_pending_login(session, int(user["id"]), next_url, "verify")
+                return redirect(url_for("auth_mfa_verify"))
+
+            local_auth.begin_pending_login(session, int(user["id"]), next_url, "setup")
+            session["local_pending_mfa_secret"] = local_auth.generate_mfa_secret()
+            return redirect(url_for("auth_mfa_setup"))
+
+        return render_template("local_auth_login.html", next_url=next_url, no_users=no_users)
+
+    @app.route("/auth/mfa/setup", methods=["GET", "POST"])
+    def auth_mfa_setup():
+        """Force MFA enrollment for users that are not yet enrolled."""
+        pending = local_auth.pending_login(session)
+        if pending["stage"] != "setup" or not pending["user_id"]:
+            return redirect(url_for("auth_login"))
+
+        user = local_auth.get_user_by_id(int(pending["user_id"]))
+        if not user or not bool(user.get("is_active")):
+            local_auth.clear_session(session)
+            return redirect(url_for("auth_login"))
+
+        secret = str(session.get("local_pending_mfa_secret") or "").strip()
+        if not secret:
+            secret = local_auth.generate_mfa_secret()
+            session["local_pending_mfa_secret"] = secret
+        otp_uri = local_auth.provisioning_uri(user, secret)
+
+        if request.method == "POST":
+            code = request.form.get("code") or ""
+            if not local_auth.verify_totp(secret, code):
+                flash("Invalid MFA code. Try again.", "error")
+            else:
+                local_auth.enable_mfa(int(user["id"]), secret)
+                user = local_auth.get_user_by_id(int(user["id"]))
+                next_url = pending["next_url"] or url_for("dashboard")
+                return _complete_local_login(user, next_url)
+
+        return render_template("local_auth_mfa_setup.html", secret=secret, otp_uri=otp_uri)
+
+    @app.route("/auth/mfa/verify", methods=["GET", "POST"])
+    def auth_mfa_verify():
+        """Verify TOTP code for users that already enrolled in MFA."""
+        pending = local_auth.pending_login(session)
+        if pending["stage"] != "verify" or not pending["user_id"]:
+            return redirect(url_for("auth_login"))
+
+        user = local_auth.get_user_by_id(int(pending["user_id"]))
+        if not user or not bool(user.get("is_active")) or not bool(user.get("mfa_enabled")):
+            local_auth.clear_session(session)
+            return redirect(url_for("auth_login"))
+
+        if request.method == "POST":
+            code = request.form.get("code") or ""
+            if not local_auth.verify_totp(str(user.get("mfa_secret") or ""), code):
+                flash("Invalid MFA code.", "error")
+            else:
+                next_url = pending["next_url"] or url_for("dashboard")
+                return _complete_local_login(user, next_url)
+
+        return render_template("local_auth_mfa_verify.html")
 
     @app.route("/auth/logout", methods=["GET"])
     @app.route("/oauth/logout", methods=["GET"])
     def auth_logout():
-        """Clear local auth session and optionally call Entra logout endpoint."""
-        _clear_external_auth_session()
-        post_logout_redirect = url_for("auth_login", _external=True)
-        provider_logout = entra_auth.build_logout_url(
-            external_id_cfg,
-            post_logout_redirect_uri=post_logout_redirect,
-        )
-        if provider_logout:
-            return redirect(provider_logout)
+        """Clear local auth session."""
+        _clear_local_auth_session()
         return redirect(url_for("auth_login"))
-
-    @app.route("/oidc/callback", methods=["GET"])
-    def oidc_callback():
-        """OIDC callback endpoint for Entra External ID."""
-        return _handle_external_id_callback()
 
     # Run startup DB migrations once the table helpers are available.
     if db.is_available():
@@ -2327,65 +2133,33 @@ def create_app():
     _SETUP_SAFE_ENDPOINTS = frozenset({
         "db_setup", "db_setup_test", "db_setup_create",
         "db_setup_restore", "db_setup_upload",
-        "auth_login", "auth_logout", "breakglass_login", "breakglass_logout", "oidc_callback",
+        "auth_login", "auth_logout", "auth_mfa_setup", "auth_mfa_verify",
         "oauth_config", "reset", "manage", "manage_delete_vin",
         "manage_repoll", "db_browser", "db_table", "db_delete_row",
         "settings", "backup_page", "backup_create", "backup_restore",
         "backup_download", "backup_delete", "backup_upload", "static",
     })
 
-    _AUTH_SAFE_ENDPOINTS = frozenset({"static", "auth_login", "auth_logout", "breakglass_login", "breakglass_logout"})
+    _AUTH_SAFE_ENDPOINTS = frozenset({"static", "auth_login", "auth_logout", "auth_mfa_setup", "auth_mfa_verify"})
 
     @app.before_request
-    def _check_external_auth():
-        """Require authenticated Entra session on each request when enabled."""
-        if not app.config.get("EXTERNAL_ID_ENABLED"):
+    def _check_local_auth():
+        """Require authenticated local session + completed MFA on each request."""
+        if not app.config.get("LOCAL_AUTH_ENABLED"):
             return
 
         endpoint = request.endpoint or ""
         if endpoint in _AUTH_SAFE_ENDPOINTS or endpoint.startswith("static"):
             return
 
-        # /oauth doubles as callback endpoint for External ID.
-        if endpoint == "oauth_config" and request.method == "GET" and (
-            request.args.get("code") or request.args.get("error")
-        ):
-            return
-
-        if endpoint == "oidc_callback" and request.method == "GET" and (
-            request.args.get("code") or request.args.get("error")
-        ):
-            return
-
-        if _breakglass_session_valid():
-            return
-
-        if not app.config.get("EXTERNAL_ID_READY"):
-            return (
-                "External ID auth config is incomplete. "
-                f"Missing: {app.config.get('EXTERNAL_ID_READY_REASON', 'unknown')}",
-                503,
-            )
-
-        id_token = session.get("entra_id_token")
-        if not id_token:
+        user = local_auth.validate_authenticated_session(session)
+        if not user:
+            _clear_local_auth_session()
             return redirect(url_for("auth_login", next=request.full_path or request.path))
 
-        try:
-            claims = entra_auth.validate_id_token(external_id_cfg, id_token)
-            if not entra_auth.user_allowed_by_tenant(external_id_cfg, claims):
-                _clear_external_auth_session()
-                return redirect(url_for("auth_login", next=request.full_path or request.path))
-            if not entra_auth.user_allowed_by_group(external_id_cfg, claims):
-                _clear_external_auth_session()
-                return redirect(url_for("auth_login", next=request.full_path or request.path))
-
-            session["entra_user"] = entra_auth.extract_user(claims)
-            session["entra_id_token_exp"] = int(claims.get("exp", 0) or 0)
-        except Exception as exc:
-            log.warning("External ID token validation failed; forcing re-login: %s", exc)
-            _clear_external_auth_session()
-            return redirect(url_for("auth_login", next=request.full_path or request.path))
+        session["local_user_id"] = int(user["id"])
+        session["local_username"] = str(user.get("username") or "")
+        session["local_is_admin"] = bool(user.get("is_admin"))
 
     @app.before_request
     def _check_setup():
@@ -3516,11 +3290,6 @@ def create_app():
     @app.route("/oauth", methods=["GET", "POST"])
     def oauth_config():
         """OAuth configuration form. Validates credentials and kicks off initial data poll."""
-
-        if app.config.get("EXTERNAL_ID_ENABLED") and request.method == "GET" and (
-            request.args.get("code") or request.args.get("error")
-        ):
-            return _handle_external_id_callback()
 
         if request.method == "POST":
             form = {

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MFA Verification</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main style="max-width: 560px; margin: 40px auto;">
+    <h1>Verify MFA</h1>
+    <p>Enter the 6-digit code from your authenticator app.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <form method="post">
+      <label>Authenticator Code</label>
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required>
+      <button type="submit">Sign In</button>
+    </form>
+  </main>
+</body>
+</html>

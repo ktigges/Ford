@@ -333,6 +333,41 @@ CREATE TABLE oauth_credentials (
 );
 
 -- =========================
+-- Local auth users + sessions
+-- =========================
+CREATE TABLE local_users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL,
+    email TEXT,
+    password_hash TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_secret TEXT,
+    mfa_enrolled_at TIMESTAMPTZ,
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX local_users_username_lower_uidx
+ON local_users (LOWER(username));
+
+CREATE TABLE local_auth_sessions (
+    id UUID PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES local_users(id) ON DELETE CASCADE,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    mfa_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    ip_address TEXT,
+    user_agent TEXT
+);
+
+CREATE INDEX local_auth_sessions_user_idx
+ON local_auth_sessions (user_id, revoked_at, expires_at);
+
+-- =========================
 -- Drive sessions
 -- =========================
 CREATE TABLE drives (
