@@ -8,6 +8,7 @@ Extracts metrics from Ford's API response and upserts into PostgreSQL state tabl
 import hashlib
 import json
 import logging
+import math
 import random
 import threading
 import time
@@ -779,6 +780,93 @@ def _vehicle_is_active(vin: str, metrics: dict) -> bool:
 
 # ── Drive tracking ─────────────────────────────────────────────────
 
+_OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+
+def _bearing_degrees(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate initial bearing from point 1 to point 2 in degrees [0, 360)."""
+    lat1_r = math.radians(float(lat1))
+    lat2_r = math.radians(float(lat2))
+    dlon_r = math.radians(float(lon2) - float(lon1))
+    x = math.sin(dlon_r) * math.cos(lat2_r)
+    y = math.cos(lat1_r) * math.sin(lat2_r) - math.sin(lat1_r) * math.cos(lat2_r) * math.cos(dlon_r)
+    brng = (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+    return brng
+
+
+def _wind_components_kmh(route_bearing_deg: float, wind_speed_kmh: float, wind_from_deg: float) -> tuple[float, float, float, str]:
+    """Return headwind, tailwind, sidewind components and context label."""
+    wind_to = (float(wind_from_deg) + 180.0) % 360.0
+    angle = math.radians(abs((wind_to - float(route_bearing_deg) + 180.0) % 360.0 - 180.0))
+    along = float(wind_speed_kmh) * math.cos(angle)
+    cross = abs(float(wind_speed_kmh) * math.sin(angle))
+
+    if along >= 0:
+        headwind = 0.0
+        tailwind = along
+        context = "tailwind" if along >= cross else "crosswind"
+    else:
+        headwind = abs(along)
+        tailwind = 0.0
+        context = "headwind" if abs(along) >= cross else "crosswind"
+
+    return headwind, tailwind, cross, context
+
+
+def _nearest_hourly_value(times: list, values: list, target: datetime):
+    """Return hourly series value closest to target UTC timestamp."""
+    if not times or not values:
+        return None
+    best_idx = None
+    best_delta = None
+    for idx, ts in enumerate(times):
+        if idx >= len(values):
+            break
+        try:
+            dt = datetime.fromisoformat(str(ts)).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        delta = abs((dt - target).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_idx = idx
+    if best_idx is None:
+        return None
+    return values[best_idx]
+
+
+def _fetch_weather_snapshot(lat: float | None, lon: float | None, when_utc: datetime) -> dict:
+    """Fetch nearest hourly weather metrics for a location/time from Open-Meteo."""
+    if lat is None or lon is None:
+        return {}
+    try:
+        resp = requests.get(
+            _OPEN_METEO_URL,
+            params={
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,precipitation,wind_speed_10m,wind_direction_10m",
+                "timezone": "UTC",
+                "past_days": 2,
+                "forecast_days": 2,
+            },
+            timeout=6,
+        )
+        resp.raise_for_status()
+        hourly = (resp.json() or {}).get("hourly") or {}
+        times = hourly.get("time") or []
+        return {
+            "weather_temp_c": _nearest_hourly_value(times, hourly.get("temperature_2m") or [], when_utc),
+            "weather_humidity_pct": _nearest_hourly_value(times, hourly.get("relative_humidity_2m") or [], when_utc),
+            "weather_pressure_hpa": _nearest_hourly_value(times, hourly.get("surface_pressure") or [], when_utc),
+            "precipitation_mm": _nearest_hourly_value(times, hourly.get("precipitation") or [], when_utc),
+            "wind_speed_avg_kmh": _nearest_hourly_value(times, hourly.get("wind_speed_10m") or [], when_utc),
+            "wind_direction_avg_deg": _nearest_hourly_value(times, hourly.get("wind_direction_10m") or [], when_utc),
+        }
+    except Exception as exc:
+        log.warning("[DRIVE] Weather fetch failed for %.5f,%.5f: %s", float(lat), float(lon), exc)
+        return {}
+
 def _is_driving(vin: str, metrics: dict) -> bool:
     """Return True if the vehicle is actually driving (not just ignition on).
 
@@ -886,17 +974,70 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
 
     # Derived stats from drive_points
     stats = db.fetch_one(
-        "SELECT max(speed_kmh) AS max_speed, sum(trip_regen_charge_kwh) AS total_regen "
+        "SELECT max(speed_kmh) AS max_speed, avg(altitude_m) AS avg_altitude, "
+        "avg(ambient_temp_c) AS avg_ambient_temp, avg(outside_temp_c) AS avg_outside_temp "
         "FROM drive_points WHERE drive_id = %s",
         (drive["id"],),
     )
     max_speed = stats["max_speed"] if stats else None
+    avg_altitude = stats["avg_altitude"] if stats else None
+    avg_ambient_temp = stats["avg_ambient_temp"] if stats else None
+    avg_outside_temp = stats["avg_outside_temp"] if stats else None
     # Use the last drive point's trip_regen_charge_kwh as accumulated regen
     last_pt = db.fetch_one(
-        "SELECT trip_regen_charge_kwh FROM drive_points WHERE drive_id = %s ORDER BY recorded_at DESC LIMIT 1",
+        "SELECT trip_regen_charge_kwh, altitude_m FROM drive_points WHERE drive_id = %s ORDER BY recorded_at DESC LIMIT 1",
         (drive["id"],),
     )
     regen_energy = last_pt["trip_regen_charge_kwh"] if last_pt and last_pt.get("trip_regen_charge_kwh") else None
+
+    start_alt_row = db.fetch_one(
+        "SELECT altitude_m FROM drive_points WHERE drive_id = %s ORDER BY recorded_at ASC LIMIT 1",
+        (drive["id"],),
+    )
+    start_alt = start_alt_row.get("altitude_m") if start_alt_row else None
+    end_alt = last_pt.get("altitude_m") if last_pt else None
+    net_elevation_change = None
+    if start_alt is not None and end_alt is not None:
+        try:
+            net_elevation_change = float(end_alt) - float(start_alt)
+        except Exception:
+            net_elevation_change = None
+
+    elev_components = db.fetch_one(
+        """
+        WITH p AS (
+            SELECT altitude_m, LAG(altitude_m) OVER (ORDER BY recorded_at) AS prev_alt
+            FROM drive_points
+            WHERE drive_id = %s AND altitude_m IS NOT NULL
+        )
+        SELECT
+            COALESCE(SUM(CASE WHEN altitude_m > prev_alt THEN altitude_m - prev_alt ELSE 0 END), 0) AS elevation_gain_m,
+            COALESCE(SUM(CASE WHEN altitude_m < prev_alt THEN prev_alt - altitude_m ELSE 0 END), 0) AS elevation_loss_m
+        FROM p
+        """,
+        (drive["id"],),
+    )
+    elevation_gain = elev_components.get("elevation_gain_m") if elev_components else None
+    elevation_loss = elev_components.get("elevation_loss_m") if elev_components else None
+
+    route_bearing = None
+    start_lat = drive.get("start_lat")
+    start_lon = drive.get("start_lon")
+    if start_lat is not None and start_lon is not None and end_lat is not None and end_lon is not None:
+        try:
+            route_bearing = _bearing_degrees(float(start_lat), float(start_lon), float(end_lat), float(end_lon))
+        except Exception:
+            route_bearing = None
+
+    wx = _fetch_weather_snapshot(end_lat, end_lon, ts)
+    wind_speed = wx.get("wind_speed_avg_kmh")
+    wind_dir = wx.get("wind_direction_avg_deg")
+    headwind = None
+    tailwind = None
+    sidewind = None
+    wind_context = None
+    if route_bearing is not None and wind_speed is not None and wind_dir is not None:
+        headwind, tailwind, sidewind, wind_context = _wind_components_kmh(route_bearing, float(wind_speed), float(wind_dir))
 
     db.execute(
         """
@@ -905,12 +1046,26 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
             end_soc_percent = %s, end_energy_kwh = %s, energy_used_kwh = %s,
             end_lat = %s, end_lon = %s, end_heading_deg = %s, end_compass = %s,
             duration_sec = %s, max_speed_kmh = %s, regen_energy_kwh = %s,
+            avg_ambient_temp_c = %s, avg_outside_temp_c = %s,
+            weather_temp_c = %s, weather_humidity_pct = %s, weather_pressure_hpa = %s,
+            precipitation_mm = %s, wind_speed_avg_kmh = %s, wind_direction_avg_deg = %s,
+            headwind_component_kmh = %s, tailwind_component_kmh = %s, sidewind_component_kmh = %s,
+            wind_context = %s, route_bearing_deg = %s,
+            avg_altitude_m = %s, elevation_gain_m = %s, elevation_loss_m = %s,
+            net_elevation_change_m = %s,
             in_progress = FALSE
         WHERE id = %s
         """,
         (ts, end_odo, distance, end_soc, end_energy, energy_used,
          end_lat, end_lon, end_heading, end_compass,
-         duration, max_speed, regen_energy, drive["id"]),
+         duration, max_speed, regen_energy,
+         avg_ambient_temp, avg_outside_temp,
+         wx.get("weather_temp_c"), wx.get("weather_humidity_pct"), wx.get("weather_pressure_hpa"),
+         wx.get("precipitation_mm"), wind_speed, wind_dir,
+         headwind, tailwind, sidewind,
+         wind_context, route_bearing,
+         avg_altitude, elevation_gain, elevation_loss,
+         net_elevation_change, drive["id"]),
     )
     log.info("[DRIVE] Ended drive #%d (uuid=%s)  distance=%.1f km  energy=%.2f kWh  duration=%.0fs",
              drive["id"], drive.get("drive_uuid", "?"),

@@ -117,6 +117,18 @@ def predict_energy(
     speed_variance = kwargs.get("speed_variance", avg_speed_kmh * 0.3)  # Assume 30% variance
     acceleration_aggression = kwargs.get("acceleration_aggression", 0)
     regen_kwh = kwargs.get("regen_kwh", distance_km * 0.1)  # Assume 10% regen
+    weather_temp_c = kwargs.get("weather_temp_c", avg_outside_temp_c)
+    weather_humidity_pct = kwargs.get("weather_humidity_pct", 50)
+    weather_pressure_hpa = kwargs.get("weather_pressure_hpa", 1013)
+    precipitation_mm = kwargs.get("precipitation_mm", 0)
+    wind_speed_avg_kmh = kwargs.get("wind_speed_avg_kmh", 0)
+    headwind_component_kmh = kwargs.get("headwind_component_kmh", 0)
+    tailwind_component_kmh = kwargs.get("tailwind_component_kmh", 0)
+    sidewind_component_kmh = kwargs.get("sidewind_component_kmh", 0)
+    avg_altitude_m = kwargs.get("avg_altitude_m", 0)
+    elevation_gain_m = kwargs.get("elevation_gain_m", 0)
+    elevation_loss_m = kwargs.get("elevation_loss_m", 0)
+    net_elevation_change_m = kwargs.get("net_elevation_change_m", 0)
     trip_efficiency_kmh = kwargs.get("trip_efficiency_kmh", None)
     
     # Calculate trip_efficiency_kmh if not provided
@@ -124,20 +136,47 @@ def predict_energy(
         trip_efficiency_kmh = distance_km / max(0.1, duration_min / 60 * avg_speed_kmh)
         used_defaults.append("trip_efficiency_kmh")
     
-    # Build feature vector in schema order
-    features = [
-        distance_km,
-        duration_min,
-        avg_speed_kmh,
-        max_speed_kmh,
-        speed_variance,
-        acceleration_aggression,
-        avg_ambient_temp_c,
-        avg_outside_temp_c,
-        soc_drop_percent,
-        regen_kwh,
-        trip_efficiency_kmh,
+    # Build feature vector in schema order for backward/forward model compatibility.
+    feature_defaults = {
+        "distance_km": distance_km,
+        "duration_min": duration_min,
+        "avg_speed_kmh": avg_speed_kmh,
+        "max_speed_kmh": max_speed_kmh,
+        "speed_variance": speed_variance,
+        "acceleration_aggression": acceleration_aggression,
+        "avg_ambient_temp_c": avg_ambient_temp_c,
+        "avg_outside_temp_c": avg_outside_temp_c,
+        "weather_temp_c": weather_temp_c,
+        "weather_humidity_pct": weather_humidity_pct,
+        "weather_pressure_hpa": weather_pressure_hpa,
+        "precipitation_mm": precipitation_mm,
+        "wind_speed_avg_kmh": wind_speed_avg_kmh,
+        "headwind_component_kmh": headwind_component_kmh,
+        "tailwind_component_kmh": tailwind_component_kmh,
+        "sidewind_component_kmh": sidewind_component_kmh,
+        "avg_altitude_m": avg_altitude_m,
+        "elevation_gain_m": elevation_gain_m,
+        "elevation_loss_m": elevation_loss_m,
+        "net_elevation_change_m": net_elevation_change_m,
+        "soc_drop_percent": soc_drop_percent,
+        "regen_kwh": regen_kwh,
+        "trip_efficiency_kmh": trip_efficiency_kmh,
+    }
+
+    feature_names = schema.get("features") or [
+        "distance_km", "duration_min", "avg_speed_kmh", "max_speed_kmh",
+        "speed_variance", "acceleration_aggression",
+        "avg_ambient_temp_c", "avg_outside_temp_c",
+        "soc_drop_percent", "regen_kwh", "trip_efficiency_kmh",
     ]
+
+    features = []
+    for feature_name in feature_names:
+        value = feature_defaults.get(feature_name)
+        if value is None:
+            value = 0
+            used_defaults.append(feature_name)
+        features.append(value)
     
     # Scale and predict
     import numpy as np

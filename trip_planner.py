@@ -910,6 +910,9 @@ def get_route_weather_timeline(
                 "wind_context": "",
                 "driving_alert": "",
                 "precipitation_pct": None,
+                "precipitation_mm": None,
+                "humidity_pct": None,
+                "pressure_hpa": None,
             }
         )
 
@@ -936,7 +939,7 @@ def get_route_weather_timeline(
                 params={
                     "latitude": entry["lat"],
                     "longitude": entry["lon"],
-                    "hourly": "temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_direction_10m,is_day",
+                    "hourly": "temperature_2m,weather_code,precipitation_probability,precipitation,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,is_day",
                     "forecast_days": 3,
                     "timezone": "UTC",
                 },
@@ -950,6 +953,9 @@ def get_route_weather_timeline(
             temps = hourly.get("temperature_2m") or []
             codes = hourly.get("weather_code") or []
             precips = hourly.get("precipitation_probability") or []
+            precip_amounts = hourly.get("precipitation") or []
+            humidities = hourly.get("relative_humidity_2m") or []
+            pressures = hourly.get("surface_pressure") or []
             winds = hourly.get("wind_speed_10m") or []
             wind_dirs = hourly.get("wind_direction_10m") or []
             is_day_vals = hourly.get("is_day") or []
@@ -973,6 +979,9 @@ def get_route_weather_timeline(
             temp_val = temps[best_idx] if best_idx < len(temps) else None
             code_val = codes[best_idx] if best_idx < len(codes) else None
             precip_val = precips[best_idx] if best_idx < len(precips) else None
+            precip_mm_val = precip_amounts[best_idx] if best_idx < len(precip_amounts) else None
+            humidity_val = humidities[best_idx] if best_idx < len(humidities) else None
+            pressure_val = pressures[best_idx] if best_idx < len(pressures) else None
             wind_val = winds[best_idx] if best_idx < len(winds) else None
             wind_dir_val = wind_dirs[best_idx] if best_idx < len(wind_dirs) else None
             is_day_val = is_day_vals[best_idx] if best_idx < len(is_day_vals) else None
@@ -980,6 +989,9 @@ def get_route_weather_timeline(
             entry["temp_c"] = round(float(temp_val), 1) if temp_val is not None else None
             entry["weather"] = _weather_label_from_code(code_val)
             entry["precipitation_pct"] = int(round(float(precip_val))) if precip_val is not None else None
+            entry["precipitation_mm"] = round(float(precip_mm_val), 2) if precip_mm_val is not None else None
+            entry["humidity_pct"] = int(round(float(humidity_val))) if humidity_val is not None else None
+            entry["pressure_hpa"] = round(float(pressure_val), 1) if pressure_val is not None else None
             entry["wind_kmh"] = round(float(wind_val), 1) if wind_val is not None else None
             entry["wind_dir_deg"] = round(float(wind_dir_val), 1) if wind_dir_val is not None else None
             if is_day_val is not None:
@@ -1792,12 +1804,57 @@ def plan_trip(
             temps = [float(wx.get("temp_c")) for wx in route_weather if wx.get("temp_c") is not None]
             avg_temp_c = (sum(temps) / len(temps)) if temps else float(current_temp_c)
 
+            humidities = [float(wx.get("humidity_pct")) for wx in route_weather if wx.get("humidity_pct") is not None]
+            precip_mm = [float(wx.get("precipitation_mm")) for wx in route_weather if wx.get("precipitation_mm") is not None]
+            pressures = [float(wx.get("pressure_hpa")) for wx in route_weather if wx.get("pressure_hpa") is not None]
+
+            avg_humidity_pct = (sum(humidities) / len(humidities)) if humidities else 50.0
+            avg_precip_mm = (sum(precip_mm) / len(precip_mm)) if precip_mm else 0.0
+            avg_pressure_hpa = (sum(pressures) / len(pressures)) if pressures else 1013.0
+
+            headwind_components = []
+            tailwind_components = []
+            sidewind_components = []
+            wind_speeds = []
+            for wx in route_weather:
+                wind_kmh = wx.get("wind_kmh")
+                wind_dir = wx.get("wind_dir_deg")
+                route_bearing = wx.get("route_bearing_deg")
+                if wind_kmh is None:
+                    continue
+                wind_speed = float(wind_kmh)
+                wind_speeds.append(wind_speed)
+                if wind_dir is None or route_bearing is None:
+                    continue
+
+                wind_to = (float(wind_dir) + 180.0) % 360.0
+                angle = math.radians(abs((wind_to - float(route_bearing) + 180.0) % 360.0 - 180.0))
+                along = wind_speed * math.cos(angle)
+                cross = abs(wind_speed * math.sin(angle))
+
+                headwind_components.append(abs(along) if along < 0 else 0.0)
+                tailwind_components.append(along if along > 0 else 0.0)
+                sidewind_components.append(cross)
+
+            avg_wind_speed_kmh = (sum(wind_speeds) / len(wind_speeds)) if wind_speeds else 0.0
+            avg_headwind_kmh = (sum(headwind_components) / len(headwind_components)) if headwind_components else 0.0
+            avg_tailwind_kmh = (sum(tailwind_components) / len(tailwind_components)) if tailwind_components else 0.0
+            avg_sidewind_kmh = (sum(sidewind_components) / len(sidewind_components)) if sidewind_components else 0.0
+
             ml_pred = energy_model.predict_energy(
                 distance_km=distance_km,
                 avg_speed_kmh=max(1.0, avg_speed_kmh),
                 avg_ambient_temp_c=avg_temp_c,
                 avg_outside_temp_c=avg_temp_c,
                 duration_min=max(1.0, duration_sec / 60.0),
+                weather_temp_c=avg_temp_c,
+                weather_humidity_pct=avg_humidity_pct,
+                weather_pressure_hpa=avg_pressure_hpa,
+                precipitation_mm=avg_precip_mm,
+                wind_speed_avg_kmh=avg_wind_speed_kmh,
+                headwind_component_kmh=avg_headwind_kmh,
+                tailwind_component_kmh=avg_tailwind_kmh,
+                sidewind_component_kmh=avg_sidewind_kmh,
             )
 
             ml_raw_energy_kwh = float(ml_pred.get("energy_used_kwh", baseline_energy_kwh))

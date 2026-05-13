@@ -10,6 +10,18 @@
     "acceleration_aggression",
     "avg_ambient_temp_c",
     "avg_outside_temp_c",
+    "weather_temp_c",
+    "weather_humidity_pct",
+    "weather_pressure_hpa",
+    "precipitation_mm",
+    "wind_speed_avg_kmh",
+    "headwind_component_kmh",
+    "tailwind_component_kmh",
+    "sidewind_component_kmh",
+    "avg_altitude_m",
+    "elevation_gain_m",
+    "elevation_loss_m",
+    "net_elevation_change_m",
     "soc_drop_percent",
     "regen_kwh",
     "trip_efficiency_kmh"
@@ -28,6 +40,6 @@
       "max": 21.25
     }
   },
-  "training_date": "2026-05-12T21:30:44.394958",
+  "training_date": "2026-05-13T11:10:37.679264",
   "num_training_drives": 14
 }

@@ -358,6 +358,16 @@ CREATE TABLE drives (
     -- Environment
     avg_ambient_temp_c REAL,
     avg_outside_temp_c REAL,
+    weather_temp_c REAL,
+    weather_humidity_pct REAL,
+    weather_pressure_hpa REAL,
+    precipitation_mm REAL,
+    wind_speed_avg_kmh REAL,
+    wind_direction_avg_deg REAL,
+    headwind_component_kmh REAL,
+    tailwind_component_kmh REAL,
+    sidewind_component_kmh REAL,
+    wind_context TEXT,
 
     -- Location at start/end
     start_lat DOUBLE PRECISION,
@@ -376,6 +386,11 @@ CREATE TABLE drives (
     duration_sec REAL,
     max_speed_kmh REAL,
     regen_energy_kwh REAL,
+    route_bearing_deg REAL,
+    avg_altitude_m REAL,
+    elevation_gain_m REAL,
+    elevation_loss_m REAL,
+    net_elevation_change_m REAL,
 
     created_at TIMESTAMPTZ DEFAULT now(),
 

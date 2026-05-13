@@ -1234,6 +1234,30 @@ def create_app():
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
 
+        # Drive feature expansion for weather, wind impact, and elevation-aware ML training.
+        if _table_exists("drives"):
+            drive_feature_columns = {
+                "weather_temp_c": "REAL",
+                "weather_humidity_pct": "REAL",
+                "weather_pressure_hpa": "REAL",
+                "precipitation_mm": "REAL",
+                "wind_speed_avg_kmh": "REAL",
+                "wind_direction_avg_deg": "REAL",
+                "headwind_component_kmh": "REAL",
+                "tailwind_component_kmh": "REAL",
+                "sidewind_component_kmh": "REAL",
+                "wind_context": "TEXT",
+                "route_bearing_deg": "REAL",
+                "avg_altitude_m": "REAL",
+                "elevation_gain_m": "REAL",
+                "elevation_loss_m": "REAL",
+                "net_elevation_change_m": "REAL",
+            }
+            for column_name, column_type in drive_feature_columns.items():
+                if not _column_exists("drives", column_name):
+                    db.execute(f"ALTER TABLE drives ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+                    applied.append(f"Added drives.{column_name}")
+
         # One-time repair after backup/restore (or when queued by UI):
         # align serial sequences to table MAX(id)+1 to prevent duplicate PKs.
         aligned_tables = _run_sequence_alignment(force=False)

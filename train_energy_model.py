@@ -64,6 +64,18 @@ def extract_drive_features(drive_id: int, drive_row: dict, drive_points: list[di
     # Environmental
     avg_ambient_temp_c = drive_row.get("avg_ambient_temp_c")
     avg_outside_temp_c = drive_row.get("avg_outside_temp_c")
+    weather_temp_c = drive_row.get("weather_temp_c")
+    weather_humidity_pct = drive_row.get("weather_humidity_pct")
+    weather_pressure_hpa = drive_row.get("weather_pressure_hpa")
+    precipitation_mm = drive_row.get("precipitation_mm")
+    wind_speed_avg_kmh = drive_row.get("wind_speed_avg_kmh")
+    headwind_component_kmh = drive_row.get("headwind_component_kmh")
+    tailwind_component_kmh = drive_row.get("tailwind_component_kmh")
+    sidewind_component_kmh = drive_row.get("sidewind_component_kmh")
+    avg_altitude_m = drive_row.get("avg_altitude_m")
+    elevation_gain_m = drive_row.get("elevation_gain_m")
+    elevation_loss_m = drive_row.get("elevation_loss_m")
+    net_elevation_change_m = drive_row.get("net_elevation_change_m")
     
     # Derived stats from drive_points
     points_df = pd.DataFrame(drive_points)
@@ -112,6 +124,18 @@ def extract_drive_features(drive_id: int, drive_row: dict, drive_points: list[di
         "acceleration_aggression": acceleration_aggression,
         "avg_ambient_temp_c": avg_ambient_temp_c or 20,  # Default to ~room temp
         "avg_outside_temp_c": avg_outside_temp_c or 20,
+        "weather_temp_c": weather_temp_c if weather_temp_c is not None else (avg_outside_temp_c or 20),
+        "weather_humidity_pct": weather_humidity_pct if weather_humidity_pct is not None else 50,
+        "weather_pressure_hpa": weather_pressure_hpa if weather_pressure_hpa is not None else 1013,
+        "precipitation_mm": precipitation_mm if precipitation_mm is not None else 0,
+        "wind_speed_avg_kmh": wind_speed_avg_kmh if wind_speed_avg_kmh is not None else 0,
+        "headwind_component_kmh": headwind_component_kmh if headwind_component_kmh is not None else 0,
+        "tailwind_component_kmh": tailwind_component_kmh if tailwind_component_kmh is not None else 0,
+        "sidewind_component_kmh": sidewind_component_kmh if sidewind_component_kmh is not None else 0,
+        "avg_altitude_m": avg_altitude_m if avg_altitude_m is not None else 0,
+        "elevation_gain_m": elevation_gain_m if elevation_gain_m is not None else 0,
+        "elevation_loss_m": elevation_loss_m if elevation_loss_m is not None else 0,
+        "net_elevation_change_m": net_elevation_change_m if net_elevation_change_m is not None else 0,
         "soc_drop_percent": soc_drop,
         "regen_kwh": regen_kwh,
         "trip_efficiency_kmh": trip_efficiency_kmh,
@@ -135,6 +159,9 @@ def load_training_data() -> pd.DataFrame | None:
             id, vin, distance_km, duration_sec, energy_used_kwh,
             start_soc_percent, end_soc_percent,
             avg_ambient_temp_c, avg_outside_temp_c,
+            weather_temp_c, weather_humidity_pct, weather_pressure_hpa, precipitation_mm,
+            wind_speed_avg_kmh, headwind_component_kmh, tailwind_component_kmh, sidewind_component_kmh,
+            avg_altitude_m, elevation_gain_m, elevation_loss_m, net_elevation_change_m,
             regen_energy_kwh, created_at
         FROM drives
         WHERE 
@@ -201,6 +228,9 @@ def train_model(df: pd.DataFrame) -> tuple[xgb.XGBRegressor, StandardScaler]:
         "distance_km", "duration_min", "avg_speed_kmh", "max_speed_kmh",
         "speed_variance", "acceleration_aggression",
         "avg_ambient_temp_c", "avg_outside_temp_c",
+        "weather_temp_c", "weather_humidity_pct", "weather_pressure_hpa", "precipitation_mm",
+        "wind_speed_avg_kmh", "headwind_component_kmh", "tailwind_component_kmh", "sidewind_component_kmh",
+        "avg_altitude_m", "elevation_gain_m", "elevation_loss_m", "net_elevation_change_m",
         "soc_drop_percent", "regen_kwh", "trip_efficiency_kmh"
     ]
     
@@ -296,6 +326,9 @@ def save_model(model: xgb.XGBRegressor, scaler: StandardScaler, df: pd.DataFrame
             "distance_km", "duration_min", "avg_speed_kmh", "max_speed_kmh",
             "speed_variance", "acceleration_aggression",
             "avg_ambient_temp_c", "avg_outside_temp_c",
+            "weather_temp_c", "weather_humidity_pct", "weather_pressure_hpa", "precipitation_mm",
+            "wind_speed_avg_kmh", "headwind_component_kmh", "tailwind_component_kmh", "sidewind_component_kmh",
+            "avg_altitude_m", "elevation_gain_m", "elevation_loss_m", "net_elevation_change_m",
             "soc_drop_percent", "regen_kwh", "trip_efficiency_kmh"
         ],
         "feature_scales": {
