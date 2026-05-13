@@ -6,11 +6,14 @@ MFA secret lifecycle, and server-side authenticated session validation.
 
 from __future__ import annotations
 
+import base64
+import io
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 import pyotp
+import qrcode
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import db
@@ -62,6 +65,7 @@ def ensure_schema() -> None:
             id UUID PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES local_users(id) ON DELETE CASCADE,
             issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_seen_at TIMESTAMPTZ,
             expires_at TIMESTAMPTZ NOT NULL,
             revoked_at TIMESTAMPTZ,
             mfa_verified BOOLEAN NOT NULL DEFAULT FALSE,
@@ -74,6 +78,19 @@ def ensure_schema() -> None:
         """
         CREATE INDEX IF NOT EXISTS local_auth_sessions_user_idx
         ON local_auth_sessions (user_id, revoked_at, expires_at)
+        """
+    )
+    db.execute(
+        """
+        ALTER TABLE local_auth_sessions
+        ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ
+        """
+    )
+    db.execute(
+        """
+        UPDATE local_auth_sessions
+        SET last_seen_at = issued_at
+        WHERE last_seen_at IS NULL
         """
     )
 
@@ -228,6 +245,24 @@ def provisioning_uri(user: dict, secret: str, issuer: str = "MLLightning") -> st
     return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
 
 
+def otp_qr_data_uri(otp_uri: str) -> str | None:
+    """Return a PNG data URI for an otpauth provisioning URI, or None on failure."""
+    otp_uri = str(otp_uri or "").strip()
+    if not otp_uri:
+        return None
+    try:
+        qr = qrcode.QRCode(box_size=8, border=2)
+        qr.add_data(otp_uri)
+        qr.make(fit=True)
+        image = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return None
+
+
 def verify_totp(secret: str, code: str, valid_window: int = 1) -> bool:
     secret = str(secret or "").strip()
     code = "".join(ch for ch in str(code or "") if ch.isdigit())
@@ -263,8 +298,10 @@ def issue_authenticated_session(
     expires_at = datetime.now(timezone.utc) + timedelta(hours=lifetime_hours)
     db.execute(
         """
-        INSERT INTO local_auth_sessions (id, user_id, expires_at, mfa_verified, ip_address, user_agent)
-        VALUES (%s, %s, %s, TRUE, %s, %s)
+        INSERT INTO local_auth_sessions (
+            id, user_id, issued_at, last_seen_at, expires_at, mfa_verified, ip_address, user_agent
+        )
+        VALUES (%s, %s, now(), now(), %s, TRUE, %s, %s)
         """,
         (session_id, int(user["id"]), expires_at, ip_address or None, user_agent or None),
     )
@@ -284,8 +321,20 @@ def issue_authenticated_session(
     return session_id
 
 
-def validate_authenticated_session(session_obj: dict) -> dict | None:
-    """Validate local auth session against DB record and active user state."""
+def validate_authenticated_session(
+    session_obj: dict,
+    *,
+    absolute_timeout_hours: int = 8,
+    idle_timeout_minutes: int = 30,
+) -> dict | None:
+    """Validate local auth session against DB record and active user state.
+
+    The session must satisfy:
+    - not revoked
+    - not expired (absolute expiry)
+    - not idle timed out (last_seen_at within idle_timeout_minutes)
+    - user is active and MFA-enabled
+    """
     if session_obj.get("auth_mode") != "local":
         return None
 
@@ -297,17 +346,20 @@ def validate_authenticated_session(session_obj: dict) -> dict | None:
     row = db.fetch_one(
         """
         SELECT u.id, u.username, u.email, u.is_active, u.is_admin, u.mfa_enabled,
-               s.id AS session_id, s.expires_at, s.revoked_at, s.mfa_verified
+                             s.id AS session_id, s.issued_at, s.last_seen_at,
+                             s.expires_at, s.revoked_at, s.mfa_verified
         FROM local_users u
         JOIN local_auth_sessions s ON s.user_id = u.id
         WHERE u.id = %s
           AND s.id::text = %s
           AND s.revoked_at IS NULL
           AND s.expires_at > now()
+                    AND s.issued_at >= (now() - make_interval(hours => %s))
+                    AND COALESCE(s.last_seen_at, s.issued_at) >= (now() - make_interval(mins => %s))
           AND s.mfa_verified = TRUE
         LIMIT 1
         """,
-        (user_id, session_id),
+                (user_id, session_id, int(max(1, absolute_timeout_hours)), int(max(1, idle_timeout_minutes))),
     )
     if not row:
         return None
@@ -316,4 +368,19 @@ def validate_authenticated_session(session_obj: dict) -> dict | None:
     if not bool(row.get("mfa_enabled")):
         # Enforce MFA enrollment for all local users.
         return None
+
+    # Touch last seen after successful validation to enforce idle timeout.
+    try:
+        db.execute(
+            """
+            UPDATE local_auth_sessions
+            SET last_seen_at = now()
+            WHERE id::text = %s AND revoked_at IS NULL
+            """,
+            (session_id,),
+        )
+    except Exception:
+        # Validation already succeeded; don't fail request on touch errors.
+        pass
+
     return dict(row)

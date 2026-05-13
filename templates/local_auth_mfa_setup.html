@@ -23,6 +23,11 @@
     <p><strong>Provisioning URI:</strong></p>
     <textarea rows="4" style="width: 100%;" readonly>{{ otp_uri }}</textarea>
 
+    {% if qr_data_uri %}
+    <p><strong>Scan QR Code:</strong></p>
+    <p><img src="{{ qr_data_uri }}" alt="MFA QR Code" width="220" height="220"></p>
+    {% endif %}
+
     <form method="post" style="margin-top: 16px;">
       <label>Authenticator Code</label>
       <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required>

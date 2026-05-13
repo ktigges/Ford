@@ -159,6 +159,7 @@ def create_user_admin_app() -> Flask:
             secret = local_auth.generate_mfa_secret()
             session["local_pending_mfa_secret"] = secret
         otp_uri = local_auth.provisioning_uri(user, secret)
+        qr_data_uri = local_auth.otp_qr_data_uri(otp_uri)
 
         if request.method == "POST":
             code = request.form.get("code") or ""
@@ -182,6 +183,10 @@ def create_user_admin_app() -> Flask:
             <p><code>{{ secret }}</code></p>
             <p>Provisioning URI:</p>
             <textarea rows="4" cols="80" readonly>{{ otp_uri }}</textarea>
+                        {% if qr_data_uri %}
+                        <p>Scan QR Code:</p>
+                        <p><img src="{{ qr_data_uri }}" alt="MFA QR Code" width="220" height="220"></p>
+                        {% endif %}
             <form method="post">
               <label>6-digit code <input name="code" required></label>
               <button type="submit">Verify & Finish</button>
@@ -189,6 +194,7 @@ def create_user_admin_app() -> Flask:
             """,
             secret=secret,
             otp_uri=otp_uri,
+                        qr_data_uri=qr_data_uri,
         )
 
     @app.route("/mfa/verify", methods=["GET", "POST"])

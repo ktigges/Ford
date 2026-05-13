@@ -181,8 +181,19 @@ def create_app():
 
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    app.config["SESSION_COOKIE_SECURE"] = True
-    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
+    session_cookie_secure = (
+        os.environ.get("LIGHTNING_SESSION_COOKIE_SECURE", "1") or "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    app.config["SESSION_COOKIE_SECURE"] = session_cookie_secure
+    app.config["LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS"] = int(
+        os.environ.get("LIGHTNING_LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", "8") or "8"
+    )
+    app.config["LOCAL_AUTH_IDLE_TIMEOUT_MINUTES"] = int(
+        os.environ.get("LIGHTNING_LOCAL_AUTH_IDLE_TIMEOUT_MINUTES", "30") or "30"
+    )
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
+        hours=max(1, app.config["LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS"])
+    )
     Session(app)
     # Stamp the build time and version once so every template can display them.
     from datetime import datetime as _dt
@@ -2011,7 +2022,7 @@ def create_app():
             user,
             ip_address=request.remote_addr or "",
             user_agent=request.headers.get("User-Agent", ""),
-            lifetime_hours=8,
+            lifetime_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
         )
         flash("Signed in successfully.", "success")
         return redirect(_safe_next_url(next_url))
@@ -2064,6 +2075,7 @@ def create_app():
             secret = local_auth.generate_mfa_secret()
             session["local_pending_mfa_secret"] = secret
         otp_uri = local_auth.provisioning_uri(user, secret)
+        qr_data_uri = local_auth.otp_qr_data_uri(otp_uri)
 
         if request.method == "POST":
             code = request.form.get("code") or ""
@@ -2075,7 +2087,12 @@ def create_app():
                 next_url = pending["next_url"] or url_for("dashboard")
                 return _complete_local_login(user, next_url)
 
-        return render_template("local_auth_mfa_setup.html", secret=secret, otp_uri=otp_uri)
+        return render_template(
+            "local_auth_mfa_setup.html",
+            secret=secret,
+            otp_uri=otp_uri,
+            qr_data_uri=qr_data_uri,
+        )
 
     @app.route("/auth/mfa/verify", methods=["GET", "POST"])
     def auth_mfa_verify():
@@ -2152,7 +2169,11 @@ def create_app():
         if endpoint in _AUTH_SAFE_ENDPOINTS or endpoint.startswith("static"):
             return
 
-        user = local_auth.validate_authenticated_session(session)
+        user = local_auth.validate_authenticated_session(
+            session,
+            absolute_timeout_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
+            idle_timeout_minutes=max(1, int(app.config.get("LOCAL_AUTH_IDLE_TIMEOUT_MINUTES", 30))),
+        )
         if not user:
             _clear_local_auth_session()
             return redirect(url_for("auth_login", next=request.full_path or request.path))
