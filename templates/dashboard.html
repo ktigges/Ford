@@ -37,6 +37,35 @@
   <span class="muted">({{ ml_training_drives|default(0) }} training drives)</span>
 </div>
 
+<div class="card" style="margin-bottom:1rem; border-left:6px solid {% if poller_health == 'healthy' %}#198754{% elif poller_health == 'stale' %}#fd7e14{% elif poller_health == 'down' %}#dc3545{% else %}#6c757d{% endif %};">
+  <strong>Poller Health:</strong>
+  {% if poller_health == 'healthy' %}
+    <span class="badge ok">HEALTHY</span>
+  {% elif poller_health == 'stale' %}
+    <span class="badge" style="background:#fff3cd;color:#7a4d00;">STALE</span>
+  {% elif poller_health == 'down' %}
+    <span class="badge" style="background:#f8d7da;color:#842029;">DOWN</span>
+  {% else %}
+    <span class="badge off">UNKNOWN</span>
+  {% endif %}
+  <span class="muted" style="margin-left:0.5rem;">Thread: {{ 'Running' if poller_running else 'Stopped' }}</span>
+  <span class="muted" style="margin-left:0.5rem;">Interval: {{ poller_interval_sec }}s</span>
+  {% if poller_last_poll_age_sec is not none %}
+    <span class="muted" style="margin-left:0.5rem;">Last poll: {{ poller_last_poll_age_sec }}s ago</span>
+  {% endif %}
+  {% if poller_consecutive_failures is not none %}
+    <span class="muted" style="margin-left:0.5rem;">Failures: {{ poller_consecutive_failures }}</span>
+  {% endif %}
+  {% if poller_last_error %}
+    <div class="muted" style="margin-top:0.35rem; color:#842029;">Last error: {{ poller_last_error }}</div>
+  {% endif %}
+  {% if poller_health in ('down', 'stale') %}
+    <div style="margin-top:0.5rem;">
+      <a class="btn btn-sm" href="{{ url_for('poller_control') }}">Open Poller Control</a>
+    </div>
+  {% endif %}
+</div>
+
 {% if plug_connected %}
 {% set soc = battery.soc_percent|default(0, true)|float if battery else 0 %}
 {% set soc_display = soc|round(0)|int %}

@@ -14,6 +14,7 @@ import logging
 import glob
 import os
 import re
+import ipaddress
 import subprocess
 import sys
 import threading
@@ -226,6 +227,8 @@ def create_app():
         "timezone": "UTC",
         "log_level": "INFO",
         "local_auth_idle_timeout_minutes": "30",
+        "devloper_auth_bypass_enabled": "off",
+        "devloper_auth_bypass_ip_allowlist": "",
         "conservative_polling": "off",
         "autostart_poller": "off",
         "developing": "off",
@@ -2073,6 +2076,48 @@ def create_app():
             value = default_idle
         return max(1, min(1440, value))
 
+    def _request_client_ip() -> str:
+        """Return the best-effort client IP, honoring X-Forwarded-For when present."""
+        forwarded_for = (request.headers.get("X-Forwarded-For") or "").strip()
+        if forwarded_for:
+            first_hop = forwarded_for.split(",")[0].strip()
+            if first_hop:
+                return first_hop
+        return (request.remote_addr or "").strip()
+
+    def _devloper_auth_bypass_allowed() -> bool:
+        """Allow local-auth bypass for explicitly allowed IPs when Devloper mode is enabled."""
+        enabled = (_get_setting("devloper_auth_bypass_enabled") or "off").strip().lower() == "on"
+        if not enabled:
+            return False
+
+        raw_allowlist = _get_setting("devloper_auth_bypass_ip_allowlist") or ""
+        client_ip = _request_client_ip()
+        if not client_ip:
+            return False
+
+        entries = [entry.strip() for entry in raw_allowlist.split(",") if entry.strip()]
+        if not entries:
+            return False
+
+        try:
+            client_addr = ipaddress.ip_address(client_ip)
+        except ValueError:
+            return False
+
+        for entry in entries:
+            try:
+                if "/" in entry:
+                    if client_addr in ipaddress.ip_network(entry, strict=False):
+                        return True
+                else:
+                    if client_addr == ipaddress.ip_address(entry):
+                        return True
+            except ValueError:
+                continue
+
+        return False
+
     def _complete_local_login(user: dict, next_url: str) -> str:
         client_meta_enabled = bool(app.config.get("LOCAL_AUTH_STORE_CLIENT_META", False))
         local_auth.issue_authenticated_session(
@@ -2318,6 +2363,12 @@ def create_app():
 
         endpoint = request.endpoint or ""
         if endpoint in _AUTH_SAFE_ENDPOINTS or endpoint.startswith("static"):
+            return
+
+        if _devloper_auth_bypass_allowed():
+            session["local_user_id"] = 0
+            session["local_username"] = "devloper-bypass"
+            session["local_is_admin"] = True
             return
 
         user = local_auth.validate_authenticated_session(
@@ -2698,6 +2749,35 @@ def create_app():
         vehicle_img = _get_setting("vehicle_image") or "vehicle.png"
         refresh_interval = request.args.get("refresh", 0, type=int)
         ml_status = _ml_confidence_from_training_data()
+        poller_running = poller.is_running()
+        poll_interval_sec = config.collector_config().get("default_poll_interval_sec", 60)
+        if vin:
+            try:
+                # Reuse poller's own interval resolution logic so dashboard stays
+                # compatible with polling_config schema changes.
+                poll_interval_sec = int(poller._get_poll_interval(vin, int(poll_interval_sec)))
+            except Exception:
+                pass
+
+        poller_stale_threshold_sec = max(120, poll_interval_sec * 2 + 15)
+        poller_last_poll_age_sec = None
+        poller_health = "unknown"
+        if status and status.get("last_poll"):
+            last_poll = status["last_poll"]
+            now_utc = datetime.now(timezone.utc)
+            if isinstance(last_poll, datetime) and last_poll.tzinfo is None:
+                last_poll = last_poll.replace(tzinfo=timezone.utc)
+            if isinstance(last_poll, datetime):
+                poller_last_poll_age_sec = max(0, int((now_utc - last_poll).total_seconds()))
+
+        if not poller_running:
+            poller_health = "down"
+        elif poller_last_poll_age_sec is None:
+            poller_health = "unknown"
+        elif poller_last_poll_age_sec > poller_stale_threshold_sec:
+            poller_health = "stale"
+        else:
+            poller_health = "healthy"
 
         return render_template(
             "dashboard.html",
@@ -2713,7 +2793,13 @@ def create_app():
             vehicle_summary=vehicle_summary,
             tires=tires,
             vehicle_img=vehicle_img,
-            poller_running=poller.is_running(),
+            poller_running=poller_running,
+            poller_health=poller_health,
+            poller_last_poll_age_sec=poller_last_poll_age_sec,
+            poller_stale_threshold_sec=poller_stale_threshold_sec,
+            poller_interval_sec=poll_interval_sec,
+            poller_last_error=status.get("last_error") if status else None,
+            poller_consecutive_failures=status.get("consecutive_failures") if status else None,
             refresh_interval=refresh_interval,
             ml_confidence_level=ml_status["level"],
             ml_training_drives=ml_status["training_drives"],
@@ -3941,6 +4027,21 @@ def create_app():
                 "Auto-logout idle timeout for local auth sessions (minutes)",
             )
 
+            devloper_bypass = "on" if request.form.get("devloper_auth_bypass_enabled") == "on" else "off"
+            _set_setting(
+                "devloper_auth_bypass_enabled",
+                devloper_bypass,
+                "Devloper testing auth bypass toggle (restricted by IP allow list)",
+            )
+
+            allowlist_raw = (request.form.get("devloper_auth_bypass_ip_allowlist", "") or "").strip()
+            allowlist_normalized = ", ".join([item.strip() for item in allowlist_raw.split(",") if item.strip()])
+            _set_setting(
+                "devloper_auth_bypass_ip_allowlist",
+                allowlist_normalized,
+                "Devloper testing auth bypass allow list (comma-separated IP/CIDR)",
+            )
+
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
             iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
@@ -3998,6 +4099,8 @@ def create_app():
             "developing": _get_setting("developing"),
             "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
             "local_auth_idle_timeout_minutes": _get_setting("local_auth_idle_timeout_minutes") or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
+            "devloper_auth_bypass_enabled": _get_setting("devloper_auth_bypass_enabled") or _SETTINGS_DEFAULTS["devloper_auth_bypass_enabled"],
+            "devloper_auth_bypass_ip_allowlist": _get_setting("devloper_auth_bypass_ip_allowlist") or _SETTINGS_DEFAULTS["devloper_auth_bypass_ip_allowlist"],
             "nlr_api_key": _get_setting("nlr_api_key") or "",
             "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
             "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],

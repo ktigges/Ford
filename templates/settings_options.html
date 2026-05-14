@@ -45,6 +45,21 @@
     <small style="display:block; color:#666; margin-top:0.35rem;">If no activity occurs for this duration, the current user session is signed out automatically.</small>
   </div>
   <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
+    <legend><b>Devloper Testing Bypass</b></legend>
+    <div style="margin-bottom:0.75rem;">
+      <label>
+        <input type="checkbox" name="devloper_auth_bypass_enabled" {% if settings.devloper_auth_bypass_enabled == 'on' %}checked{% endif %}>
+        Enable Devloper Auth Bypass
+      </label>
+      <small style="display:block; color:#666; margin-top:0.35rem;">When enabled, authentication is bypassed only for client IPs in the allow list below.</small>
+    </div>
+    <div>
+      <label>IP Allow List (comma-separated IPv4/IPv6/CIDR):
+        <input type="text" name="devloper_auth_bypass_ip_allowlist" value="{{ settings.devloper_auth_bypass_ip_allowlist }}" placeholder="192.168.1.10, 10.0.0.0/24, fd00::/8" style="width:100%; margin-top:0.35rem;">
+      </label>
+    </div>
+  </fieldset>
+  <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
     <legend><b>Polling Intervals (seconds)</b></legend>
     <div style="margin-bottom:1rem;">
       <label style="display:block; margin-bottom:0.3rem;"><b>Ignition Off</b>
@@ -84,6 +99,8 @@
     <li>Autostart Poller: <b>{{ settings.autostart_poller }}</b></li>
     <li>Developing Mode: <b>{{ settings.developing }}</b></li>
     <li>Auth Idle Timeout: <b>{{ settings.local_auth_idle_timeout_minutes }}</b> min</li>
+    <li>Devloper Bypass Enabled: <b>{{ settings.devloper_auth_bypass_enabled }}</b></li>
+    <li>Devloper Bypass Allow List: <b>{{ settings.devloper_auth_bypass_ip_allowlist or '–' }}</b></li>
     <li>Polling Off: <b>{{ settings.poll_interval_off }}</b> sec</li>
     <li>Polling On: <b>{{ settings.poll_interval_on }}</b> sec</li>
     <li>Polling Moving: <b>{{ settings.poll_interval_moving }}</b> sec</li>

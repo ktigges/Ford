@@ -1170,21 +1170,25 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
     lat = _v(metrics, "position", "value", "location", "lat")
     lon = _v(metrics, "position", "value", "location", "lon")
     weather_data = None
-    last_weather_time = getattr(_record_drive_point, "_last_weather_time", None)
-    should_refresh_weather = (
-        lat is not None
-        and lon is not None
-        and (
-            last_weather_time is None
-            or (ts - last_weather_time).total_seconds() >= 300
+    try:
+        last_weather_time = getattr(_record_drive_point, "_last_weather_time", None)
+        if not isinstance(last_weather_time, datetime):
+            last_weather_time = None
+
+        should_refresh_weather = (
+            lat is not None
+            and lon is not None
+            and (
+                last_weather_time is None
+                or (ts - last_weather_time).total_seconds() >= 300
+            )
         )
-    )
-    if should_refresh_weather:
-        try:
+        if should_refresh_weather:
             weather_data = _fetch_weather_snapshot(lat, lon, ts)
             _record_drive_point._last_weather_time = ts
-        except Exception:
-            pass
+    except Exception as exc:
+        # Weather enrichment is best-effort; never allow it to impact core polling.
+        log.warning("[WEATHER] Skipping weather enrichment for drive point: %s", exc)
 
     if driving and not active_drive:
         # Drive just started
