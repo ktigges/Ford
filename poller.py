@@ -868,6 +868,35 @@ def _fetch_weather_snapshot(lat: float | None, lon: float | None, when_utc: date
         log.warning("[DRIVE] Weather fetch failed for %.5f,%.5f: %s", float(lat), float(lon), exc)
         return {}
 
+
+def _weather_for_drive_point(metrics: dict, weather_base: dict | None) -> dict | None:
+    """Return weather payload for a drive point, including wind components when possible."""
+    if not isinstance(weather_base, dict) or not weather_base:
+        return None
+
+    weather = dict(weather_base)
+    heading = _v(metrics, "heading", "value", "heading")
+    wind_speed = weather.get("wind_speed_avg_kmh")
+    wind_dir = weather.get("wind_direction_avg_deg")
+
+    if heading is None or wind_speed is None or wind_dir is None:
+        weather["headwind_component_kmh"] = None
+        weather["tailwind_component_kmh"] = None
+        weather["sidewind_component_kmh"] = None
+        return weather
+
+    try:
+        headwind, tailwind, sidewind, _ = _wind_components_kmh(float(heading), float(wind_speed), float(wind_dir))
+        weather["headwind_component_kmh"] = headwind
+        weather["tailwind_component_kmh"] = tailwind
+        weather["sidewind_component_kmh"] = sidewind
+    except Exception:
+        weather["headwind_component_kmh"] = None
+        weather["tailwind_component_kmh"] = None
+        weather["sidewind_component_kmh"] = None
+
+    return weather
+
 def _is_driving(vin: str, metrics: dict) -> bool:
     """Return True if the vehicle is actually driving (not just ignition on).
 
@@ -1141,6 +1170,7 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict, weather: dic
 _DRIVE_END_GRACE_POLLS = 2
 _drive_stop_count: int = 0
 _record_drive_point._last_weather_time = None  # Track when we last fetched weather for drive points
+_record_drive_point._last_weather_data = None  # Reuse latest weather between refreshes
 
 
 def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
@@ -1169,7 +1199,8 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
     # Fetch weather every ~5 minutes (300 seconds) to avoid API overload
     lat = _v(metrics, "position", "value", "location", "lat")
     lon = _v(metrics, "position", "value", "location", "lon")
-    weather_data = None
+    weather_base = getattr(_record_drive_point, "_last_weather_data", None)
+    weather_data = _weather_for_drive_point(metrics, weather_base)
     try:
         last_weather_time = getattr(_record_drive_point, "_last_weather_time", None)
         if not isinstance(last_weather_time, datetime):
@@ -1184,7 +1215,10 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
             )
         )
         if should_refresh_weather:
-            weather_data = _fetch_weather_snapshot(lat, lon, ts)
+            fresh_weather = _fetch_weather_snapshot(lat, lon, ts)
+            if isinstance(fresh_weather, dict) and fresh_weather:
+                weather_data = _weather_for_drive_point(metrics, fresh_weather)
+                _record_drive_point._last_weather_data = fresh_weather
             _record_drive_point._last_weather_time = ts
     except Exception as exc:
         # Weather enrichment is best-effort; never allow it to impact core polling.
@@ -1193,7 +1227,19 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
     if driving and not active_drive:
         # Drive just started
         _drive_stop_count = 0
+        _record_drive_point._last_weather_time = None
+        _record_drive_point._last_weather_data = None
         drive_id = _start_drive(vin, ts, metrics)
+        # Force immediate weather refresh on first point of a new drive.
+        try:
+            if lat is not None and lon is not None:
+                fresh_weather = _fetch_weather_snapshot(lat, lon, ts)
+                if isinstance(fresh_weather, dict) and fresh_weather:
+                    weather_data = _weather_for_drive_point(metrics, fresh_weather)
+                    _record_drive_point._last_weather_data = fresh_weather
+                    _record_drive_point._last_weather_time = ts
+        except Exception as exc:
+            log.warning("[WEATHER] Initial drive-point weather fetch skipped: %s", exc)
         _record_drive_point(drive_id, ts, metrics, weather_data)
     elif driving and active_drive:
         # Drive in progress — record point, reset stop counter

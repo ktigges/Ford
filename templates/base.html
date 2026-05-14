@@ -8,6 +8,11 @@
 </head>
 <body>
   <div class="prototype-banner">PROTOTYPE | Use at your own risk | v{{ config.get('APP_VERSION', '0.4.0') }} | Build {{ config.get('APP_BUILD_TIME', 'unknown') }}</div>
+  {% if session.get('devloper_auth_bypassed') %}
+  <div style="background:#842029;color:#fff;padding:0.5rem 1rem;font-weight:700;text-align:center;letter-spacing:0.02em;">
+    DEVELOPER MODE - AUTH BYPASSED - PLEASE REMOVE WHEN DONE
+  </div>
+  {% endif %}
   <nav>
     <div class="nav-brand">🧠 MLLighting</div>
     <ul>

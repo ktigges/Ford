@@ -2060,6 +2060,7 @@ def create_app():
         """Revoke and clear local auth session values."""
         local_auth.revoke_session(session)
         local_auth.clear_session(session)
+        session.pop("devloper_auth_bypassed", None)
 
     def _effective_local_auth_idle_timeout_minutes() -> int:
         """Resolve idle timeout from settings with safe fallback and bounds."""
@@ -2149,6 +2150,7 @@ def create_app():
             user_agent=(request.headers.get("User-Agent", "") if client_meta_enabled else ""),
             lifetime_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
         )
+        session["devloper_auth_bypassed"] = False
         local_auth.clear_login_attempts(str(user.get("username") or ""), request.remote_addr or "")
         flash("Signed in successfully.", "success")
         return redirect(_safe_next_url(next_url))
@@ -2391,7 +2393,10 @@ def create_app():
             session["local_user_id"] = 0
             session["local_username"] = "devloper-bypass"
             session["local_is_admin"] = True
+            session["devloper_auth_bypassed"] = True
             return
+
+        session.pop("devloper_auth_bypassed", None)
 
         user = local_auth.validate_authenticated_session(
             session,
