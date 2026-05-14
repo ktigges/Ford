@@ -42,6 +42,7 @@ import backup
 import crypto
 import local_auth
 import nlr_chargers
+import ocm_chargers
 import trip_planner as tp_service
 import energy_model
 
@@ -96,6 +97,7 @@ def _setup_logging() -> None:
         "nlr_chargers": "debug_chargers.log",
         "nlr_api": "debug_nlr_api.log",
         "local_auth": "debug_local_auth.log",
+        "settings": "debug_settings.log",
     }
     for logger_name, filename in debug_files.items():
         fh = logging.FileHandler(os.path.join(log_dir, filename))
@@ -408,6 +410,15 @@ def create_app():
         except (ValueError, TypeError, AttributeError):
             value = default
         return max(min_value, min(max_value, value))
+
+    def _mask_setting_value_for_log(key: str, value: str) -> str:
+        """Return a redacted value for sensitive settings in logs."""
+        if "api_key" not in key:
+            return value
+        raw = str(value or "")
+        if len(raw) <= 8:
+            return "*" * len(raw)
+        return raw[:3] + ("*" * (len(raw) - 6)) + raw[-3:]
 
     def _run_charger_auto_sync_loop() -> None:
         """Periodic charger sync scheduler loop."""
@@ -831,20 +842,35 @@ def create_app():
         return max(limits["min"], min(limits["max"], val))
 
     def _get_setting(key: str) -> str:
-        """Read a single app setting from the app_config table, with fallback defaults."""
-        row = db.fetch_one("SELECT value FROM app_config WHERE key = %s", (key,))
-        return row["value"] if row else _SETTINGS_DEFAULTS.get(key, "")
+        """Read a single app setting from the app_config table, with fallback defaults. Logs all reads."""
+        try:
+            row = db.fetch_one("SELECT value FROM app_config WHERE key = %s", (key,))
+            value = row["value"] if row else _SETTINGS_DEFAULTS.get(key, "")
+            log = logging.getLogger("settings")
+            masked = _mask_setting_value_for_log(key, value)
+            log.info(f"_get_setting: key={key!r} value={masked!r} (row_present={row is not None})")
+            return value
+        except Exception as exc:
+            log = logging.getLogger("settings")
+            log.exception(f"_get_setting ERROR: key={key!r} exc={exc}")
+            return _SETTINGS_DEFAULTS.get(key, "")
 
     def _set_setting(key: str, value: str, description: str = "") -> None:
-        """Write a single app setting to the app_config table (upsert)."""
-        db.execute(
-            """
-            INSERT INTO app_config (key, value, description, updated_at)
-            VALUES (%s, %s, %s, now())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-            """,
-            (key, value, description),
-        )
+        """Write a single app setting to the app_config table (upsert). Logs all writes."""
+        log = logging.getLogger("settings")
+        try:
+            masked = _mask_setting_value_for_log(key, value)
+            log.info(f"_set_setting: key={key!r} value={masked!r} description={description!r}")
+            db.execute(
+                """
+                INSERT INTO app_config (key, value, description, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (key, value, description),
+            )
+        except Exception as exc:
+            log.exception(f"_set_setting ERROR: key={key!r} value={value!r} exc={exc}")
 
     def _get_component_status() -> dict:
         """Check status of all system components and dependencies."""
@@ -2554,9 +2580,19 @@ def create_app():
         if request.method == "POST":
             nlr_api_key = request.form.get("nlr_api_key")
             ocm_api_key = request.form.get("ocm_api_key")
-            if nlr_api_key is not None and nlr_api_key.strip():
+            if (
+                nlr_api_key is not None
+                and nlr_api_key.strip()
+                and "*" not in nlr_api_key
+                and nlr_api_key.strip().lower() != "unset"
+            ):
                 _set_setting("nlr_api_key", nlr_api_key.strip(), "NREL Alt Fuel Stations API key for EV charger data (see https://developer.nrel.gov/docs/transportation/alt-fuel-stations-v1/)" )
-            if ocm_api_key is not None and ocm_api_key.strip():
+            if (
+                ocm_api_key is not None
+                and ocm_api_key.strip()
+                and "*" not in ocm_api_key
+                and ocm_api_key.strip().lower() != "unset"
+            ):
                 _set_setting("ocm_api_key", ocm_api_key.strip(), "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)")
             for k in [
                 "charger_scope",
@@ -3961,9 +3997,24 @@ def create_app():
 
             if action in ("save_charger_api_key", "save_charger_options", "save_charger_schedule", "run_charger_import"):
                 nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
-                if nlr_api_key:
+                ocm_api_key = (request.form.get("ocm_api_key", "") or "").strip()
+
+                nlr_updated = False
+                ocm_updated = False
+
+                if nlr_api_key and "*" not in nlr_api_key and nlr_api_key.lower() != "unset":
                     nlr_chargers.set_nlr_api_key(nlr_api_key)
                     log.info("NLR API key updated")
+                    nlr_updated = True
+
+                if ocm_api_key and "*" not in ocm_api_key and ocm_api_key.lower() != "unset":
+                    _set_setting(
+                        "ocm_api_key",
+                        ocm_api_key,
+                        "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)",
+                    )
+                    log.info("OCM API key updated")
+                    ocm_updated = True
 
                 charger_scope = (request.form.get("charger_scope", "all_us") or "all_us").strip()
                 if charger_scope not in ("all_us", "single_state"):
@@ -4020,7 +4071,14 @@ def create_app():
                     return redirect(url_for(redirect_endpoint))
 
                 if action == "save_charger_api_key":
-                    flash("NIL/NLR API key saved.", "success")
+                    if nlr_updated and ocm_updated:
+                        flash("NREL and OCM API keys saved.", "success")
+                    elif nlr_updated:
+                        flash("NREL API key saved.", "success")
+                    elif ocm_updated:
+                        flash("OCM API key saved.", "success")
+                    else:
+                        flash("No API key changes detected.", "warning")
                     return redirect(url_for(redirect_endpoint))
 
                 if action == "save_charger_options":

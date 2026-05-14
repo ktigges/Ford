@@ -95,15 +95,16 @@ def devloper_config() -> dict:
 
     return cfg
 
-    def ocm_api_key() -> str | None:
-        """Return the Open Charge Map API key from app_config/settings only."""
-        try:
-            import db
-            db.init_pool()
-            row = db.fetch_one("SELECT value FROM app_config WHERE key = 'ocm_api_key'")
-            return row["value"] if row else None
-        except Exception:
-            return None
+
+def ocm_api_key() -> str | None:
+    """Return the Open Charge Map API key from app_config/settings only."""
+    try:
+        import db
+
+        row = db.fetch_one("SELECT value FROM app_config WHERE key = 'ocm_api_key'")
+        return row["value"] if row and row.get("value") else None
+    except Exception:
+        return None
 
 
 def save_database(db_settings: dict) -> None:
