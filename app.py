@@ -2554,8 +2554,10 @@ def create_app():
         if request.method == "POST":
             nlr_api_key = (request.form.get("nlr_api_key") or "").strip()
             ocm_api_key = (request.form.get("ocm_api_key") or "").strip()
-            _set_setting("nlr_api_key", nlr_api_key, "NREL Alt Fuel Stations API key for EV charger data")
-            _set_setting("ocm_api_key", ocm_api_key, "Open Charge Map API key for charger data")
+            if nlr_api_key:
+                _set_setting("nlr_api_key", nlr_api_key, "NREL Alt Fuel Stations API key for EV charger data")
+            if ocm_api_key:
+                _set_setting("ocm_api_key", ocm_api_key, "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)")
             for k in [
                 "charger_scope",
                 "charger_state_filter",
@@ -2568,6 +2570,13 @@ def create_app():
                 if v is not None:
                     _set_setting(k, v, f"Charger setting: {k}")
             flash("Charger settings updated.", "success")
+
+        def obfuscate_key(key):
+            if not key:
+                return "unset"
+            if len(key) <= 8:
+                return "*" * len(key)
+            return key[:3] + "*" * (len(key) - 6) + key[-3:]
 
         current = {
             "nlr_api_key": _get_setting("nlr_api_key") or "",
@@ -2596,9 +2605,14 @@ def create_app():
             with open(charger_audit_path, "r") as f:
                 charger_audit_logs = "".join(f.readlines()[-20:])
 
+        # Obfuscate API keys for display
+        display_settings = dict(current)
+        display_settings["nlr_api_key"] = obfuscate_key(current["nlr_api_key"])
+        display_settings["ocm_api_key"] = obfuscate_key(current["ocm_api_key"])
+
         return render_template(
             "settings_chargers_page.html",
-            settings=current,
+            settings=display_settings,
             charger_status=charger_status,
             charger_failure_class=charger_failure_class,
             charger_job_running=charger_job_running,
