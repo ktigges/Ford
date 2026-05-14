@@ -487,6 +487,8 @@ CREATE TABLE drive_points (
     headwind_component_kmh REAL,
     tailwind_component_kmh REAL,
     sidewind_component_kmh REAL,
+    weather_fetch_status TEXT,
+    weather_fetch_error TEXT,
 
     created_at TIMESTAMPTZ DEFAULT now()
 );
