@@ -5,9 +5,12 @@
   <h2 style="margin-bottom:1.5rem;">EV Charger Network (NIL/NLR/NREL)</h2>
   <div style="margin-bottom:1rem;">
     <label>NLR API Key:<br>
-      <input type="text" name="nlr_api_key" value="{{ settings.nlr_api_key }}" placeholder="API Key">
+      <input type="text" name="nlr_api_key" value="{{ settings.nlr_api_key }}" placeholder="NREL API Key">
     </label>
-    <button type="submit" name="action" value="save_charger_api_key" style="margin-left:1em;">Save API Key</button>
+    <label style="margin-left:2em;">OCM API Key:<br>
+      <input type="text" name="ocm_api_key" value="{{ settings.ocm_api_key }}" placeholder="Open Charge Map API Key">
+    </label>
+    <button type="submit" name="action" value="save_charger_api_key" style="margin-left:1em;">Save API Keys</button>
   </div>
   <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
     <legend><b>Import Options</b></legend>
@@ -47,7 +50,8 @@
 <div class="card" style="margin-bottom:2rem;">
   <h3>Debug / Charger Status</h3>
   <ul style="margin-bottom:0;">
-    <li>API Key: <b>{{ settings.nlr_api_key|default('unset') }}</b></li>
+    <li>NREL API Key: <b>{{ settings.nlr_api_key|default('unset') }}</b></li>
+    <li>OCM API Key: <b>{{ settings.ocm_api_key|default('unset') }}</b></li>
     <li>Scope: <b>{{ settings.charger_scope }}</b></li>
     <li>State Filter: <b>{{ settings.charger_state_filter }}</b></li>
     <li>Fetch Strategy: <b>{{ settings.charger_fetch_strategy }}</b></li>

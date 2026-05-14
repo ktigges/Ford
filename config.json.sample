@@ -28,6 +28,7 @@
     "cert": "/path/to/server.crt",
     "key": "/path/to/server.key"
   },
+  "ocm_api_key": "CHANGE_ME_OCM_KEY",  // Open Charge Map API key (optional, for OCM integration)
   "external_id": {
     "enabled": true,
     "client_id": "CHANGE_ME_APP_ID",

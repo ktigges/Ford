@@ -1,3 +1,37 @@
+def merge_charger_results(nrel_stations: list[dict], ocm_stations: list[dict], dedupe_radius_m=100) -> list[dict]:
+    """Merge NREL and OCM charger lists, deduplicating by lat/lon within radius (meters)."""
+    import math
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371000  # meters
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    merged = []
+    used_ocm = set()
+    for n in nrel_stations:
+        n_lat, n_lon = n.get("latitude"), n.get("longitude")
+        match = None
+        for idx, o in enumerate(ocm_stations):
+            if idx in used_ocm:
+                continue
+            o_lat, o_lon = o.get("latitude"), o.get("longitude")
+            if n_lat and n_lon and o_lat and o_lon:
+                dist = haversine(n_lat, n_lon, o_lat, o_lon)
+                if dist < dedupe_radius_m:
+                    match = idx
+                    break
+        if match is not None:
+            merged.append({"nrel": n, "ocm": ocm_stations[match]})
+            used_ocm.add(match)
+        else:
+            merged.append({"nrel": n})
+    for idx, o in enumerate(ocm_stations):
+        if idx not in used_ocm:
+            merged.append({"ocm": o})
+    return merged
 """Ford Lightning source file.
 
 Author: Kevin Tigges
@@ -16,6 +50,7 @@ from requests.exceptions import Timeout
 
 import db
 import config
+import ocm_chargers
 
 log = logging.getLogger("nlr_chargers")
 nlr_log = logging.getLogger("nlr_api")

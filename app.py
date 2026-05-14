@@ -2551,8 +2551,27 @@ def create_app():
     # Charger Networks sub-page
     @app.route("/settings/chargers", methods=["GET", "POST"])
     def settings_chargers_page():
+        if request.method == "POST":
+            nlr_api_key = (request.form.get("nlr_api_key") or "").strip()
+            ocm_api_key = (request.form.get("ocm_api_key") or "").strip()
+            _set_setting("nlr_api_key", nlr_api_key, "NREL Alt Fuel Stations API key for EV charger data")
+            _set_setting("ocm_api_key", ocm_api_key, "Open Charge Map API key for charger data")
+            for k in [
+                "charger_scope",
+                "charger_state_filter",
+                "charger_fetch_strategy",
+                "charger_page_size",
+                "charger_auto_update",
+                "charger_auto_update_hours",
+            ]:
+                v = request.form.get(k)
+                if v is not None:
+                    _set_setting(k, v, f"Charger setting: {k}")
+            flash("Charger settings updated.", "success")
+
         current = {
             "nlr_api_key": _get_setting("nlr_api_key") or "",
+            "ocm_api_key": _get_setting("ocm_api_key") or "",
             "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
             "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
             "charger_fetch_strategy": _get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"],
@@ -4726,6 +4745,8 @@ def create_app():
         )
         filtered_total = filtered_total_row["cnt"] if filtered_total_row else 0
 
+
+        # Fetch NREL (db) stations as before
         filtered_stations = db.fetch_all(
             f"""
             SELECT
@@ -4763,21 +4784,85 @@ def create_app():
             tuple([*select_params, *where_params, result_limit]),
         )
 
-        map_points = [
-            {
-                "name": row.get("station_name"),
+        # Fetch OCM chargers (API, live)
+        ocm_lat = None
+        ocm_lon = None
+        ocm_radius_km = None
+        ocm_state = None
+        if origin_geo:
+            ocm_lat = float(origin_geo["lat"])
+            ocm_lon = float(origin_geo["lon"])
+            if radius_miles is not None:
+                ocm_radius_km = float(radius_miles) * 1.60934
+        elif location_query:
+            geo = _geocode_location(location_query)
+            if geo:
+                ocm_lat = float(geo["lat"])
+                ocm_lon = float(geo["lon"])
+        if not ocm_state and len(where_params) == 1 and where_clauses and "state" in where_clauses[0]:
+            ocm_state = where_params[0]
+
+        ocm_raw = []
+        try:
+            ocm_raw = ocm_chargers.fetch_ocm_chargers(
+                latitude=ocm_lat,
+                longitude=ocm_lon,
+                distance_km=ocm_radius_km,
+                state=ocm_state,
+                maxresults=result_limit,
+            )
+        except Exception as exc:
+            log.warning("OCM fetch failed: %s", exc)
+            ocm_raw = []
+        ocm_norm = ocm_chargers.normalize_ocm_stations(ocm_raw)
+
+        # Normalize NREL stations to match OCM merge format
+        def nrel_norm(row):
+            return {
+                "source": "NREL",
+                "nrel_id": row.get("nlr_station_id"),
+                "station_name": row.get("station_name"),
+                "street_address": row.get("street_address"),
                 "city": row.get("city"),
                 "state": row.get("state"),
                 "zip": row.get("zip"),
-                "network": row.get("network_name"),
-                "max_kw": float(row.get("max_power_kw") or 0),
-                "distance_miles": float(row.get("distance_miles")) if row.get("distance_miles") is not None else None,
-                "lat": float(row.get("latitude")) if row.get("latitude") is not None else None,
-                "lon": float(row.get("longitude")) if row.get("longitude") is not None else None,
+                "country": row.get("country"),
+                "latitude": row.get("latitude"),
+                "longitude": row.get("longitude"),
+                "status_code": row.get("status_code"),
+                "network_name": row.get("network_name"),
+                "updated_at": row.get("updated_at"),
+                "max_power_kw": row.get("max_power_kw"),
+                "connector_types": row.get("connector_types"),
+                "charging_levels": row.get("charging_levels"),
+                "connector_count": row.get("connector_count"),
+                "raw_data": row,
             }
-            for row in filtered_stations
-            if row.get("latitude") is not None and row.get("longitude") is not None
-        ]
+
+        nrel_normed = [nrel_norm(row) for row in filtered_stations]
+        merged = nlr_chargers.merge_charger_results(nrel_normed, ocm_norm)
+
+        # For map_points, flatten merged for display
+        map_points = []
+        for entry in merged:
+            src = entry.get("nrel") or entry.get("ocm")
+            if not src:
+                continue
+            map_points.append({
+                "name": src.get("station_name"),
+                "city": src.get("city"),
+                "state": src.get("state"),
+                "zip": src.get("zip"),
+                "network": src.get("network_name"),
+                "max_kw": float(src.get("max_power_kw") or 0),
+                "distance_miles": src.get("distance_miles") if "distance_miles" in src else None,
+                "lat": float(src.get("latitude")) if src.get("latitude") is not None else None,
+                "lon": float(src.get("longitude")) if src.get("longitude") is not None else None,
+                "source": src.get("source"),
+            })
+
+        # For filtered_stations, show merged list (for table)
+        filtered_stations = merged
 
         sync_status = nlr_chargers.get_sync_status()
         recent_runs = []
