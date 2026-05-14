@@ -573,6 +573,38 @@ screen -r lightning                    # reattach to view output
 # Ctrl-A D to detach again
 ```
 
+### Log Rotation (Weekly, Keep 30 Days)
+
+Use the built-in script to compress current logs and prune old archives:
+
+```bash
+./scripts/rotate_logs.sh
+```
+
+What it does:
+
+- Compresses each file in `logs/*.log` to `logs/archive/<name>.<timestamp>.gz`
+- Truncates active `.log` files in place so running file handlers continue writing
+- Deletes compressed archives older than 30 days
+
+Set up automatic weekly rotation with cron:
+
+```bash
+crontab -e
+```
+
+Add this line (runs every Sunday at 03:15):
+
+```cron
+15 3 * * 0 /home/sysadmin/Ford-dev/scripts/rotate_logs.sh >> /home/sysadmin/Ford-dev/logs/log_rotate.log 2>&1
+```
+
+Optional: test immediately by running:
+
+```bash
+/home/sysadmin/Ford-dev/scripts/rotate_logs.sh
+```
+
 ### SSL/TLS (HTTPS)
 
 To enable HTTPS, use the **SSL / TLS** section on the Settings page to upload your certificate and private key files, then check "Enable SSL". Files are saved to the `certs/` directory. Alternatively, edit `config.json` directly:
