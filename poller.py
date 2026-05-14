@@ -1170,8 +1170,16 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
     lat = _v(metrics, "position", "value", "location", "lat")
     lon = _v(metrics, "position", "value", "location", "lon")
     weather_data = None
-    if lat is not None and lon is not None and (not hasattr(_record_drive_point, "_last_weather_time") or 
-                                                 (ts - _record_drive_point._last_weather_time).total_seconds() >= 300):
+    last_weather_time = getattr(_record_drive_point, "_last_weather_time", None)
+    should_refresh_weather = (
+        lat is not None
+        and lon is not None
+        and (
+            last_weather_time is None
+            or (ts - last_weather_time).total_seconds() >= 300
+        )
+    )
+    if should_refresh_weather:
         try:
             weather_data = _fetch_weather_snapshot(lat, lon, ts)
             _record_drive_point._last_weather_time = ts
