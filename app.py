@@ -227,8 +227,6 @@ def create_app():
         "timezone": "UTC",
         "log_level": "INFO",
         "local_auth_idle_timeout_minutes": "30",
-        "devloper_auth_bypass_enabled": "off",
-        "devloper_auth_bypass_ip_allowlist": "",
         "conservative_polling": "off",
         "autostart_poller": "off",
         "developing": "off",
@@ -2077,26 +2075,36 @@ def create_app():
         return max(1, min(1440, value))
 
     def _request_client_ip() -> str:
-        """Return the best-effort client IP, honoring X-Forwarded-For when present."""
-        forwarded_for = (request.headers.get("X-Forwarded-For") or "").strip()
-        if forwarded_for:
-            first_hop = forwarded_for.split(",")[0].strip()
-            if first_hop:
-                return first_hop
+        """Return client IP from direct socket peer.
+
+        Intentionally ignores forwarded headers to avoid spoofing unless a
+        trusted proxy layer is explicitly implemented.
+        """
         return (request.remote_addr or "").strip()
 
     def _devloper_auth_bypass_allowed() -> bool:
-        """Allow local-auth bypass for explicitly allowed IPs when Devloper mode is enabled."""
-        enabled = (_get_setting("devloper_auth_bypass_enabled") or "off").strip().lower() == "on"
+        """Allow local-auth bypass for explicitly allowed IPs when Devloper mode is enabled.
+
+        This is configured only via server-side config.json (devloper block)
+        and is intentionally not exposed in the web UI.
+        """
+        dev_cfg = config.devloper_config()
+        enabled = str(dev_cfg.get("enabled", "off")).strip().lower() in ("on", "true", "1", "yes")
         if not enabled:
             return False
 
-        raw_allowlist = _get_setting("devloper_auth_bypass_ip_allowlist") or ""
+        allowlist_cfg = dev_cfg.get("ip_allowlist", [])
+        if isinstance(allowlist_cfg, str):
+            entries = [entry.strip() for entry in allowlist_cfg.split(",") if entry.strip()]
+        elif isinstance(allowlist_cfg, list):
+            entries = [str(entry).strip() for entry in allowlist_cfg if str(entry).strip()]
+        else:
+            entries = []
+
         client_ip = _request_client_ip()
         if not client_ip:
             return False
 
-        entries = [entry.strip() for entry in raw_allowlist.split(",") if entry.strip()]
         if not entries:
             return False
 
@@ -2105,13 +2113,23 @@ def create_app():
         except ValueError:
             return False
 
+        # Defense-in-depth: bypass is only for internal/testing addresses.
+        if not (client_addr.is_private or client_addr.is_loopback):
+            return False
+
         for entry in entries:
             try:
                 if "/" in entry:
-                    if client_addr in ipaddress.ip_network(entry, strict=False):
+                    candidate_net = ipaddress.ip_network(entry, strict=False)
+                    if not (candidate_net.is_private or candidate_net.is_loopback):
+                        continue
+                    if client_addr in candidate_net:
                         return True
                 else:
-                    if client_addr == ipaddress.ip_address(entry):
+                    candidate_ip = ipaddress.ip_address(entry)
+                    if not (candidate_ip.is_private or candidate_ip.is_loopback):
+                        continue
+                    if client_addr == candidate_ip:
                         return True
             except ValueError:
                 continue
@@ -4027,21 +4045,6 @@ def create_app():
                 "Auto-logout idle timeout for local auth sessions (minutes)",
             )
 
-            devloper_bypass = "on" if request.form.get("devloper_auth_bypass_enabled") == "on" else "off"
-            _set_setting(
-                "devloper_auth_bypass_enabled",
-                devloper_bypass,
-                "Devloper testing auth bypass toggle (restricted by IP allow list)",
-            )
-
-            allowlist_raw = (request.form.get("devloper_auth_bypass_ip_allowlist", "") or "").strip()
-            allowlist_normalized = ", ".join([item.strip() for item in allowlist_raw.split(",") if item.strip()])
-            _set_setting(
-                "devloper_auth_bypass_ip_allowlist",
-                allowlist_normalized,
-                "Devloper testing auth bypass allow list (comma-separated IP/CIDR)",
-            )
-
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
             iv_on       = _clamp_interval("poll_interval_on",       request.form.get("poll_interval_on", "60"))
@@ -4099,8 +4102,6 @@ def create_app():
             "developing": _get_setting("developing"),
             "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
             "local_auth_idle_timeout_minutes": _get_setting("local_auth_idle_timeout_minutes") or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
-            "devloper_auth_bypass_enabled": _get_setting("devloper_auth_bypass_enabled") or _SETTINGS_DEFAULTS["devloper_auth_bypass_enabled"],
-            "devloper_auth_bypass_ip_allowlist": _get_setting("devloper_auth_bypass_ip_allowlist") or _SETTINGS_DEFAULTS["devloper_auth_bypass_ip_allowlist"],
             "nlr_api_key": _get_setting("nlr_api_key") or "",
             "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
             "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],

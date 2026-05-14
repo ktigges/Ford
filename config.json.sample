@@ -16,6 +16,13 @@
     "default_poll_interval_sec": 60,
     "max_consecutive_failures": 5
   },
+  "devloper": {
+    "enabled": "off",
+    "ip_allowlist": [
+      "127.0.0.1",
+      "::1"
+    ]
+  },
   "ssl": {
     "enabled": true,
     "cert": "/path/to/server.crt",
