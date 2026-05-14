@@ -4,12 +4,13 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <h2 style="margin-bottom:1.5rem;">EV Charger Network (NIL/NLR/NREL)</h2>
   <div style="margin-bottom:1rem;">
-    <label>NLR API Key:<br>
+    <label>NREL API Key:
       <input type="text" name="nlr_api_key" value="{{ settings.nlr_api_key }}" placeholder="NREL API Key">
+      <span class="form-desc" style="font-size:0.95em; color:#666;">(Required for NREL/AFDC charger import)</span>
     </label>
-    <label style="margin-left:2em;">OCM API Key:<br>
+    <label style="margin-left:2em;">OCM API Key:
       <input type="text" name="ocm_api_key" value="{{ settings.ocm_api_key }}" placeholder="Open Charge Map API Key">
-      <span class="form-desc" style="font-size:0.95em; color:#666;">(Optional, for Open Charge Map integration. Get your key at <a href='https://openchargemap.org/site/develop/api' target='_blank'>openchargemap.org</a>.)</span>
+      <span class="form-desc" style="font-size:0.95em; color:#666;">(Optional, for Open Charge Map integration)</span>
     </label>
     <button type="submit" name="action" value="save_charger_api_key" style="margin-left:1em;">Save API Keys</button>
   </div>
@@ -53,6 +54,11 @@
   <ul style="margin-bottom:0;">
     <li>NREL API Key: <b>{{ settings.nlr_api_key|default('unset') }}</b></li>
     <li>OCM API Key: <b>{{ settings.ocm_api_key|default('unset') }}</b></li>
+    </ul>
+    <div style="margin-top:1em; font-size:0.97em; color:#555;">
+      <b>NREL API Key:</b> Get your key at <a href="https://developer.nrel.gov/signup/" target="_blank">developer.nrel.gov/signup</a> (required for NREL/AFDC charger import).<br>
+      <b>OCM API Key:</b> Get your key at <a href="https://openchargemap.org/site/develop/api" target="_blank">openchargemap.org</a> (optional, for Open Charge Map integration).
+    </div>
     <li>Scope: <b>{{ settings.charger_scope }}</b></li>
     <li>State Filter: <b>{{ settings.charger_state_filter }}</b></li>
     <li>Fetch Strategy: <b>{{ settings.charger_fetch_strategy }}</b></li>

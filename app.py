@@ -2552,12 +2552,12 @@ def create_app():
     @app.route("/settings/chargers", methods=["GET", "POST"])
     def settings_chargers_page():
         if request.method == "POST":
-            nlr_api_key = (request.form.get("nlr_api_key") or "").strip()
-            ocm_api_key = (request.form.get("ocm_api_key") or "").strip()
-            if nlr_api_key:
-                _set_setting("nlr_api_key", nlr_api_key, "NREL Alt Fuel Stations API key for EV charger data")
-            if ocm_api_key:
-                _set_setting("ocm_api_key", ocm_api_key, "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)")
+            nlr_api_key = request.form.get("nlr_api_key")
+            ocm_api_key = request.form.get("ocm_api_key")
+            if nlr_api_key is not None and nlr_api_key.strip():
+                _set_setting("nlr_api_key", nlr_api_key.strip(), "NREL Alt Fuel Stations API key for EV charger data (see https://developer.nrel.gov/docs/transportation/alt-fuel-stations-v1/)" )
+            if ocm_api_key is not None and ocm_api_key.strip():
+                _set_setting("ocm_api_key", ocm_api_key.strip(), "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)")
             for k in [
                 "charger_scope",
                 "charger_state_filter",
@@ -2578,6 +2578,7 @@ def create_app():
                 return "*" * len(key)
             return key[:3] + "*" * (len(key) - 6) + key[-3:]
 
+        # Always fetch fresh after POST
         current = {
             "nlr_api_key": _get_setting("nlr_api_key") or "",
             "ocm_api_key": _get_setting("ocm_api_key") or "",
