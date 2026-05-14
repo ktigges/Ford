@@ -68,10 +68,20 @@ def fetch_ocm_chargers(
         "User-Agent": "Ford-Lightning-EV/1.0",
         "Accept": "application/json",
     }
+    log.info(
+        "OCM request start (country=%s, state=%s, maxresults=%s, has_api_key=%s)",
+        country_code,
+        state or "all",
+        maxresults,
+        bool(ocm_api_key),
+    )
+
     try:
         resp = requests.get(OCM_API_BASE, params=params, headers=headers, timeout=OCM_HTTP_TIMEOUT_SEC)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        log.info("OCM request success (results=%s)", len(data) if isinstance(data, list) else 0)
+        return data
     except Exception as e:
         log.error("OCM API request failed: %s", e)
         return []

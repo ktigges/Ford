@@ -101,7 +101,9 @@ def _ensure_charger_tables() -> None:
         """
         CREATE TABLE IF NOT EXISTS ev_stations (
             id BIGSERIAL PRIMARY KEY,
-            nlr_station_id BIGINT NOT NULL UNIQUE,
+            source TEXT NOT NULL DEFAULT 'NREL',
+            nlr_station_id BIGINT UNIQUE,
+            ocm_station_id BIGINT,
             station_name TEXT NOT NULL,
             street_address TEXT,
             city TEXT,
@@ -167,8 +169,17 @@ def _ensure_charger_tables() -> None:
     )
     db.execute("ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_error TEXT")
 
+    # Backward-compatible migration for existing deployments.
+    db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+    db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
+    db.execute("ALTER TABLE ev_stations ALTER COLUMN nlr_station_id DROP NOT NULL")
+    db.execute("UPDATE ev_stations SET source = 'NREL' WHERE source IS NULL OR source = ''")
+
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ev_stations_ocm_id_uniq ON ev_stations (ocm_station_id) WHERE ocm_station_id IS NOT NULL"
+    )
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
@@ -355,24 +366,58 @@ def _nlr_get(
     raise RuntimeError("NLR API request timed out after retries") from last_exc
 
 
-def _upsert_ev_station(station: Dict[str, Any]) -> Optional[int]:
-    """Upsert a single EV station record. Returns station record ID or None."""
+def _upsert_ev_station(station: Dict[str, Any], source: str = "NREL") -> Optional[int]:
+    """Upsert a single EV station record from NREL or OCM. Returns station DB ID."""
     try:
-        nlr_station_id = station.get("id")
-        if not nlr_station_id:
-            log.warning("Station missing id field: %s", station.get("station_name"))
+        src = (source or "NREL").upper()
+        lat = station.get("latitude")
+        lon = station.get("longitude")
+        if lat is None or lon is None:
+            log.warning("%s station missing lat/lon: %s", src, station.get("station_name"))
             return None
 
+        # Normalize shared fields across provider payloads.
+        station_name = station.get("station_name") or station.get("Title") or "Unnamed Charger"
+        street_address = station.get("street_address") or station.get("AddressLine1")
+        city = station.get("city") or station.get("Town")
+        state = station.get("state") or station.get("StateOrProvince")
+        zip_code = station.get("zip") or station.get("Postcode")
+        country = station.get("country", "US")
+        status_code = station.get("status_code")
+        if isinstance(status_code, bool):
+            status_code = "E" if status_code else "N"
+        fuel_type_code = station.get("fuel_type_code") or "ELEC"
+        access_code = station.get("access_code")
+        access_detail = station.get("access_detail") or station.get("access_detail_code")
+        owner_type_code = station.get("owner_type_code")
+        facility_type = station.get("facility_type")
+        network_name = station.get("ev_network") or station.get("network_name")
+        source_updated_at = station.get("updated_at")
+        raw_data = json.dumps(station)
+
+        nlr_station_id = station.get("id") if src == "NREL" else None
+        ocm_station_id = station.get("ocm_id") if src == "OCM" else None
+
+        if src == "NREL" and not nlr_station_id:
+            log.warning("NREL station missing id field: %s", station_name)
+            return None
+        if src == "OCM" and not ocm_station_id:
+            log.warning("OCM station missing id field: %s", station_name)
+            return None
+
+        conflict_field = "nlr_station_id" if src == "NREL" else "ocm_station_id"
         row = db.execute_returning(
-            """
+            f"""
             INSERT INTO ev_stations (
-                nlr_station_id, station_name, street_address, city, state, zip,
+                source, nlr_station_id, ocm_station_id,
+                station_name, street_address, city, state, zip,
                 latitude, longitude, country, status_code, fuel_type_code,
                 access_code, access_detail, owner_type_code, facility_type,
                 network_name, updated_at, nlr_updated_at, raw_data
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)
-            ON CONFLICT (nlr_station_id) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)
+            ON CONFLICT ({conflict_field}) DO UPDATE SET
+                source = EXCLUDED.source,
                 station_name = EXCLUDED.station_name,
                 street_address = EXCLUDED.street_address,
                 city = EXCLUDED.city,
@@ -380,7 +425,9 @@ def _upsert_ev_station(station: Dict[str, Any]) -> Optional[int]:
                 zip = EXCLUDED.zip,
                 latitude = EXCLUDED.latitude,
                 longitude = EXCLUDED.longitude,
+                country = EXCLUDED.country,
                 status_code = EXCLUDED.status_code,
+                fuel_type_code = EXCLUDED.fuel_type_code,
                 access_code = EXCLUDED.access_code,
                 access_detail = EXCLUDED.access_detail,
                 owner_type_code = EXCLUDED.owner_type_code,
@@ -392,29 +439,31 @@ def _upsert_ev_station(station: Dict[str, Any]) -> Optional[int]:
             RETURNING id
             """,
             (
+                src,
                 nlr_station_id,
-                station.get("station_name"),
-                station.get("street_address"),
-                station.get("city"),
-                station.get("state"),
-                station.get("zip"),
-                station.get("latitude"),
-                station.get("longitude"),
-                station.get("country", "US"),
-                station.get("status_code"),
-                station.get("fuel_type_code"),
-                station.get("access_code"),
-                station.get("access_detail_code"),
-                station.get("owner_type_code"),
-                station.get("facility_type"),
-                station.get("ev_network"),
-                station.get("updated_at"),
-                json.dumps(station),
+                ocm_station_id,
+                station_name,
+                street_address,
+                city,
+                state,
+                zip_code,
+                lat,
+                lon,
+                country,
+                status_code,
+                fuel_type_code,
+                access_code,
+                access_detail,
+                owner_type_code,
+                facility_type,
+                network_name,
+                source_updated_at,
+                raw_data,
             ),
         )
         return row["id"] if row else None
     except Exception as e:
-        log.error("Failed to upsert EV station %s: %s", station.get("id"), e)
+        log.error("Failed to upsert %s EV station: %s", source, e)
         return None
 
 
@@ -616,6 +665,7 @@ def import_ev_stations_with_strategy(
     total_results = None
     sync_run_id = None
     fetch_mode_used = "state_chunks"
+    ocm_processed_count = 0
 
     try:
         sync_result = db.execute_returning(
@@ -802,6 +852,69 @@ def import_ev_stations_with_strategy(
 
             page = chunks_seen
 
+        # OCM phase: persist OCM stations into the same ev_stations table.
+        ocm_key = config.ocm_api_key()
+        if ocm_key:
+            log.info("Starting OCM station persistence phase (sync_run_id=%s)", sync_run_id)
+            _audit_sync(f"OCM_START sync_run_id={sync_run_id} state={state or 'all'}")
+
+            ocm_states = [state] if state else sorted(US_STATES)
+            for idx, st in enumerate(ocm_states, start=1):
+                try:
+                    _touch_sync_run(sync_run_id, updated_count, error_count)
+                    _audit_sync(
+                        f"OCM_STATE_START sync_run_id={sync_run_id} step={idx}/{len(ocm_states)} state={st}"
+                    )
+                    ocm_raw = ocm_chargers.fetch_ocm_chargers(
+                        state=st,
+                        maxresults=1000,
+                        ocm_api_key=ocm_key,
+                    )
+                    ocm_norm = ocm_chargers.normalize_ocm_stations(ocm_raw)
+                    for station in ocm_norm:
+                        station_db_id = _upsert_ev_station(station, source="OCM")
+                        if not station_db_id:
+                            error_count += 1
+                            continue
+
+                        updated_count += 1
+                        processed_count += 1
+                        ocm_processed_count += 1
+
+                        if ocm_processed_count % 250 == 0:
+                            elapsed_s = int((datetime.now(timezone.utc) - started_at).total_seconds())
+                            log.info(
+                                "OCM import progress (sync_run_id=%s, state=%s, processed_ocm=%d, total_processed=%d, errors=%d, elapsed_s=%d)",
+                                sync_run_id,
+                                st,
+                                ocm_processed_count,
+                                processed_count,
+                                error_count,
+                                elapsed_s,
+                            )
+                            _touch_sync_run(sync_run_id, updated_count, error_count)
+                            _audit_sync(
+                                f"OCM_PROGRESS sync_run_id={sync_run_id} state={st} processed_ocm={ocm_processed_count} total_processed={processed_count} errors={error_count} elapsed_s={elapsed_s}"
+                            )
+
+                    _audit_sync(
+                        f"OCM_STATE_DONE sync_run_id={sync_run_id} step={idx}/{len(ocm_states)} state={st} stations={len(ocm_norm)}"
+                    )
+                except Exception as e:
+                    error_count += 1
+                    log.error("OCM state step %d/%d failed (state=%s): %s", idx, len(ocm_states), st, e)
+                    _touch_sync_run(sync_run_id, updated_count, error_count, str(e))
+                    _audit_sync(
+                        f"OCM_STATE_FAILED sync_run_id={sync_run_id} step={idx}/{len(ocm_states)} state={st} error={str(e)[:300]}"
+                    )
+
+            _audit_sync(
+                f"OCM_DONE sync_run_id={sync_run_id} processed_ocm={ocm_processed_count} errors={error_count}"
+            )
+        else:
+            log.info("OCM API key not configured; skipping OCM persistence phase")
+            _audit_sync(f"OCM_SKIPPED sync_run_id={sync_run_id} reason=no_api_key")
+
         if sync_run_id:
             db.execute(
                 """
@@ -821,6 +934,7 @@ def import_ev_stations_with_strategy(
             "updated": updated_count,
             "errors": error_count,
             "processed": processed_count,
+            "processed_ocm": ocm_processed_count,
             "total_results": total_results,
             "pages_processed": page,
             "sync_run_id": sync_run_id,

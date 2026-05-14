@@ -514,7 +514,9 @@ CREATE INDEX idx_charging_sessions_open ON charging_sessions (vin) WHERE in_prog
 -- =========================
 CREATE TABLE ev_stations (
     id BIGSERIAL PRIMARY KEY,
-    nlr_station_id BIGINT NOT NULL UNIQUE,
+    source TEXT NOT NULL DEFAULT 'NREL',
+    nlr_station_id BIGINT UNIQUE,
+    ocm_station_id BIGINT,
     
     station_name TEXT NOT NULL,
     street_address TEXT,
@@ -544,9 +546,7 @@ CREATE TABLE ev_stations (
     created_at TIMESTAMPTZ DEFAULT now(),
     
     -- Raw data for future schema evolution
-    raw_data JSONB,
-    
-    UNIQUE (nlr_station_id)
+    raw_data JSONB
 );
 
 CREATE TABLE ev_charger_connectors (
@@ -596,6 +596,7 @@ CREATE TABLE ev_sync_runs (
 -- Indexes for charger queries
 -- =========================
 CREATE INDEX idx_ev_stations_state ON ev_stations (state) WHERE country = 'US';
+CREATE UNIQUE INDEX idx_ev_stations_ocm_id_uniq ON ev_stations (ocm_station_id) WHERE ocm_station_id IS NOT NULL;
 CREATE INDEX idx_ev_stations_location ON ev_stations USING GIST (
     ll_to_earth(latitude, longitude)
 );

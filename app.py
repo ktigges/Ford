@@ -95,6 +95,7 @@ def _setup_logging() -> None:
         "ford_api": "debug_api.log",
         "poller": "debug_poller.log",
         "nlr_chargers": "debug_chargers.log",
+        "ocm_chargers": "debug_chargers.log",
         "nlr_api": "debug_nlr_api.log",
         "local_auth": "debug_local_auth.log",
         "settings": "debug_settings.log",
@@ -1191,7 +1192,9 @@ def create_app():
                 """
                 CREATE TABLE ev_stations (
                     id BIGSERIAL PRIMARY KEY,
-                    nlr_station_id BIGINT NOT NULL UNIQUE,
+                    source TEXT NOT NULL DEFAULT 'NREL',
+                    nlr_station_id BIGINT UNIQUE,
+                    ocm_station_id BIGINT,
                     station_name TEXT NOT NULL,
                     street_address TEXT,
                     city TEXT,
@@ -1210,8 +1213,7 @@ def create_app():
                     updated_at TIMESTAMPTZ DEFAULT now(),
                     nlr_updated_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ DEFAULT now(),
-                    raw_data JSONB,
-                    UNIQUE (nlr_station_id)
+                    raw_data JSONB
                 )
                 """
             )
@@ -1260,8 +1262,19 @@ def create_app():
 
         # Create indexes for charger tables
         if _table_exists("ev_stations"):
+            if not _column_exists("ev_stations", "source"):
+                db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+                applied.append("Added ev_stations.source")
+            if not _column_exists("ev_stations", "ocm_station_id"):
+                db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
+                applied.append("Added ev_stations.ocm_station_id")
+            db.execute("ALTER TABLE ev_stations ALTER COLUMN nlr_station_id DROP NOT NULL")
+            db.execute("UPDATE ev_stations SET source = 'NREL' WHERE source IS NULL OR source = ''")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_ev_stations_ocm_id_uniq ON ev_stations (ocm_station_id) WHERE ocm_station_id IS NOT NULL"
+            )
 
         if _table_exists("ev_charger_connectors"):
             db.execute(

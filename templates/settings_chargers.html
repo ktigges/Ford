@@ -72,11 +72,11 @@
 </div>
 
 <div class="card" style="margin-bottom:2rem;">
-  <h3>Latest Charger Update Logs</h3>
+  <h3>Latest Charger Logs</h3>
   <pre style="max-height:300px; overflow:auto; background:#222; color:#eee; padding:1em; border-radius:6px;">
 {{ charger_logs|default('No charger logs found.') }}
   </pre>
-  <a href="{{ url_for('view_log', log_name='debug_chargers.log') }}" class="btn">View Full Charger Log</a>
+  <a href="{{ url_for('view_log', log_name='debug_chargers.log') }}" class="btn">View Full Charger Logs</a>
 </div>
 
 <div class="card" style="margin-bottom:2rem;">
