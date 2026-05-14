@@ -73,27 +73,27 @@ def external_id_config() -> dict:
 
 
 def devloper_config() -> dict:
-        """Return server-side Devloper auth-bypass settings.
+    """Return server-side Devloper auth-bypass settings.
 
-        Config is read from config.json under "devloper":
-            - enabled: on/off style flag
-            - ip_allowlist: list of IP/CIDR entries (or comma-separated string)
+    Config is read from config.json under "devloper":
+      - enabled: true/false flag
+      - ip_allowlist: list of IP/CIDR entries (or comma-separated string)
 
-        Optional environment overrides:
-            - LIGHTNING_DEVLOPER_BYPASS_ENABLED
-            - LIGHTNING_DEVLOPER_BYPASS_IP_ALLOWLIST
-        """
-        cfg = dict(get_config().get("devloper", {}))
+    Optional environment overrides:
+      - LIGHTNING_DEVLOPER_BYPASS_ENABLED (true/false)
+      - LIGHTNING_DEVLOPER_BYPASS_IP_ALLOWLIST
+    """
+    cfg = dict(get_config().get("devloper", {}))
 
-        env_enabled = (os.environ.get("LIGHTNING_DEVLOPER_BYPASS_ENABLED") or "").strip()
-        if env_enabled:
-                cfg["enabled"] = env_enabled
+    env_enabled = (os.environ.get("LIGHTNING_DEVLOPER_BYPASS_ENABLED") or "").strip()
+    if env_enabled:
+        cfg["enabled"] = env_enabled
 
-        env_allow = (os.environ.get("LIGHTNING_DEVLOPER_BYPASS_IP_ALLOWLIST") or "").strip()
-        if env_allow:
-                cfg["ip_allowlist"] = [entry.strip() for entry in env_allow.split(",") if entry.strip()]
+    env_allow = (os.environ.get("LIGHTNING_DEVLOPER_BYPASS_IP_ALLOWLIST") or "").strip()
+    if env_allow:
+        cfg["ip_allowlist"] = [entry.strip() for entry in env_allow.split(",") if entry.strip()]
 
-        return cfg
+    return cfg
 
 
 def save_database(db_settings: dict) -> None:

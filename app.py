@@ -2089,7 +2089,11 @@ def create_app():
         and is intentionally not exposed in the web UI.
         """
         dev_cfg = config.devloper_config()
-        enabled = str(dev_cfg.get("enabled", "off")).strip().lower() in ("on", "true", "1", "yes")
+        enabled_raw = dev_cfg.get("enabled", False)
+        if isinstance(enabled_raw, bool):
+            enabled = enabled_raw
+        else:
+            enabled = str(enabled_raw).strip().lower() == "true"
         if not enabled:
             return False
 
