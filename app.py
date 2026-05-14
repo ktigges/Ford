@@ -2056,6 +2056,33 @@ def create_app():
     def _inject_csrf_token():
         return {"csrf_token": _csrf_token}
 
+    def _is_mobile_browser_request() -> bool:
+        """Best-effort mobile browser detection using UA and client hints."""
+        ch_mobile = (request.headers.get("Sec-CH-UA-Mobile", "") or "").strip()
+        if ch_mobile == "?1":
+            return True
+
+        ua = (request.headers.get("User-Agent", "") or "").lower()
+        if not ua:
+            return False
+
+        mobile_markers = (
+            "android",
+            "iphone",
+            "ipad",
+            "ipod",
+            "mobile",
+            "windows phone",
+            "blackberry",
+            "opera mini",
+            "webos",
+        )
+        return any(marker in ua for marker in mobile_markers)
+
+    @app.context_processor
+    def _inject_client_platform():
+        return {"is_mobile_browser": _is_mobile_browser_request()}
+
     def _clear_local_auth_session() -> None:
         """Revoke and clear local auth session values."""
         local_auth.revoke_session(session)
