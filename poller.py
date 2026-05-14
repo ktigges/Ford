@@ -1186,11 +1186,11 @@ def _record_drive_point(
          weather.get("wind_direction_avg_deg") if weather else None,
          weather.get("headwind_component_kmh") if weather else None,
          weather.get("tailwind_component_kmh") if weather else None,
-            weather.get("sidewind_component_kmh") if weather else None,
-            weather_fetch_status,
-            _truncate_weather_error(weather_fetch_error)),
+         weather.get("sidewind_component_kmh") if weather else None,
+         weather_fetch_status,
+         _truncate_weather_error(weather_fetch_error)),
     )
-        return int(row["id"]) if row and row.get("id") is not None else None
+    return int(row["id"]) if row and row.get("id") is not None else None
 
 
 # Grace period: if vehicle stops but ignition is still on and gear is in park,
