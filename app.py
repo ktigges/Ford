@@ -5401,16 +5401,137 @@ def create_app():
         "ev_stations", "ev_charger_connectors", "ev_sync_runs",
     ]
 
-    @app.route("/db")
-    def db_browser():
-        """Show all tables with row counts."""
+    def _db_console_table_info() -> list[dict]:
+        """Return table names and row counts for db browser sidebar."""
         table_info = []
         for t in _VIEWABLE_TABLES:
             if not _table_exists(t):
                 continue
             row = db.fetch_one(f"SELECT count(*) AS cnt FROM {t}")
             table_info.append({"name": t, "count": row["cnt"] if row else 0})
-        return render_template("db_browser.html", tables=table_info)
+        return table_info
+
+    def _db_console_run(command_raw: str) -> dict:
+        """Execute one SQL statement or a small set of emulated psql meta-commands."""
+        command = (command_raw or "").strip()
+        if not command:
+            return {"ok": False, "error": "Command is empty."}
+
+        if "\x00" in command:
+            return {"ok": False, "error": "Invalid command."}
+
+        # Emulate common read-only psql meta-commands often used in quick admin checks.
+        if command.startswith("\\"):
+            normalized = command.lower().strip()
+            if normalized == "\\dt":
+                rows = db.fetch_all(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                    """
+                )
+                return {
+                    "ok": True,
+                    "columns": ["table_name"],
+                    "rows": rows,
+                    "message": f"{len(rows)} table(s)",
+                }
+            if normalized == "\\dn":
+                rows = db.fetch_all(
+                    """
+                    SELECT schema_name
+                    FROM information_schema.schemata
+                    ORDER BY schema_name
+                    """
+                )
+                return {
+                    "ok": True,
+                    "columns": ["schema_name"],
+                    "rows": rows,
+                    "message": f"{len(rows)} schema(s)",
+                }
+            if normalized == "\\di":
+                rows = db.fetch_all(
+                    """
+                    SELECT schemaname, tablename, indexname
+                    FROM pg_indexes
+                    WHERE schemaname = 'public'
+                    ORDER BY tablename, indexname
+                    """
+                )
+                return {
+                    "ok": True,
+                    "columns": ["schemaname", "tablename", "indexname"],
+                    "rows": rows,
+                    "message": f"{len(rows)} index(es)",
+                }
+            if normalized.startswith("\\d "):
+                table_name = command[3:].strip().strip('"')
+                if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", table_name or ""):
+                    return {"ok": False, "error": "Invalid table name for \\d command."}
+                rows = db.fetch_all(
+                    """
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s
+                    ORDER BY ordinal_position
+                    """,
+                    (table_name,),
+                )
+                return {
+                    "ok": True,
+                    "columns": ["column_name", "data_type", "is_nullable"],
+                    "rows": rows,
+                    "message": f"{len(rows)} column(s) in {table_name}",
+                }
+            return {
+                "ok": False,
+                "error": "Unsupported psql meta-command. Supported: \\dt, \\dn, \\di, \\d <table>",
+            }
+
+        sql = command[:-1].strip() if command.endswith(";") else command
+        if ";" in sql:
+            return {"ok": False, "error": "Only one SQL statement at a time is supported."}
+
+        first_token = (sql.split(None, 1)[0] if sql.split(None, 1) else "").lower()
+        returns_rows = first_token in {"select", "with", "show", "explain", "values"}
+
+        if returns_rows:
+            rows = db.fetch_all(sql)
+            columns = list(rows[0].keys()) if rows else []
+            return {
+                "ok": True,
+                "columns": columns,
+                "rows": rows,
+                "message": f"Query returned {len(rows)} row(s)",
+            }
+
+        db.execute(sql)
+        return {"ok": True, "columns": [], "rows": [], "message": "Command executed successfully."}
+
+    @app.route("/db", methods=["GET", "POST"])
+    def db_browser():
+        """Show all tables with row counts and an inline SQL/psql console."""
+        console_command = ""
+        console_result = None
+        table_info = _db_console_table_info()
+
+        if request.method == "POST":
+            console_command = (request.form.get("console_command") or "").strip()
+            try:
+                console_result = _db_console_run(console_command)
+            except Exception as exc:
+                log.exception("DB console command failed: %s", exc)
+                console_result = {"ok": False, "error": str(exc)}
+
+        return render_template(
+            "db_browser.html",
+            tables=table_info,
+            console_command=console_command,
+            console_result=console_result,
+        )
 
     @app.route("/db/<table_name>")
     def db_table(table_name):
