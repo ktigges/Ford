@@ -241,6 +241,7 @@ def _do_poll(provider: str, vin: str) -> None:
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
     _upsert_charging_state(vin, now, metrics)
+    _reconcile_open_charging_session(vin, now, metrics)
     _record_charging_history(vin, now, metrics)
     _upsert_location_state(vin, now, metrics)
     _upsert_tire_state(vin, now, metrics)
@@ -347,6 +348,7 @@ def initial_setup_poll(provider: str, vin: str | None = None) -> str:
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
     _upsert_charging_state(vin, now, metrics)
+    _reconcile_open_charging_session(vin, now, metrics)
     _record_charging_history(vin, now, metrics)
     _upsert_location_state(vin, now, metrics)
     _upsert_tire_state(vin, now, metrics)
@@ -1669,6 +1671,86 @@ def _charging_power_kw(metrics: dict, ts: datetime | None = None) -> float | Non
         return None
 
 
+def _should_close_charging_session(metrics: dict, ts: datetime) -> bool:
+    """Return True when telemetry indicates an in-progress charging session should close."""
+    plug_status = (_v(metrics, "xevPlugChargerStatus", "value") or "").strip().lower()
+    charge_display = (_v(metrics, "xevBatteryChargeDisplayStatus", "value") or "").strip().lower()
+    communication_status = (_v(metrics, "xevChargeStationCommunicationStatus", "value") or "").strip().lower()
+
+    charger_current = _v_if_fresh(metrics, "xevBatteryChargerCurrentOutput", ts, max_stale_minutes=60)
+    charger_voltage = _v_if_fresh(metrics, "xevBatteryChargerVoltageOutput", ts, max_stale_minutes=60)
+    dc_current = _v_if_fresh(metrics, "xevEvseBatteryDcCurrentOutput", ts, max_stale_minutes=60)
+    power_kw = _charging_power_kw(metrics, ts)
+
+    has_power_flow = False
+    try:
+        has_power_flow = power_kw is not None and float(power_kw) > 0.5
+    except (TypeError, ValueError):
+        has_power_flow = False
+
+    has_current_flow = False
+    try:
+        has_current_flow = (
+            charger_voltage is not None and float(charger_voltage) > 20
+            and charger_current is not None and float(charger_current) > 0.5
+        )
+    except (TypeError, ValueError):
+        has_current_flow = False
+
+    has_dc_flow = False
+    try:
+        has_dc_flow = dc_current is not None and float(dc_current) > 0.5
+    except (TypeError, ValueError):
+        has_dc_flow = False
+
+    if has_power_flow or has_current_flow or has_dc_flow:
+        return False
+
+    idle_tokens = (
+        "standby", "not_detected", "station_ready", "ready", "waiting", "scheduled",
+        "charge_scheduling", "not_ready", "complete", "completed", "stopped", "stop",
+        "paused", "pause",
+    )
+    explicitly_idle = any(token in communication_status for token in idle_tokens) or any(
+        token in charge_display for token in idle_tokens
+    )
+
+    voltage_zero = True
+    try:
+        # Ford can report small non-zero noise (e.g., 1-2V) while effectively idle.
+        voltage_zero = charger_voltage is None or float(charger_voltage) <= 5.0
+    except (TypeError, ValueError):
+        voltage_zero = True
+
+    current_zero = True
+    try:
+        current_zero = charger_current is None or float(charger_current) <= 0.5
+    except (TypeError, ValueError):
+        current_zero = True
+
+    dc_current_zero = True
+    try:
+        dc_current_zero = dc_current is None or float(dc_current) <= 0.5
+    except (TypeError, ValueError):
+        dc_current_zero = True
+
+    if plug_status in _PLUG_IDLE:
+        return True
+
+    standby_waiting = ("standby" in charge_display) or ("standby" in communication_status)
+    if standby_waiting and voltage_zero:
+        return True
+
+    return explicitly_idle and voltage_zero and current_zero and dc_current_zero
+
+
+def _reconcile_open_charging_session(vin: str, ts: datetime, metrics: dict) -> None:
+    """Close stale charging sessions based on the latest polled charging metrics."""
+    if _should_close_charging_session(metrics, ts):
+        _charging_session_by_vin.pop(vin, None)
+        _close_open_charging_session(vin, ts)
+
+
 def _charging_history_supports_session_uuid() -> bool:
     """Return True when charging_history has charging_session_uuid column."""
     global _charging_history_has_session_uuid
@@ -1844,8 +1926,9 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
 
     active_tokens = ("charging", "active", "in_progress", "powering")
     idle_tokens = (
-        "not_detected", "station_ready", "ready", "waiting", "scheduled",
+        "standby", "not_detected", "station_ready", "ready", "waiting", "scheduled",
         "charge_scheduling", "not_ready", "complete", "completed", "stopped", "stop",
+        "paused", "pause",
     )
     explicitly_idle = any(token in communication_status for token in idle_tokens) or any(token in charge_display for token in idle_tokens)
     explicitly_active = any(token in communication_status for token in active_tokens) or any(token in charge_display for token in active_tokens)

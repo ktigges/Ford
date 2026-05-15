@@ -155,30 +155,6 @@ def get_log_level() -> str:
 
 
 def create_app():
-    app = Flask(__name__)
-    config.load()
-    secret_key = (os.environ.get("LIGHTNING_SECRET_KEY") or "").strip()
-    if not secret_key:
-        # Stable fallback key for local/dev bootstrap when env var is not set.
-        secret_key = "lightning-dev-bootstrap-secret-change-me"
-    app.config["SECRET_KEY"] = secret_key
-    app.secret_key = secret_key
-
-    @app.route("/poller/poll_now", methods=["POST"])
-    def poller_poll_now():
-        # Use the first VIN in the garage as default
-        vin_row = db.fetch_one("SELECT vin FROM garage ORDER BY vin LIMIT 1")
-        vin = vin_row["vin"] if vin_row and "vin" in vin_row else None
-        provider = config.ford_provider() if hasattr(config, "ford_provider") else "ford"
-        if not vin:
-            flash("No VIN found in garage.", "error")
-            return redirect(url_for("poller_status"))
-        try:
-            poller.poll_once(provider, vin)
-            flash("Poll triggered successfully.", "success")
-        except Exception as exc:
-            flash(f"Poll failed: {exc}", "error")
-        return redirect(url_for("poller_status"))
     """Flask application factory."""
     app = Flask(__name__)
     config.load()
@@ -3869,6 +3845,21 @@ def create_app():
             running=poller.is_running(),
             conservative=poller.conservative_mode(),
         )
+
+    @app.route("/poller/poll_now", methods=["POST"])
+    def poller_poll_now():
+        """Trigger a single poll cycle immediately from the UI."""
+        vin = _active_vin()
+        provider = config.ford_provider() if hasattr(config, "ford_provider") else "ford"
+        if not vin:
+            flash("No VIN found in garage.", "error")
+            return redirect(url_for("poller_control"))
+        try:
+            poller.poll_once(provider, vin)
+            flash("Poll triggered successfully.", "success")
+        except Exception as exc:
+            flash(f"Poll failed: {exc}", "error")
+        return redirect(url_for("poller_control"))
 
     @app.route("/reset", methods=["GET", "POST"])
     def reset():
