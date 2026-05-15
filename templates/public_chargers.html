@@ -95,7 +95,13 @@
                 <div><strong>Access Detail:</strong> {{ row.access_detail or 'N/A' }}</div>
                 <div><strong>Owner Type:</strong> {{ row.owner_type_code or 'N/A' }}</div>
                 <div><strong>Facility Type:</strong> {{ row.facility_type or 'N/A' }}</div>
-                <div><strong>Coordinates:</strong> {{ '%.6f'|format(row.latitude) }}, {{ '%.6f'|format(row.longitude) }}</div>
+                <div><strong>Coordinates:</strong>
+                  {% if row.latitude is not none and row.longitude is not none %}
+                  {{ '%.6f'|format(row.latitude) }}, {{ '%.6f'|format(row.longitude) }}
+                  {% else %}
+                  N/A
+                  {% endif %}
+                </div>
                 <div><strong>Updated:</strong> {{ row.updated_at }}</div>
               </div>
             </details>

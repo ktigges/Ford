@@ -4947,8 +4947,37 @@ def create_app():
                 "source": src.get("source"),
             })
 
-        # For filtered_stations, show merged list (for table)
-        filtered_stations = merged
+        # For filtered_stations, flatten merged source rows to a template-safe shape.
+        # OCM-only rows do not always include every NREL-style key.
+        def _flatten_merged_station(entry: dict[str, object]) -> dict[str, object]:
+            nrel_row = entry.get("nrel") if isinstance(entry.get("nrel"), dict) else {}
+            ocm_row = entry.get("ocm") if isinstance(entry.get("ocm"), dict) else {}
+            src = nrel_row or ocm_row or {}
+            return {
+                "station_name": src.get("station_name"),
+                "street_address": src.get("street_address"),
+                "city": src.get("city"),
+                "state": src.get("state"),
+                "zip": src.get("zip"),
+                "network_name": src.get("network_name"),
+                "distance_miles": src.get("distance_miles"),
+                "max_power_kw": src.get("max_power_kw", 0),
+                "connector_types": src.get("connector_types", ""),
+                "charging_levels": src.get("charging_levels", ""),
+                "connector_count": src.get("connector_count", 0),
+                "nlr_station_id": src.get("nrel_id") or src.get("nlr_station_id"),
+                "status_code": src.get("status_code"),
+                "fuel_type_code": src.get("fuel_type_code"),
+                "access_code": src.get("access_code"),
+                "access_detail": src.get("access_detail"),
+                "owner_type_code": src.get("owner_type_code"),
+                "facility_type": src.get("facility_type"),
+                "latitude": src.get("latitude"),
+                "longitude": src.get("longitude"),
+                "updated_at": src.get("updated_at"),
+            }
+
+        filtered_stations = [_flatten_merged_station(entry) for entry in merged]
 
         sync_status = nlr_chargers.get_sync_status()
         recent_runs = []
