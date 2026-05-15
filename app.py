@@ -3109,10 +3109,18 @@ def create_app():
 
                 started_at = row.get("started_at")
                 ended_at = row.get("ended_at")
+                in_progress = bool(row.get("in_progress"))
                 duration_min = None
                 if started_at and ended_at:
                     try:
                         duration_min = max(0.0, (ended_at - started_at).total_seconds() / 60.0)
+                    except Exception:
+                        duration_min = None
+                elif started_at and in_progress:
+                    try:
+                        now_ts = datetime.now(timezone.utc)
+                        start_ts = started_at if started_at.tzinfo else started_at.replace(tzinfo=timezone.utc)
+                        duration_min = max(0.0, (now_ts - start_ts).total_seconds() / 60.0)
                     except Exception:
                         duration_min = None
 
@@ -3124,7 +3132,7 @@ def create_app():
                         "selected": bool(session_uuid and session_uuid == selected_session_uuid),
                         "started_at": started_at,
                         "ended_at": ended_at,
-                        "in_progress": bool(row.get("in_progress")),
+                        "in_progress": in_progress,
                         "duration_min": duration_min,
                         "start_soc": start_soc,
                         "end_soc": end_soc,
