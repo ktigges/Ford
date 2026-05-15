@@ -1642,14 +1642,7 @@ def create_app():
 
     def _charging_sample_meaningful(row: dict) -> bool:
         """Return True when a history row likely represents a real charging sample."""
-        comm = (row.get("communication_status") or "").strip().lower()
-        active_tokens = ("charging", "active", "in_progress", "powering")
-        idle_tokens = (
-            "not_detected", "station_ready", "ready", "waiting", "scheduled",
-            "complete", "completed", "stopped", "stop",
-        )
-
-        # Prefer physical electrical flow over status tokens.
+        # Only consider a row meaningful if there is real electrical flow.
         try:
             if row.get("charge_power_kw") is not None and float(row.get("charge_power_kw")) > 0.5:
                 return True
@@ -1668,21 +1661,8 @@ def create_app():
                 return True
         except (TypeError, ValueError):
             pass
-
-        if any(token in comm for token in active_tokens):
-            return True
-        if any(token in comm for token in idle_tokens):
-            return False
-
-        if not _plug_status_idle(row.get("plug_status")):
-            return True
-        power_raw = row.get("charge_power_kw")
-        if power_raw is None:
-            return False
-        try:
-            return float(power_raw) > 0.1
-        except (TypeError, ValueError):
-            return False
+        # Otherwise, not meaningful (ignore status tokens alone)
+        return False
 
     def _latest_charging_session(rows_desc: list[dict], max_gap_minutes: int = 45) -> list[dict]:
         """Return the most recent contiguous charging session from DESC history rows."""
