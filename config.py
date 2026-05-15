@@ -34,8 +34,46 @@ def get_config() -> dict:
 # ── Convenience accessors ──────────────────────────────────────────
 
 def database() -> dict:
-    """Return database connection settings."""
-    return get_config()["database"]
+    """Return database connection settings with environment overrides.
+
+    Supported overrides:
+      - LIGHTNING_DB_HOST
+      - LIGHTNING_DB_PORT
+      - LIGHTNING_DB_NAME
+      - LIGHTNING_DB_USER
+      - LIGHTNING_DB_PASSWORD
+      - LIGHTNING_DB_CONNECT_TIMEOUT
+    """
+    db_cfg = dict(get_config().get("database", {}))
+
+    env_overrides = {
+        "host": (os.environ.get("LIGHTNING_DB_HOST") or "").strip(),
+        "port": (os.environ.get("LIGHTNING_DB_PORT") or "").strip(),
+        "name": (os.environ.get("LIGHTNING_DB_NAME") or "").strip(),
+        "user": (os.environ.get("LIGHTNING_DB_USER") or "").strip(),
+        "password": (os.environ.get("LIGHTNING_DB_PASSWORD") or "").strip(),
+        "connect_timeout": (os.environ.get("LIGHTNING_DB_CONNECT_TIMEOUT") or "").strip(),
+    }
+
+    for key, value in env_overrides.items():
+        if value:
+            db_cfg[key] = value
+
+    if not (db_cfg.get("user") or "").strip():
+        raise RuntimeError(
+            "Database username is required. Set LIGHTNING_DB_USER or database.user in config.json."
+        )
+    if not (db_cfg.get("password") or "").strip():
+        raise RuntimeError(
+            "Database password is required. Set LIGHTNING_DB_PASSWORD or database.password in config.json."
+        )
+
+    if "port" in db_cfg:
+        db_cfg["port"] = int(db_cfg["port"])
+    if "connect_timeout" in db_cfg:
+        db_cfg["connect_timeout"] = int(db_cfg["connect_timeout"])
+
+    return db_cfg
 
 
 def environment() -> str:
