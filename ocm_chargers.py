@@ -90,6 +90,56 @@ def fetch_ocm_chargers(
 def normalize_ocm_station(ocm_station: Dict[str, Any]) -> Dict[str, Any]:
     """Convert OCM station to NREL-like normalized dict for merging."""
     addr = ocm_station.get("AddressInfo", {})
+    operator_name = ocm_station.get("OperatorInfo", {}).get("Title")
+
+    ev_units: list[dict[str, Any]] = []
+    for conn in ocm_station.get("Connections") or []:
+        connector_label = (
+            conn.get("ConnectionType", {}).get("Title")
+            or conn.get("ConnectionTypeID")
+            or "UNKNOWN"
+        )
+        connector_key = str(connector_label).upper().replace(" ", "_")
+
+        quantity_raw = conn.get("Quantity")
+        try:
+            quantity = int(quantity_raw) if quantity_raw is not None else 1
+        except (TypeError, ValueError):
+            quantity = 1
+        quantity = max(1, quantity)
+
+        power_kw_raw = conn.get("PowerKW")
+        try:
+            power_kw = float(power_kw_raw) if power_kw_raw is not None else None
+        except (TypeError, ValueError):
+            power_kw = None
+
+        level = ""
+        level_info = conn.get("Level") or {}
+        if level_info.get("IsFastChargeCapable"):
+            level = "dc_fast"
+        else:
+            level_id = conn.get("LevelID")
+            if level_id == 1:
+                level = "level_1"
+            elif level_id == 2:
+                level = "level_2"
+            elif level_id == 3:
+                level = "dc_fast"
+
+        ev_units.append(
+            {
+                "network": operator_name,
+                "charging_level": level,
+                "connectors": {
+                    connector_key: {
+                        "port_count": quantity,
+                        "power_kw": power_kw,
+                    }
+                },
+            }
+        )
+
     return {
         "source": "OCM",
         "ocm_id": ocm_station.get("ID"),
@@ -102,8 +152,9 @@ def normalize_ocm_station(ocm_station: Dict[str, Any]) -> Dict[str, Any]:
         "latitude": addr.get("Latitude"),
         "longitude": addr.get("Longitude"),
         "status_code": ocm_station.get("StatusType", {}).get("IsOperational", None),
-        "network_name": ocm_station.get("OperatorInfo", {}).get("Title"),
+        "network_name": operator_name,
         "updated_at": ocm_station.get("DateLastStatusUpdate"),
+        "ev_charging_units": ev_units,
         "raw_data": ocm_station,
     }
 

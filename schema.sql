@@ -515,6 +515,7 @@ CREATE INDEX idx_charging_sessions_open ON charging_sessions (vin) WHERE in_prog
 CREATE TABLE ev_stations (
     id BIGSERIAL PRIMARY KEY,
     source TEXT NOT NULL DEFAULT 'NREL',
+    source_authority TEXT NOT NULL DEFAULT 'NREL',
     nlr_station_id BIGINT UNIQUE,
     ocm_station_id BIGINT,
     
@@ -552,7 +553,9 @@ CREATE TABLE ev_stations (
 CREATE TABLE ev_charger_connectors (
     id BIGSERIAL PRIMARY KEY,
     station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
-    nlr_station_id BIGINT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'NREL',
+    nlr_station_id BIGINT,
+    ocm_station_id BIGINT,
     
     -- Connector type (J1772, CHADEMO, J1772COMBO, etc.)
     connector_type TEXT NOT NULL,
@@ -602,6 +605,7 @@ CREATE INDEX idx_ev_stations_location ON ev_stations USING GIST (
 );
 CREATE INDEX idx_ev_connectors_network ON ev_charger_connectors (network);
 CREATE INDEX idx_ev_connectors_charging_level ON ev_charger_connectors (charging_level);
+CREATE INDEX idx_ev_connectors_ocm_station_id ON ev_charger_connectors (ocm_station_id);
 CREATE INDEX idx_ev_sync_runs_status ON ev_sync_runs (status);
 CREATE INDEX idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC);
 CREATE INDEX idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC);

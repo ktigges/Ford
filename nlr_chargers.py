@@ -102,6 +102,7 @@ def _ensure_charger_tables() -> None:
         CREATE TABLE IF NOT EXISTS ev_stations (
             id BIGSERIAL PRIMARY KEY,
             source TEXT NOT NULL DEFAULT 'NREL',
+            source_authority TEXT NOT NULL DEFAULT 'NREL',
             nlr_station_id BIGINT UNIQUE,
             ocm_station_id BIGINT,
             station_name TEXT NOT NULL,
@@ -132,7 +133,9 @@ def _ensure_charger_tables() -> None:
         CREATE TABLE IF NOT EXISTS ev_charger_connectors (
             id BIGSERIAL PRIMARY KEY,
             station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
-            nlr_station_id BIGINT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'NREL',
+            nlr_station_id BIGINT,
+            ocm_station_id BIGINT,
             connector_type TEXT NOT NULL,
             network TEXT,
             charging_level TEXT,
@@ -171,9 +174,25 @@ def _ensure_charger_tables() -> None:
 
     # Backward-compatible migration for existing deployments.
     db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+    db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source_authority TEXT NOT NULL DEFAULT 'NREL'")
     db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
     db.execute("ALTER TABLE ev_stations ALTER COLUMN nlr_station_id DROP NOT NULL")
     db.execute("UPDATE ev_stations SET source = 'NREL' WHERE source IS NULL OR source = ''")
+    db.execute(
+        """
+        UPDATE ev_stations
+        SET source_authority = CASE
+            WHEN nlr_station_id IS NOT NULL AND ocm_station_id IS NOT NULL THEN 'BOTH'
+            WHEN ocm_station_id IS NOT NULL THEN 'OCM'
+            ELSE 'NREL'
+        END
+        WHERE source_authority IS NULL OR source_authority = ''
+        """
+    )
+
+    db.execute("ALTER TABLE ev_charger_connectors ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+    db.execute("ALTER TABLE ev_charger_connectors ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
+    db.execute("ALTER TABLE ev_charger_connectors ALTER COLUMN nlr_station_id DROP NOT NULL")
 
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
@@ -182,6 +201,7 @@ def _ensure_charger_tables() -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_ocm_station_id ON ev_charger_connectors (ocm_station_id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
@@ -405,19 +425,103 @@ def _upsert_ev_station(station: Dict[str, Any], source: str = "NREL") -> Optiona
             log.warning("OCM station missing id field: %s", station_name)
             return None
 
+        source_authority = "NREL" if src == "NREL" else "OCM"
+
         conflict_field = "nlr_station_id" if src == "NREL" else "ocm_station_id"
+
+        # Opportunistic cross-source linking: if a nearby station from the opposite
+        # source exists without this source ID, reuse that row and mark SOA as BOTH.
+        opposite_field = "ocm_station_id" if src == "NREL" else "nlr_station_id"
+        incoming_id = nlr_station_id if src == "NREL" else ocm_station_id
+        nearby = db.fetch_one(
+            f"""
+            SELECT id, nlr_station_id, ocm_station_id
+            FROM ev_stations
+            WHERE {opposite_field} IS NOT NULL
+              AND {conflict_field} IS NULL
+              AND state = %s
+              AND COALESCE(city, '') = COALESCE(%s, '')
+              AND ABS(latitude - %s) <= 0.0015
+              AND ABS(longitude - %s) <= 0.0015
+            ORDER BY ABS(latitude - %s) + ABS(longitude - %s) ASC
+            LIMIT 1
+            """,
+            (state, city, lat, lon, lat, lon),
+        )
+        if nearby:
+            db.execute(
+                f"""
+                UPDATE ev_stations
+                SET {conflict_field} = %s,
+                    source = 'BOTH',
+                    source_authority = 'BOTH',
+                    station_name = %s,
+                    street_address = %s,
+                    city = %s,
+                    state = %s,
+                    zip = %s,
+                    latitude = %s,
+                    longitude = %s,
+                    country = %s,
+                    status_code = %s,
+                    fuel_type_code = %s,
+                    access_code = %s,
+                    access_detail = %s,
+                    owner_type_code = %s,
+                    facility_type = %s,
+                    network_name = COALESCE(%s, network_name),
+                    updated_at = now(),
+                    nlr_updated_at = COALESCE(%s, nlr_updated_at),
+                    raw_data = %s
+                WHERE id = %s
+                """,
+                (
+                    incoming_id,
+                    station_name,
+                    street_address,
+                    city,
+                    state,
+                    zip_code,
+                    lat,
+                    lon,
+                    country,
+                    status_code,
+                    fuel_type_code,
+                    access_code,
+                    access_detail,
+                    owner_type_code,
+                    facility_type,
+                    network_name,
+                    source_updated_at,
+                    raw_data,
+                    nearby["id"],
+                ),
+            )
+            return nearby["id"]
+
         row = db.execute_returning(
             f"""
             INSERT INTO ev_stations (
-                source, nlr_station_id, ocm_station_id,
+                source, source_authority, nlr_station_id, ocm_station_id,
                 station_name, street_address, city, state, zip,
                 latitude, longitude, country, status_code, fuel_type_code,
                 access_code, access_detail, owner_type_code, facility_type,
                 network_name, updated_at, nlr_updated_at, raw_data
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s, %s)
             ON CONFLICT ({conflict_field}) DO UPDATE SET
-                source = EXCLUDED.source,
+                source = CASE
+                    WHEN ev_stations.source <> EXCLUDED.source THEN 'BOTH'
+                    ELSE EXCLUDED.source
+                END,
+                source_authority = CASE
+                    WHEN COALESCE(ev_stations.nlr_station_id, EXCLUDED.nlr_station_id) IS NOT NULL
+                     AND COALESCE(ev_stations.ocm_station_id, EXCLUDED.ocm_station_id) IS NOT NULL THEN 'BOTH'
+                    WHEN COALESCE(ev_stations.ocm_station_id, EXCLUDED.ocm_station_id) IS NOT NULL THEN 'OCM'
+                    ELSE 'NREL'
+                END,
+                nlr_station_id = COALESCE(ev_stations.nlr_station_id, EXCLUDED.nlr_station_id),
+                ocm_station_id = COALESCE(ev_stations.ocm_station_id, EXCLUDED.ocm_station_id),
                 station_name = EXCLUDED.station_name,
                 street_address = EXCLUDED.street_address,
                 city = EXCLUDED.city,
@@ -440,6 +544,7 @@ def _upsert_ev_station(station: Dict[str, Any], source: str = "NREL") -> Optiona
             """,
             (
                 src,
+                source_authority,
                 nlr_station_id,
                 ocm_station_id,
                 station_name,
@@ -461,17 +566,37 @@ def _upsert_ev_station(station: Dict[str, Any], source: str = "NREL") -> Optiona
                 raw_data,
             ),
         )
-        return row["id"] if row else None
+        if not row:
+            return None
+        db.execute(
+            """
+            UPDATE ev_stations
+            SET source_authority = CASE
+                WHEN nlr_station_id IS NOT NULL AND ocm_station_id IS NOT NULL THEN 'BOTH'
+                WHEN ocm_station_id IS NOT NULL THEN 'OCM'
+                ELSE 'NREL'
+            END
+            WHERE id = %s
+            """,
+            (row["id"],),
+        )
+        return row["id"]
     except Exception as e:
         log.error("Failed to upsert %s EV station: %s", source, e)
         return None
 
 
-def _upsert_ev_connector(station_db_id: int, charging_unit: Dict[str, Any], 
-                         station_nlr_id: int) -> bool:
+def _upsert_ev_connector(
+    station_db_id: int,
+    charging_unit: Dict[str, Any],
+    station_nlr_id: Optional[int] = None,
+    station_ocm_id: Optional[int] = None,
+    source: str = "NREL",
+) -> bool:
     """Upsert connector inventory for a station. Returns success status."""
     try:
         connectors = charging_unit.get("connectors", {})
+        src = (source or "NREL").upper()
         network = charging_unit.get("network", "Unknown")
         charging_level = charging_unit.get("charging_level", "")
 
@@ -486,17 +611,21 @@ def _upsert_ev_connector(station_db_id: int, charging_unit: Dict[str, Any],
                 db.execute(
                     """
                     INSERT INTO ev_charger_connectors (
-                        station_id, nlr_station_id, connector_type, network,
+                        station_id, source, nlr_station_id, ocm_station_id, connector_type, network,
                         charging_level, power_kw, port_count, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                     ON CONFLICT (station_id, connector_type, network) DO UPDATE SET
+                        source = EXCLUDED.source,
+                        nlr_station_id = COALESCE(EXCLUDED.nlr_station_id, ev_charger_connectors.nlr_station_id),
+                        ocm_station_id = COALESCE(EXCLUDED.ocm_station_id, ev_charger_connectors.ocm_station_id),
                         charging_level = EXCLUDED.charging_level,
                         power_kw = EXCLUDED.power_kw,
                         port_count = EXCLUDED.port_count,
                         updated_at = now()
                     """,
-                    (station_db_id, station_nlr_id, connector_type, network, 
+                    (
+                     station_db_id, src, station_nlr_id, station_ocm_id, connector_type, network,
                      charging_level, power_kw, port_count),
                 )
         return True
@@ -584,7 +713,12 @@ def import_ev_stations(state: Optional[str] = None, limit_pages: Optional[int] =
 
                     # Upsert connectors
                     for charging_unit in station.get("ev_charging_units", []):
-                        _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
+                        _upsert_ev_connector(
+                            station_db_id,
+                            charging_unit,
+                            station_nlr_id=station.get("id"),
+                            source="NREL",
+                        )
 
                 page += 1
 
@@ -742,7 +876,12 @@ def import_ev_stations_with_strategy(
                     )
 
                 for charging_unit in station.get("ev_charging_units", []):
-                    _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
+                    _upsert_ev_connector(
+                        station_db_id,
+                        charging_unit,
+                        station_nlr_id=station.get("id"),
+                        source="NREL",
+                    )
             page = 1
         else:
             # NREL/NLR endpoint currently ignores offset for this resource,
@@ -825,7 +964,12 @@ def import_ev_stations_with_strategy(
                             )
 
                         for charging_unit in station.get("ev_charging_units", []):
-                            _upsert_ev_connector(station_db_id, charging_unit, station.get("id"))
+                            _upsert_ev_connector(
+                                station_db_id,
+                                charging_unit,
+                                station_nlr_id=station.get("id"),
+                                source="NREL",
+                            )
                     elapsed_s = int((datetime.now(timezone.utc) - chunk_started).total_seconds())
                     log.info(
                         "State step %d/%d done (state=%s, processed_total=%d, errors=%d, elapsed_s=%d)",
@@ -876,6 +1020,14 @@ def import_ev_stations_with_strategy(
                         if not station_db_id:
                             error_count += 1
                             continue
+
+                        for charging_unit in station.get("ev_charging_units", []):
+                            _upsert_ev_connector(
+                                station_db_id,
+                                charging_unit,
+                                station_ocm_id=station.get("ocm_id"),
+                                source="OCM",
+                            )
 
                         updated_count += 1
                         processed_count += 1

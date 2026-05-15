@@ -65,6 +65,7 @@
           <th>Station</th>
           <th>Location</th>
           <th>Network</th>
+          <th>SOA</th>
           <th>Distance (mi)</th>
           <th>Max kW</th>
           <th>Connector Types</th>
@@ -79,6 +80,7 @@
           <td>{{ row.station_name }}</td>
           <td>{{ row.street_address }}<br>{{ row.city }}, {{ row.state }} {{ row.zip }}</td>
           <td>{{ row.network_name }}</td>
+          <td>{{ row.source_authority or row.source or 'UNKNOWN' }}</td>
           <td>{% if row.distance_miles is not none %}{{ '%.1f'|format(row.distance_miles) }}{% else %}--{% endif %}</td>
           <td>{{ '%.1f'|format(row.max_power_kw) if row.max_power_kw is not none else '0.0' }}</td>
           <td>{{ row.connector_types or 'UNKNOWN' }}</td>
