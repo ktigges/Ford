@@ -14,7 +14,7 @@ The ultimate goal of this project is to train an AI model for **user-specific dr
 
 ---
 
-## ⚠️ Legal & Disclaimer
+## Legal & Disclaimer
 
 ### Third-Party API Notice
 This application uses the **Ford Connected Vehicle API**, which is a third-party service operated by Ford Motor Company. This application is **not affiliated with, endorsed by, or supported by Ford**.
