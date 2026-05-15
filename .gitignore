@@ -20,3 +20,4 @@ certs/
 # Local runtime configuration (contains secrets)
 config.json
 .flask_session/
+.env

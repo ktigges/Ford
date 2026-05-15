@@ -200,8 +200,10 @@ def create_app():
     config.load()
     secret_key = (os.environ.get("LIGHTNING_SECRET_KEY") or "").strip()
     if not secret_key:
-        # Stable fallback key for local/dev bootstrap when env var is not set.
-        secret_key = "lightning-dev-bootstrap-secret-change-me"
+        raise RuntimeError(
+            "LIGHTNING_SECRET_KEY environment variable must be set. "
+            "Generate a secure key: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+        )
     app.config["SECRET_KEY"] = secret_key
     app.secret_key = secret_key
 

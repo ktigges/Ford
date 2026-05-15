@@ -26,8 +26,9 @@ log = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────
 
-# API keys - load from config or environment
-OPENWEATHER_API_KEY = "demo"  # TODO: Set from environment or config.json
+# API keys - load from environment
+# OPENWEATHER_API_KEY: Optional, falls back to limited demo mode if not set
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") or "demo"
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 OPENROUTESERVICE_API_KEY = os.getenv("OPENROUTESERVICE_API_KEY")
 
