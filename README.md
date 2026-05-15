@@ -14,7 +14,43 @@ The ultimate goal of this project is to train an AI model for **user-specific dr
 
 ---
 
-## Architecture Overview
+## ⚠️ Legal & Disclaimer
+
+### Third-Party API Notice
+This application uses the **Ford Connected Vehicle API**, which is a third-party service operated by Ford Motor Company. This application is **not affiliated with, endorsed by, or supported by Ford**.
+
+### API Limitations & Changes
+The developer **is not responsible** for:
+- Ford API rate limits, throttling, or temporary/permanent access restrictions
+- Changes to Ford API endpoints, data structures, or functionality
+- Ford discontinuing or modifying the API
+- API downtime or service interruptions
+- Your vehicle's connectivity or data availability
+
+**The Ford API is subject to change at any time and may be restricted, modified, or discontinued without notice.** If Ford changes or restricts API access, this application will stop working.
+
+### No Warranty
+This software is provided **"as-is"** without any warranty, express or implied. The developer assumes no liability for:
+- Loss of data
+- Inaccurate vehicle state information
+- Failed trip planning or charging predictions
+- Any consequences of using this application
+
+### Your Responsibility
+You are solely responsible for:
+- Your Ford API credentials and account security
+- Complying with Ford's Terms of Service
+- Your own vehicle's safety and charging decisions
+- Verifying trip plans and vehicle state through official Ford apps
+- Understanding data usage and privacy implications
+
+### Recommendation
+**Do not rely solely on this application for critical vehicle functions.** Always verify vehicle state, charging status, and trip feasibility using the **official Ford Connected app** before making decisions that affect your vehicle's safety or range.
+
+### Trademarks
+Ford, F-150 Lightning, and all related Ford trademarks are property of Ford Motor Company. This is an independent project.
+
+---
 
 ```
 ┌─────────────────────────────────────────────────────────┐

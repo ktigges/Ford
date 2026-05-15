@@ -1,13 +1,53 @@
-"""Main Flask application for the Ford Lightning telemetry dashboard.
+"""Lightning - Ford EV Telemetry & Trip Planning Application
+Version 0.7
 
-This file contains the primary app factory, route registration, scheduler
-coordination, background jobs, settings persistence, and dashboard/API glue.
+Main Flask application for vehicle telemetry, trip planning, and energy analysis.
+Contains app factory, route registration, scheduler coordination, background jobs,
+and settings persistence.
+
+DISCLAIMER & LEGAL NOTICES:
+===========================
+
+1. THIRD-PARTY API USAGE
+   This application uses the Ford Connected Vehicle API to access vehicle data.
+   This is an UNOFFICIAL application not endorsed by, affiliated with, or 
+   supported by Ford Motor Company.
+
+2. NO LIABILITY FOR API RESTRICTIONS
+   The developer is NOT responsible for:
+   - Ford API rate limits, throttling, or access revocation
+   - Changes to Ford API functionality or endpoints
+   - Data availability, accuracy, or format changes
+   - Service interruptions or downtime
+   - Your vehicle's connection to Ford servers
+   
+   Use of this application is at your own risk. The Ford API is subject to
+   Ford's Terms of Service and may change or be discontinued at any time.
+
+3. NO WARRANTY
+   This software is provided "as-is" without warranty of any kind, express
+   or implied, including warranties of fitness for a particular purpose.
+
+4. USER RESPONSIBILITY
+   You are solely responsible for:
+   - Obtaining proper credentials to use the Ford API
+   - Complying with Ford's Terms of Service and API usage policies
+   - Monitoring your own vehicle's telemetry and state
+   - Your vehicle's charging schedule and route planning decisions
+   
+5. NO AFFILIATION WITH FORD
+   Ford, F-150 Lightning, and related trademarks are property of Ford Motor
+   Company. This application is not an official Ford product.
+
+6. DATA PRIVACY
+   This application may collect and store vehicle telemetry data. Ensure you
+   understand what data is being collected and stored locally.
+
+For complete terms, see README.md
 
 Author: Kevin Tigges
 Copyright (c) 2026 Kevin Tigges
 License: Open source prototype software
-Notice: Use at your own risk.
-Version: 0.8.6
 """
 
 import logging
@@ -2728,6 +2768,15 @@ def create_app():
             "settings_backup_page.html",
             settings=current,
             backup_logs=backup_logs,
+        )
+
+    @app.route("/settings/about", methods=["GET"])
+    def settings_about_page():
+        """About page with app info and disclaimers."""
+        return render_template(
+            "settings_about_page.html",
+            app_version="0.7",
+            app_purpose="Ford Lightning EV Telemetry, Trip Planning & Energy Analysis",
         )
 
     # Status page
