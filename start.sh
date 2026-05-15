@@ -63,6 +63,24 @@ if [[ "${SKIP_ENV_CHECK}" != "true" ]]; then
         echo ""
         exit 1
     fi
+
+    if [[ -z "${LIGHTNING_DB_USER:-}" ]]; then
+        echo ""
+        echo "❌ ERROR: LIGHTNING_DB_USER environment variable is not set"
+        echo ""
+        echo "Run ./setup-env.sh to create and populate .env, then try again."
+        echo ""
+        exit 1
+    fi
+
+    if [[ -z "${LIGHTNING_DB_PASSWORD:-}" ]]; then
+        echo ""
+        echo "❌ ERROR: LIGHTNING_DB_PASSWORD environment variable is not set"
+        echo ""
+        echo "Run ./setup-env.sh to create and populate .env, then try again."
+        echo ""
+        exit 1
+    fi
 fi
 
 mkdir -p "${ROOT_DIR}/logs"

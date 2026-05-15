@@ -5,8 +5,8 @@
     "host": "localhost",
     "port": 5432,
     "name": "lightning",
-    "user": "lightning",
-    "password": "CHANGE_ME"
+    "user": "CHANGE_ME_DB_USER",
+    "password": "CHANGE_ME_DB_PASSWORD"
   },
   "logging": {
     "level": "INFO",

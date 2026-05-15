@@ -37,9 +37,31 @@ SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
 echo "Generated: ${SECRET_KEY}"
 echo ""
 
+read -p "Enter database username: " -r DB_USER
+while [[ -z "${DB_USER}" ]]; do
+    echo "Database username cannot be empty."
+    read -p "Enter database username: " -r DB_USER
+done
+
+read -s -p "Enter database password: " DB_PASSWORD
+echo ""
+while [[ -z "${DB_PASSWORD}" ]]; do
+    echo "Database password cannot be empty."
+    read -s -p "Enter database password: " DB_PASSWORD
+    echo ""
+done
+
 # Update .env with the generated secret
-sed -i "s|your-secure-secret-key-here|${SECRET_KEY}|" "${ENV_FILE}"
+SECRET_KEY_ESCAPED=$(printf '%s' "${SECRET_KEY}" | sed 's/[&|]/\\&/g')
+DB_USER_ESCAPED=$(printf '%s' "${DB_USER}" | sed 's/[&|]/\\&/g')
+DB_PASSWORD_ESCAPED=$(printf '%s' "${DB_PASSWORD}" | sed 's/[&|]/\\&/g')
+
+sed -i "s|your-secure-secret-key-here|${SECRET_KEY_ESCAPED}|" "${ENV_FILE}"
+sed -i "s|your-db-username|${DB_USER_ESCAPED}|" "${ENV_FILE}"
+sed -i "s|your-db-password|${DB_PASSWORD_ESCAPED}|" "${ENV_FILE}"
 echo "✓ LIGHTNING_SECRET_KEY set in .env"
+echo "✓ LIGHTNING_DB_USER set in .env"
+echo "✓ LIGHTNING_DB_PASSWORD set in .env"
 echo ""
 
 # Show file location
@@ -49,6 +71,7 @@ echo "✓ Environment file created at: ${ENV_FILE}"
 echo ""
 echo "Next steps:"
 echo "1. Review .env and configure any additional API keys as needed:"
+echo "   - LIGHTNING_DB_USER and LIGHTNING_DB_PASSWORD are required and already set"
 echo "   - OPENWEATHER_API_KEY (optional, falls back to 'demo' mode)"
 echo "   - GOOGLE_MAPS_API_KEY (optional, only if using Google routing)"
 echo "   - OPENROUTESERVICE_API_KEY (optional, only if using ORS routing)"
