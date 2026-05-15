@@ -1,11 +1,9 @@
-"""Configuration loader for the Lightning application.
+"""Ford Lightning source file.
 
-Reads config.json once and exposes typed accessors for each section.
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import json
@@ -36,8 +34,46 @@ def get_config() -> dict:
 # ── Convenience accessors ──────────────────────────────────────────
 
 def database() -> dict:
-    """Return database connection settings."""
-    return get_config()["database"]
+    """Return database connection settings with environment overrides.
+
+    Supported overrides:
+      - LIGHTNING_DB_HOST
+      - LIGHTNING_DB_PORT
+      - LIGHTNING_DB_NAME
+      - LIGHTNING_DB_USER
+      - LIGHTNING_DB_PASSWORD
+      - LIGHTNING_DB_CONNECT_TIMEOUT
+    """
+    db_cfg = dict(get_config().get("database", {}))
+
+    env_overrides = {
+        "host": (os.environ.get("LIGHTNING_DB_HOST") or "").strip(),
+        "port": (os.environ.get("LIGHTNING_DB_PORT") or "").strip(),
+        "name": (os.environ.get("LIGHTNING_DB_NAME") or "").strip(),
+        "user": (os.environ.get("LIGHTNING_DB_USER") or "").strip(),
+        "password": (os.environ.get("LIGHTNING_DB_PASSWORD") or "").strip(),
+        "connect_timeout": (os.environ.get("LIGHTNING_DB_CONNECT_TIMEOUT") or "").strip(),
+    }
+
+    for key, value in env_overrides.items():
+        if value:
+            db_cfg[key] = value
+
+    if not (db_cfg.get("user") or "").strip():
+        raise RuntimeError(
+            "Database username is required. Set LIGHTNING_DB_USER or database.user in config.json."
+        )
+    if not (db_cfg.get("password") or "").strip():
+        raise RuntimeError(
+            "Database password is required. Set LIGHTNING_DB_PASSWORD or database.password in config.json."
+        )
+
+    if "port" in db_cfg:
+        db_cfg["port"] = int(db_cfg["port"])
+    if "connect_timeout" in db_cfg:
+        db_cfg["connect_timeout"] = int(db_cfg["connect_timeout"])
+
+    return db_cfg
 
 
 def environment() -> str:
@@ -63,6 +99,50 @@ def collector_config() -> dict:
 def ssl_config() -> dict:
     """Return SSL/TLS settings (cert and key file paths)."""
     return get_config().get("ssl", {})
+
+
+def external_id_config() -> dict:
+    """Return Entra External ID authentication settings."""
+    cfg = dict(get_config().get("external_id", {}))
+    env_secret = (os.environ.get("LIGHTNING_EXTERNAL_ID_CLIENT_SECRET") or "").strip()
+    if env_secret:
+        cfg["client_secret"] = env_secret
+    return cfg
+
+
+def devloper_config() -> dict:
+    """Return server-side Devloper auth-bypass settings.
+
+    Config is read from config.json under "devloper":
+      - enabled: true/false flag
+      - ip_allowlist: list of IP/CIDR entries (or comma-separated string)
+
+    Optional environment overrides:
+      - LIGHTNING_DEVLOPER_BYPASS_ENABLED (true/false)
+      - LIGHTNING_DEVLOPER_BYPASS_IP_ALLOWLIST
+    """
+    cfg = dict(get_config().get("devloper", {}))
+
+    env_enabled = (os.environ.get("LIGHTNING_DEVLOPER_BYPASS_ENABLED") or "").strip()
+    if env_enabled:
+        cfg["enabled"] = env_enabled
+
+    env_allow = (os.environ.get("LIGHTNING_DEVLOPER_BYPASS_IP_ALLOWLIST") or "").strip()
+    if env_allow:
+        cfg["ip_allowlist"] = [entry.strip() for entry in env_allow.split(",") if entry.strip()]
+
+    return cfg
+
+
+def ocm_api_key() -> str | None:
+    """Return the Open Charge Map API key from app_config/settings only."""
+    try:
+        import db
+
+        row = db.fetch_one("SELECT value FROM app_config WHERE key = 'ocm_api_key'")
+        return row["value"] if row and row.get("value") else None
+    except Exception:
+        return None
 
 
 def save_database(db_settings: dict) -> None:

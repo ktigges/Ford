@@ -3,20 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Lightning{% endblock %}</title>
+  <title>{% block title %}MLLighting{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-  <div class="prototype-banner">** PROTOTYPE ** v{{ config.get('APP_VERSION', '0.4.0') }} | Build {{ config.get('APP_BUILD_TIME', 'unknown') }}</div>
+<body class="{% if is_mobile_browser %}is-mobile-browser{% endif %}">
+  <div class="prototype-banner">PROTOTYPE | Use at your own risk | v{{ config.get('APP_VERSION', '0.4.0') }} | Build {{ config.get('APP_BUILD_TIME', 'unknown') }}</div>
+  {% if session.get('devloper_auth_bypassed') %}
+  <div style="background:#842029;color:#fff;padding:0.5rem 1rem;font-weight:700;text-align:center;letter-spacing:0.02em;">
+    DEVELOPER MODE - AUTH BYPASSED - PLEASE REMOVE WHEN DONE
+  </div>
+  {% endif %}
   <nav>
-    <div class="nav-brand">⚡ Lightning</div>
-    <ul>
+    <div class="nav-brand">🧠 MLLighting</div>
+    <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">Menu</button>
+    <ul id="primary-nav">
       <li><a href="{{ url_for('dashboard') }}" class="nav-btn">Dashboard</a></li>
       <li><a href="{{ url_for('vehicle_state') }}" class="nav-btn">Vehicle State</a></li>
       <li><a href="{{ url_for('drives_list') }}" class="nav-btn">Drives</a></li>
       <li><a href="{{ url_for('charging_overview') }}" class="nav-btn">Charging</a></li>
       <li><a href="{{ url_for('charging_sessions_view') }}" class="nav-btn">Charge Sessions</a></li>
+      <li><a href="{{ url_for('public_chargers') }}" class="nav-btn">Public Chargers</a></li>
+      <li><a href="{{ url_for('trip_planner') }}" class="nav-btn">Trip Planner</a></li>
       <li><a href="{{ url_for('analytics_overview') }}" class="nav-btn">Analytics</a></li>
+      <li class="nav-dropdown">
+        <button type="button" class="nav-btn dropdown-toggle" aria-haspopup="true">Account</button>
+        <div class="dropdown-menu">
+          <div class="dropdown-meta">Signed in as {{ session.get('local_username', 'user') }}</div>
+          <a href="{{ url_for('profile') }}">View Profile</a>
+          <a href="{{ url_for('auth_logout') }}">Sign Out</a>
+        </div>
+      </li>
       <li class="nav-dropdown">
         <button type="button" class="nav-btn dropdown-toggle" aria-haspopup="true">⚙️ Options</button>
         <div class="dropdown-menu">
@@ -45,5 +61,32 @@
 
     {% block content %}{% endblock %}
   </main>
+  <script>
+    (function () {
+      var body = document.body;
+      var nav = document.getElementById("primary-nav");
+      var toggle = document.getElementById("nav-toggle");
+      if (!nav || !toggle) return;
+
+      var mobileMode = body.classList.contains("is-mobile-browser") || window.matchMedia("(max-width: 980px)").matches;
+      if (!mobileMode) return;
+
+      toggle.addEventListener("click", function () {
+        var open = nav.classList.toggle("nav-open");
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+
+      var dropdownToggles = nav.querySelectorAll(".nav-dropdown > .dropdown-toggle");
+      dropdownToggles.forEach(function (btn) {
+        btn.addEventListener("click", function (evt) {
+          evt.preventDefault();
+          var item = btn.closest(".nav-dropdown");
+          if (!item) return;
+          var nowOpen = item.classList.toggle("nav-open");
+          btn.setAttribute("aria-expanded", nowOpen ? "true" : "false");
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

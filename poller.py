@@ -1,18 +1,15 @@
-"""Background telemetry poller.
+"""Ford Lightning source file.
 
-Runs in a daemon thread. Only one instance at a time.
-Uses the reusable oauth module to obtain tokens and writes telemetry + state.
-Extract metrics from Ford's API response and upserts into PostgreSQL state tables.
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import hashlib
 import json
 import logging
+import math
 import random
 import threading
 import time
@@ -40,6 +37,32 @@ _last_metrics_hash: str | None = None
 _charging_history_has_session_uuid: bool | None = None
 _charging_sessions_table_present: bool | None = None
 _charging_session_by_vin: dict[str, dict[str, datetime | str]] = {}
+
+
+def _insert_telemetry_row(vin: str, polled_at: datetime, raw: dict) -> None:
+    """Insert a telemetry row, auto-fixing sequence drift from DB restore if needed."""
+    sql = "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)"
+    params = (vin, polled_at, json.dumps(raw))
+    try:
+        db.execute(sql, params)
+        return
+    except Exception as exc:
+        err = str(exc).lower()
+        # After backup/restore, telemetry_id_seq can lag behind MAX(id), causing id collisions.
+        if "telemetry_pkey" not in err or "duplicate key value" not in err:
+            raise
+
+    log.warning("Telemetry insert hit duplicate PK; realigning telemetry ID sequence and retrying")
+    db.execute(
+        """
+        SELECT setval(
+            pg_get_serial_sequence('telemetry', 'id'),
+            COALESCE((SELECT MAX(id) FROM telemetry), 0) + 1,
+            false
+        )
+        """
+    )
+    db.execute(sql, params)
 
 
 # ── Public control API ─────────────────────────────────────────────
@@ -213,14 +236,12 @@ def _do_poll(provider: str, vin: str) -> None:
 
     # Step 3: Store data
     log.info("[STEP 3/3] Storing telemetry and updating state tables...")
-    db.execute(
-        "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)",
-        (vin, now, json.dumps(raw)),
-    )
+    _insert_telemetry_row(vin, now, raw)
 
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
     _upsert_charging_state(vin, now, metrics)
+    _reconcile_open_charging_session(vin, now, metrics)
     _record_charging_history(vin, now, metrics)
     _upsert_location_state(vin, now, metrics)
     _upsert_tire_state(vin, now, metrics)
@@ -319,10 +340,7 @@ def initial_setup_poll(provider: str, vin: str | None = None) -> str:
     # Step 4: Store telemetry + state
     log.info("[SETUP STEP 4/4] Storing telemetry and populating state tables...")
     now = datetime.now(timezone.utc)
-    db.execute(
-        "INSERT INTO telemetry (vin, polled_at, raw_metrics) VALUES (%s, %s, %s)",
-        (vin, now, json.dumps(raw)),
-    )
+    _insert_telemetry_row(vin, now, raw)
 
     # Ford wraps all metrics under a "metrics" key
     metrics = raw.get("metrics", raw)
@@ -330,6 +348,7 @@ def initial_setup_poll(provider: str, vin: str | None = None) -> str:
     _upsert_vehicle_state(vin, now, metrics)
     _upsert_battery_state(vin, now, metrics)
     _upsert_charging_state(vin, now, metrics)
+    _reconcile_open_charging_session(vin, now, metrics)
     _record_charging_history(vin, now, metrics)
     _upsert_location_state(vin, now, metrics)
     _upsert_tire_state(vin, now, metrics)
@@ -764,6 +783,139 @@ def _vehicle_is_active(vin: str, metrics: dict) -> bool:
 
 # ── Drive tracking ─────────────────────────────────────────────────
 
+_OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+
+def _bearing_degrees(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate initial bearing from point 1 to point 2 in degrees [0, 360)."""
+    lat1_r = math.radians(float(lat1))
+    lat2_r = math.radians(float(lat2))
+    dlon_r = math.radians(float(lon2) - float(lon1))
+    x = math.sin(dlon_r) * math.cos(lat2_r)
+    y = math.cos(lat1_r) * math.sin(lat2_r) - math.sin(lat1_r) * math.cos(lat2_r) * math.cos(dlon_r)
+    brng = (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+    return brng
+
+
+def _wind_components_kmh(route_bearing_deg: float, wind_speed_kmh: float, wind_from_deg: float) -> tuple[float, float, float, str]:
+    """Return headwind, tailwind, sidewind components and context label."""
+    wind_to = (float(wind_from_deg) + 180.0) % 360.0
+    angle = math.radians(abs((wind_to - float(route_bearing_deg) + 180.0) % 360.0 - 180.0))
+    along = float(wind_speed_kmh) * math.cos(angle)
+    cross = abs(float(wind_speed_kmh) * math.sin(angle))
+
+    if along >= 0:
+        headwind = 0.0
+        tailwind = along
+        context = "tailwind" if along >= cross else "crosswind"
+    else:
+        headwind = abs(along)
+        tailwind = 0.0
+        context = "headwind" if abs(along) >= cross else "crosswind"
+
+    return headwind, tailwind, cross, context
+
+
+def _nearest_hourly_value(times: list, values: list, target: datetime):
+    """Return hourly series value closest to target UTC timestamp."""
+    if not times or not values:
+        return None
+    best_idx = None
+    best_delta = None
+    for idx, ts in enumerate(times):
+        if idx >= len(values):
+            break
+        try:
+            dt = datetime.fromisoformat(str(ts)).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        delta = abs((dt - target).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_idx = idx
+    if best_idx is None:
+        return None
+    return values[best_idx]
+
+
+def _fetch_weather_snapshot(lat: float | None, lon: float | None, when_utc: datetime) -> dict:
+    """Fetch nearest hourly weather metrics for a location/time from Open-Meteo."""
+    if lat is None or lon is None:
+        return {}
+    try:
+        resp = requests.get(
+            _OPEN_METEO_URL,
+            params={
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,precipitation,wind_speed_10m,wind_direction_10m",
+                "timezone": "UTC",
+                "past_days": 2,
+                "forecast_days": 2,
+            },
+            timeout=6,
+        )
+        resp.raise_for_status()
+        hourly = (resp.json() or {}).get("hourly") or {}
+        times = hourly.get("time") or []
+        return {
+            "weather_temp_c": _nearest_hourly_value(times, hourly.get("temperature_2m") or [], when_utc),
+            "weather_humidity_pct": _nearest_hourly_value(times, hourly.get("relative_humidity_2m") or [], when_utc),
+            "weather_pressure_hpa": _nearest_hourly_value(times, hourly.get("surface_pressure") or [], when_utc),
+            "precipitation_mm": _nearest_hourly_value(times, hourly.get("precipitation") or [], when_utc),
+            "wind_speed_avg_kmh": _nearest_hourly_value(times, hourly.get("wind_speed_10m") or [], when_utc),
+            "wind_direction_avg_deg": _nearest_hourly_value(times, hourly.get("wind_direction_10m") or [], when_utc),
+        }
+    except Exception as exc:
+        log.warning("[DRIVE] Weather fetch failed for %.5f,%.5f: %s", float(lat), float(lon), exc)
+        return {}
+
+
+def _weather_for_drive_point(metrics: dict, weather_base: dict | None) -> dict | None:
+    """Return weather payload for a drive point, including wind components when possible."""
+    if not isinstance(weather_base, dict) or not weather_base:
+        return None
+
+    heading = _v(metrics, "heading", "value", "heading")
+    return _weather_for_heading(heading, weather_base)
+
+
+def _weather_for_heading(heading: float | None, weather_base: dict | None) -> dict | None:
+    """Return weather payload enriched with wind components for a heading."""
+    if not isinstance(weather_base, dict) or not weather_base:
+        return None
+
+    weather = dict(weather_base)
+    wind_speed = weather.get("wind_speed_avg_kmh")
+    wind_dir = weather.get("wind_direction_avg_deg")
+
+    if heading is None or wind_speed is None or wind_dir is None:
+        weather["headwind_component_kmh"] = None
+        weather["tailwind_component_kmh"] = None
+        weather["sidewind_component_kmh"] = None
+        return weather
+
+    try:
+        headwind, tailwind, sidewind, _ = _wind_components_kmh(float(heading), float(wind_speed), float(wind_dir))
+        weather["headwind_component_kmh"] = headwind
+        weather["tailwind_component_kmh"] = tailwind
+        weather["sidewind_component_kmh"] = sidewind
+    except Exception:
+        weather["headwind_component_kmh"] = None
+        weather["tailwind_component_kmh"] = None
+        weather["sidewind_component_kmh"] = None
+
+    return weather
+
+
+def _truncate_weather_error(value: str | None, limit: int = 240) -> str | None:
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    return s[:limit]
+
 def _is_driving(vin: str, metrics: dict) -> bool:
     """Return True if the vehicle is actually driving (not just ignition on).
 
@@ -871,17 +1023,70 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
 
     # Derived stats from drive_points
     stats = db.fetch_one(
-        "SELECT max(speed_kmh) AS max_speed, sum(trip_regen_charge_kwh) AS total_regen "
+        "SELECT max(speed_kmh) AS max_speed, avg(altitude_m) AS avg_altitude, "
+        "avg(ambient_temp_c) AS avg_ambient_temp, avg(outside_temp_c) AS avg_outside_temp "
         "FROM drive_points WHERE drive_id = %s",
         (drive["id"],),
     )
     max_speed = stats["max_speed"] if stats else None
+    avg_altitude = stats["avg_altitude"] if stats else None
+    avg_ambient_temp = stats["avg_ambient_temp"] if stats else None
+    avg_outside_temp = stats["avg_outside_temp"] if stats else None
     # Use the last drive point's trip_regen_charge_kwh as accumulated regen
     last_pt = db.fetch_one(
-        "SELECT trip_regen_charge_kwh FROM drive_points WHERE drive_id = %s ORDER BY recorded_at DESC LIMIT 1",
+        "SELECT trip_regen_charge_kwh, altitude_m FROM drive_points WHERE drive_id = %s ORDER BY recorded_at DESC LIMIT 1",
         (drive["id"],),
     )
     regen_energy = last_pt["trip_regen_charge_kwh"] if last_pt and last_pt.get("trip_regen_charge_kwh") else None
+
+    start_alt_row = db.fetch_one(
+        "SELECT altitude_m FROM drive_points WHERE drive_id = %s ORDER BY recorded_at ASC LIMIT 1",
+        (drive["id"],),
+    )
+    start_alt = start_alt_row.get("altitude_m") if start_alt_row else None
+    end_alt = last_pt.get("altitude_m") if last_pt else None
+    net_elevation_change = None
+    if start_alt is not None and end_alt is not None:
+        try:
+            net_elevation_change = float(end_alt) - float(start_alt)
+        except Exception:
+            net_elevation_change = None
+
+    elev_components = db.fetch_one(
+        """
+        WITH p AS (
+            SELECT altitude_m, LAG(altitude_m) OVER (ORDER BY recorded_at) AS prev_alt
+            FROM drive_points
+            WHERE drive_id = %s AND altitude_m IS NOT NULL
+        )
+        SELECT
+            COALESCE(SUM(CASE WHEN altitude_m > prev_alt THEN altitude_m - prev_alt ELSE 0 END), 0) AS elevation_gain_m,
+            COALESCE(SUM(CASE WHEN altitude_m < prev_alt THEN prev_alt - altitude_m ELSE 0 END), 0) AS elevation_loss_m
+        FROM p
+        """,
+        (drive["id"],),
+    )
+    elevation_gain = elev_components.get("elevation_gain_m") if elev_components else None
+    elevation_loss = elev_components.get("elevation_loss_m") if elev_components else None
+
+    route_bearing = None
+    start_lat = drive.get("start_lat")
+    start_lon = drive.get("start_lon")
+    if start_lat is not None and start_lon is not None and end_lat is not None and end_lon is not None:
+        try:
+            route_bearing = _bearing_degrees(float(start_lat), float(start_lon), float(end_lat), float(end_lon))
+        except Exception:
+            route_bearing = None
+
+    wx = _fetch_weather_snapshot(end_lat, end_lon, ts)
+    wind_speed = wx.get("wind_speed_avg_kmh")
+    wind_dir = wx.get("wind_direction_avg_deg")
+    headwind = None
+    tailwind = None
+    sidewind = None
+    wind_context = None
+    if route_bearing is not None and wind_speed is not None and wind_dir is not None:
+        headwind, tailwind, sidewind, wind_context = _wind_components_kmh(route_bearing, float(wind_speed), float(wind_dir))
 
     db.execute(
         """
@@ -890,12 +1095,26 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
             end_soc_percent = %s, end_energy_kwh = %s, energy_used_kwh = %s,
             end_lat = %s, end_lon = %s, end_heading_deg = %s, end_compass = %s,
             duration_sec = %s, max_speed_kmh = %s, regen_energy_kwh = %s,
+            avg_ambient_temp_c = %s, avg_outside_temp_c = %s,
+            weather_temp_c = %s, weather_humidity_pct = %s, weather_pressure_hpa = %s,
+            precipitation_mm = %s, wind_speed_avg_kmh = %s, wind_direction_avg_deg = %s,
+            headwind_component_kmh = %s, tailwind_component_kmh = %s, sidewind_component_kmh = %s,
+            wind_context = %s, route_bearing_deg = %s,
+            avg_altitude_m = %s, elevation_gain_m = %s, elevation_loss_m = %s,
+            net_elevation_change_m = %s,
             in_progress = FALSE
         WHERE id = %s
         """,
         (ts, end_odo, distance, end_soc, end_energy, energy_used,
          end_lat, end_lon, end_heading, end_compass,
-         duration, max_speed, regen_energy, drive["id"]),
+         duration, max_speed, regen_energy,
+         avg_ambient_temp, avg_outside_temp,
+         wx.get("weather_temp_c"), wx.get("weather_humidity_pct"), wx.get("weather_pressure_hpa"),
+         wx.get("precipitation_mm"), wind_speed, wind_dir,
+         headwind, tailwind, sidewind,
+         wind_context, route_bearing,
+         avg_altitude, elevation_gain, elevation_loss,
+         net_elevation_change, drive["id"]),
     )
     log.info("[DRIVE] Ended drive #%d (uuid=%s)  distance=%.1f km  energy=%.2f kWh  duration=%.0fs",
              drive["id"], drive.get("drive_uuid", "?"),
@@ -904,9 +1123,16 @@ def _end_drive(drive: dict, ts: datetime, metrics: dict) -> None:
              duration if duration is not None else 0)
 
 
-def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
-    """Insert a drive point with all relevant metrics."""
-    db.execute(
+def _record_drive_point(
+    drive_id: int,
+    ts: datetime,
+    metrics: dict,
+    weather: dict | None = None,
+    weather_fetch_status: str | None = None,
+    weather_fetch_error: str | None = None,
+) -> int | None:
+    """Insert a drive point with all relevant metrics and optional weather data."""
+    row = db.execute_returning(
         """
         INSERT INTO drive_points (drive_id, recorded_at, speed_kmh, odometer_km,
             heading_deg, compass_direction, latitude, longitude, altitude_m,
@@ -916,8 +1142,13 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
             motor_current, motor_voltage, torque_at_transmission,
             accelerator_pedal_pct, brake_torque, hybrid_mode,
             trip_distance_km, trip_regen_range_km, trip_regen_charge_kwh, trip_fuel_economy,
-            ambient_temp_c, outside_temp_c, engine_coolant_temp_c)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ambient_temp_c, outside_temp_c, engine_coolant_temp_c,
+            weather_temp_c, weather_humidity_pct, weather_pressure_hpa, precipitation_mm,
+            wind_speed_avg_kmh, wind_direction_avg_deg, headwind_component_kmh,
+            tailwind_component_kmh, sidewind_component_kmh,
+            weather_fetch_status, weather_fetch_error)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        RETURNING id
         """,
         (drive_id, ts,
          _speed_to_kmh(_v(metrics, "speed", "value")),
@@ -948,8 +1179,20 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
          _v(metrics, "tripFuelEconomy", "value"),
          _v(metrics, "ambientTemp", "value"),
          _v(metrics, "outsideTemperature", "value"),
-         _v(metrics, "engineCoolantTemp", "value")),
+         _v(metrics, "engineCoolantTemp", "value"),
+         weather.get("weather_temp_c") if weather else None,
+         weather.get("weather_humidity_pct") if weather else None,
+         weather.get("weather_pressure_hpa") if weather else None,
+         weather.get("precipitation_mm") if weather else None,
+         weather.get("wind_speed_avg_kmh") if weather else None,
+         weather.get("wind_direction_avg_deg") if weather else None,
+         weather.get("headwind_component_kmh") if weather else None,
+         weather.get("tailwind_component_kmh") if weather else None,
+         weather.get("sidewind_component_kmh") if weather else None,
+         weather_fetch_status,
+         _truncate_weather_error(weather_fetch_error)),
     )
+    return int(row["id"]) if row and row.get("id") is not None else None
 
 
 # Grace period: if vehicle stops but ignition is still on and gear is in park,
@@ -957,6 +1200,93 @@ def _record_drive_point(drive_id: int, ts: datetime, metrics: dict) -> None:
 # This prevents short stops (red lights, brief park) from splitting a drive.
 _DRIVE_END_GRACE_POLLS = 2
 _drive_stop_count: int = 0
+_record_drive_point._last_weather_time = None  # Track when we last fetched weather for drive points
+_record_drive_point._last_weather_data = None  # Reuse latest weather between refreshes
+_weather_backfill_queue: list[dict] = []
+_WEATHER_BACKFILL_BATCH_SIZE = 8
+_WEATHER_BACKFILL_MAX_QUEUE = 5000
+
+
+def _queue_weather_backfill(point_id: int, ts: datetime, lat: float, lon: float, heading: float | None) -> None:
+    """Queue a drive point for weather retry backfill when weather API recovers."""
+    if len(_weather_backfill_queue) >= _WEATHER_BACKFILL_MAX_QUEUE:
+        _weather_backfill_queue.pop(0)
+    _weather_backfill_queue.append(
+        {
+            "point_id": int(point_id),
+            "recorded_at": ts,
+            "lat": float(lat),
+            "lon": float(lon),
+            "heading": float(heading) if heading is not None else None,
+            "attempts": 0,
+        }
+    )
+
+
+def _process_weather_backfill_queue(max_items: int = _WEATHER_BACKFILL_BATCH_SIZE) -> None:
+    """Try backfilling pending point weather for queued points."""
+    if not _weather_backfill_queue:
+        return
+
+    remaining: list[dict] = []
+    processed = 0
+    for item in _weather_backfill_queue:
+        if processed >= max_items:
+            remaining.append(item)
+            continue
+
+        point_id = int(item["point_id"])
+        ts = item["recorded_at"]
+        lat = float(item["lat"])
+        lon = float(item["lon"])
+        heading = item.get("heading")
+
+        try:
+            weather_base = _fetch_weather_snapshot(lat, lon, ts)
+            weather = _weather_for_heading(heading, weather_base)
+            if not weather:
+                raise RuntimeError("empty weather snapshot")
+
+            db.execute(
+                """
+                UPDATE drive_points SET
+                    weather_temp_c = COALESCE(%s, weather_temp_c),
+                    weather_humidity_pct = COALESCE(%s, weather_humidity_pct),
+                    weather_pressure_hpa = COALESCE(%s, weather_pressure_hpa),
+                    precipitation_mm = COALESCE(%s, precipitation_mm),
+                    wind_speed_avg_kmh = COALESCE(%s, wind_speed_avg_kmh),
+                    wind_direction_avg_deg = COALESCE(%s, wind_direction_avg_deg),
+                    headwind_component_kmh = COALESCE(%s, headwind_component_kmh),
+                    tailwind_component_kmh = COALESCE(%s, tailwind_component_kmh),
+                    sidewind_component_kmh = COALESCE(%s, sidewind_component_kmh),
+                    weather_fetch_status = 'backfilled',
+                    weather_fetch_error = NULL
+                WHERE id = %s
+                """,
+                (
+                    weather.get("weather_temp_c"),
+                    weather.get("weather_humidity_pct"),
+                    weather.get("weather_pressure_hpa"),
+                    weather.get("precipitation_mm"),
+                    weather.get("wind_speed_avg_kmh"),
+                    weather.get("wind_direction_avg_deg"),
+                    weather.get("headwind_component_kmh"),
+                    weather.get("tailwind_component_kmh"),
+                    weather.get("sidewind_component_kmh"),
+                    point_id,
+                ),
+            )
+            processed += 1
+        except Exception as exc:
+            item["attempts"] = int(item.get("attempts", 0)) + 1
+            db.execute(
+                "UPDATE drive_points SET weather_fetch_status = 'pending_backfill', weather_fetch_error = %s WHERE id = %s",
+                (_truncate_weather_error(str(exc)), point_id),
+            )
+            if item["attempts"] < 40:
+                remaining.append(item)
+
+    _weather_backfill_queue[:] = remaining
 
 
 def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
@@ -982,19 +1312,120 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
             _drive_stop_count = 0
             active_drive = None
 
+    # Fetch weather every ~5 minutes (300 seconds) and record status/error per point.
+    lat = _v(metrics, "position", "value", "location", "lat")
+    lon = _v(metrics, "position", "value", "location", "lon")
+    heading = _v(metrics, "heading", "value", "heading")
+    weather_fetch_status = "none"
+    weather_fetch_error = None
+
+    weather_base = getattr(_record_drive_point, "_last_weather_data", None)
+    weather_data = _weather_for_drive_point(metrics, weather_base)
+    if weather_data:
+        weather_fetch_status = "cached"
+
+    try:
+        last_weather_time = getattr(_record_drive_point, "_last_weather_time", None)
+        if not isinstance(last_weather_time, datetime):
+            last_weather_time = None
+
+        should_refresh_weather = (
+            lat is not None
+            and lon is not None
+            and (
+                last_weather_time is None
+                or (ts - last_weather_time).total_seconds() >= 300
+            )
+        )
+        if should_refresh_weather:
+            fresh_weather = _fetch_weather_snapshot(lat, lon, ts)
+            if isinstance(fresh_weather, dict) and fresh_weather:
+                weather_data = _weather_for_drive_point(metrics, fresh_weather)
+                _record_drive_point._last_weather_data = fresh_weather
+                weather_fetch_status = "fetched"
+                weather_fetch_error = None
+            elif not weather_data:
+                weather_fetch_status = "failed"
+                weather_fetch_error = "empty weather snapshot"
+            _record_drive_point._last_weather_time = ts
+    except Exception as exc:
+        weather_fetch_error = str(exc)
+        if weather_data:
+            weather_fetch_status = "cached"
+        else:
+            weather_fetch_status = "failed"
+        # Weather enrichment is best-effort; never allow it to impact core polling.
+        log.warning("[WEATHER] Skipping weather enrichment for drive point: %s", exc)
+
     if driving and not active_drive:
         # Drive just started
         _drive_stop_count = 0
+        _record_drive_point._last_weather_time = None
+        _record_drive_point._last_weather_data = None
         drive_id = _start_drive(vin, ts, metrics)
-        _record_drive_point(drive_id, ts, metrics)
+        # Force immediate weather refresh on first point of a new drive.
+        try:
+            if lat is not None and lon is not None:
+                fresh_weather = _fetch_weather_snapshot(lat, lon, ts)
+                if isinstance(fresh_weather, dict) and fresh_weather:
+                    weather_data = _weather_for_drive_point(metrics, fresh_weather)
+                    _record_drive_point._last_weather_data = fresh_weather
+                    _record_drive_point._last_weather_time = ts
+                    weather_fetch_status = "fetched"
+                    weather_fetch_error = None
+        except Exception as exc:
+            if weather_data is None:
+                weather_fetch_status = "failed"
+                weather_fetch_error = str(exc)
+            log.warning("[WEATHER] Initial drive-point weather fetch skipped: %s", exc)
+        point_id = _record_drive_point(
+            drive_id,
+            ts,
+            metrics,
+            weather_data,
+            weather_fetch_status,
+            weather_fetch_error,
+        )
+        if point_id and weather_data is None and lat is not None and lon is not None:
+            db.execute(
+                "UPDATE drive_points SET weather_fetch_status = 'pending_backfill', weather_fetch_error = %s WHERE id = %s",
+                (_truncate_weather_error(weather_fetch_error or "queued for backfill"), point_id),
+            )
+            _queue_weather_backfill(point_id, ts, float(lat), float(lon), heading)
     elif driving and active_drive:
         # Drive in progress — record point, reset stop counter
         _drive_stop_count = 0
-        _record_drive_point(active_drive["id"], ts, metrics)
+        point_id = _record_drive_point(
+            active_drive["id"],
+            ts,
+            metrics,
+            weather_data,
+            weather_fetch_status,
+            weather_fetch_error,
+        )
+        if point_id and weather_data is None and lat is not None and lon is not None:
+            db.execute(
+                "UPDATE drive_points SET weather_fetch_status = 'pending_backfill', weather_fetch_error = %s WHERE id = %s",
+                (_truncate_weather_error(weather_fetch_error or "queued for backfill"), point_id),
+            )
+            _queue_weather_backfill(point_id, ts, float(lat), float(lon), heading)
     elif not driving and active_drive:
         _drive_stop_count += 1
         # Still record this point (captures the stop/park transition)
-        _record_drive_point(active_drive["id"], ts, metrics)
+        point_id = _record_drive_point(
+            active_drive["id"],
+            ts,
+            metrics,
+            weather_data,
+            weather_fetch_status,
+            weather_fetch_error,
+        )
+        if point_id and weather_data is None and lat is not None and lon is not None:
+            db.execute(
+                "UPDATE drive_points SET weather_fetch_status = 'pending_backfill', weather_fetch_error = %s WHERE id = %s",
+                (_truncate_weather_error(weather_fetch_error or "queued for backfill"), point_id),
+            )
+            _queue_weather_backfill(point_id, ts, float(lat), float(lon), heading)
 
         ign = _v(metrics, "ignitionStatus", "value")
         ign_off = ign and str(ign).lower() not in _IGNITION_ACTIVE
@@ -1010,6 +1441,8 @@ def _track_drive(vin: str, ts: datetime, metrics: dict) -> None:
     else:
         # Not driving and no active drive — reset
         _drive_stop_count = 0
+
+    _process_weather_backfill_queue()
 
 
 def _get_poll_interval(vin: str, default: int) -> int:
@@ -1238,6 +1671,86 @@ def _charging_power_kw(metrics: dict, ts: datetime | None = None) -> float | Non
         return None
 
 
+def _should_close_charging_session(metrics: dict, ts: datetime) -> bool:
+    """Return True when telemetry indicates an in-progress charging session should close."""
+    plug_status = (_v(metrics, "xevPlugChargerStatus", "value") or "").strip().lower()
+    charge_display = (_v(metrics, "xevBatteryChargeDisplayStatus", "value") or "").strip().lower()
+    communication_status = (_v(metrics, "xevChargeStationCommunicationStatus", "value") or "").strip().lower()
+
+    charger_current = _v_if_fresh(metrics, "xevBatteryChargerCurrentOutput", ts, max_stale_minutes=60)
+    charger_voltage = _v_if_fresh(metrics, "xevBatteryChargerVoltageOutput", ts, max_stale_minutes=60)
+    dc_current = _v_if_fresh(metrics, "xevEvseBatteryDcCurrentOutput", ts, max_stale_minutes=60)
+    power_kw = _charging_power_kw(metrics, ts)
+
+    has_power_flow = False
+    try:
+        has_power_flow = power_kw is not None and float(power_kw) > 0.5
+    except (TypeError, ValueError):
+        has_power_flow = False
+
+    has_current_flow = False
+    try:
+        has_current_flow = (
+            charger_voltage is not None and float(charger_voltage) > 20
+            and charger_current is not None and float(charger_current) > 0.5
+        )
+    except (TypeError, ValueError):
+        has_current_flow = False
+
+    has_dc_flow = False
+    try:
+        has_dc_flow = dc_current is not None and float(dc_current) > 0.5
+    except (TypeError, ValueError):
+        has_dc_flow = False
+
+    if has_power_flow or has_current_flow or has_dc_flow:
+        return False
+
+    idle_tokens = (
+        "standby", "not_detected", "station_ready", "ready", "waiting", "scheduled",
+        "charge_scheduling", "not_ready", "complete", "completed", "stopped", "stop",
+        "paused", "pause",
+    )
+    explicitly_idle = any(token in communication_status for token in idle_tokens) or any(
+        token in charge_display for token in idle_tokens
+    )
+
+    voltage_zero = True
+    try:
+        # Ford can report small non-zero noise (e.g., 1-2V) while effectively idle.
+        voltage_zero = charger_voltage is None or float(charger_voltage) <= 5.0
+    except (TypeError, ValueError):
+        voltage_zero = True
+
+    current_zero = True
+    try:
+        current_zero = charger_current is None or float(charger_current) <= 0.5
+    except (TypeError, ValueError):
+        current_zero = True
+
+    dc_current_zero = True
+    try:
+        dc_current_zero = dc_current is None or float(dc_current) <= 0.5
+    except (TypeError, ValueError):
+        dc_current_zero = True
+
+    if plug_status in _PLUG_IDLE:
+        return True
+
+    standby_waiting = ("standby" in charge_display) or ("standby" in communication_status)
+    if standby_waiting and voltage_zero:
+        return True
+
+    return explicitly_idle and voltage_zero and current_zero and dc_current_zero
+
+
+def _reconcile_open_charging_session(vin: str, ts: datetime, metrics: dict) -> None:
+    """Close stale charging sessions based on the latest polled charging metrics."""
+    if _should_close_charging_session(metrics, ts):
+        _charging_session_by_vin.pop(vin, None)
+        _close_open_charging_session(vin, ts)
+
+
 def _charging_history_supports_session_uuid() -> bool:
     """Return True when charging_history has charging_session_uuid column."""
     global _charging_history_has_session_uuid
@@ -1413,8 +1926,9 @@ def _record_charging_history(vin: str, ts: datetime, metrics: dict) -> None:
 
     active_tokens = ("charging", "active", "in_progress", "powering")
     idle_tokens = (
-        "not_detected", "station_ready", "ready", "waiting", "scheduled",
+        "standby", "not_detected", "station_ready", "ready", "waiting", "scheduled",
         "charge_scheduling", "not_ready", "complete", "completed", "stopped", "stop",
+        "paused", "pause",
     )
     explicitly_idle = any(token in communication_status for token in idle_tokens) or any(token in charge_display for token in idle_tokens)
     explicitly_active = any(token in communication_status for token in active_tokens) or any(token in charge_display for token in active_tokens)

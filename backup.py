@@ -1,21 +1,16 @@
-"""Backup and restore module for Ford Lightning telemetry database.
+"""Ford Lightning source file.
 
-Provides two backup strategies:
-1. **SQL dump** — Uses pg_dump/psql for full-fidelity PostgreSQL backup & restore.
-2. **JSON export** — Python-native export of all tables to a portable JSON file
-   that can be restored without pg_dump/psql installed.
-
-Backups are stored in the `backups/` directory (relative to the project root).
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
+
 
 import json
 import logging
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -29,8 +24,11 @@ import db
 
 log = logging.getLogger("backup")
 
+
 # Directory where backups are stored
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
+# Directory where model files are stored
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 # Tables in dependency order (parents before children).
 # Restore must follow this order; backup can be any order.
@@ -57,6 +55,9 @@ TABLES_ORDERED = [
     "departure_schedule",
     "drives",
     "drive_points",
+    "ev_stations",
+    "ev_charger_connectors",
+    "ev_sync_runs",
 ]
 
 _SENSITIVE_OAUTH_FIELDS = ("client_secret", "refresh_token", "access_token")
@@ -84,16 +85,43 @@ def _db_config() -> dict:
     return config.database()
 
 
+def _running_db_container_name() -> str | None:
+    """Return running DB container name when available, else None.
+
+    Prefers DB_CONTAINER env var, defaulting to lightning-db.
+    """
+    container = (os.environ.get("DB_CONTAINER") or "lightning-db").strip()
+    if not container:
+        return None
+
+    if shutil.which("docker") is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    running = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return container if container in running else None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SQL dump backup (pg_dump / psql)
 # ═══════════════════════════════════════════════════════════════════
 
-def backup_sql(label: str = "") -> str:
-    """Create a full SQL dump of the database using pg_dump.
 
-    Returns the path to the created .sql file.
-    Raises RuntimeError if pg_dump is not available or fails.
-    """
+def backup_sql(label: str = "") -> str:
+    """Create a full SQL dump of the database using pg_dump and copy model files."""
     _ensure_backup_dir()
     cfg = _db_config()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -104,21 +132,51 @@ def backup_sql(label: str = "") -> str:
     env = os.environ.copy()
     env["PGPASSWORD"] = cfg["password"]
 
-    cmd = [
-        "pg_dump",
-        "-h", cfg["host"],
-        "-p", str(cfg["port"]),
-        "-U", cfg["user"],
-        "-d", cfg["name"],
-        "--clean",
-        "--if-exists",
-        "--no-owner",
-        "--no-privileges",
-        "-f", filepath,
-    ]
+    container = _running_db_container_name()
+    if container:
+        # Use pg_dump inside the running Postgres container to avoid client/server version mismatch.
+        cmd = [
+            "docker",
+            "exec",
+            "-e",
+            f"PGPASSWORD={cfg['password']}",
+            container,
+            "pg_dump",
+            "-U",
+            cfg["user"],
+            "-d",
+            cfg["name"],
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+        ]
+        log.info("Running pg_dump in container '%s' -> %s", container, filename)
+        with open(filepath, "w") as out_f:
+            result = subprocess.run(
+                cmd,
+                env=env,
+                stdout=out_f,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+    else:
+        cmd = [
+            "pg_dump",
+            "-h", cfg["host"],
+            "-p", str(cfg["port"]),
+            "-U", cfg["user"],
+            "-d", cfg["name"],
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+            "-f", filepath,
+        ]
 
-    log.info("Running pg_dump → %s", filename)
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
+        log.info("Running host pg_dump -> %s", filename)
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
 
     if result.returncode != 0:
         log.error("pg_dump failed: %s", result.stderr)
@@ -126,15 +184,23 @@ def backup_sql(label: str = "") -> str:
 
     size = os.path.getsize(filepath)
     log.info("SQL backup created: %s (%d bytes)", filename, size)
+
+    # Copy model files to backup dir with timestamp
+    for model_file in ["energy_model.pkl", "energy_scaler.pkl", "energy_model_schema.json"]:
+        src = os.path.join(MODEL_DIR, model_file)
+        if os.path.exists(src):
+            dst = os.path.join(BACKUP_DIR, f"{model_file}.{ts}")
+            shutil.copy2(src, dst)
+            log.info(f"Model file {model_file} copied to backup as {dst}")
+        else:
+            log.warning(f"Model file {model_file} not found in models/ directory")
+
     return filepath
 
 
-def restore_sql(filepath: str) -> None:
-    """Restore the database from a SQL dump file using psql.
 
-    WARNING: This will overwrite existing data in conflicting rows.
-    The dump uses CREATE-or-replace semantics from pg_dump.
-    """
+def restore_sql(filepath: str) -> None:
+    """Restore the database from a SQL dump file using psql and restore model files if present."""
     if not os.path.isfile(filepath):
         raise FileNotFoundError(f"Backup file not found: {filepath}")
 
@@ -142,24 +208,71 @@ def restore_sql(filepath: str) -> None:
     env = os.environ.copy()
     env["PGPASSWORD"] = cfg["password"]
 
-    cmd = [
-        "psql",
-        "-h", cfg["host"],
-        "-p", str(cfg["port"]),
-        "-U", cfg["user"],
-        "-d", cfg["name"],
-        "-v", "ON_ERROR_STOP=1",
-        "-f", filepath,
-    ]
+    container = _running_db_container_name()
 
     log.info("Restoring SQL backup from %s", os.path.basename(filepath))
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    if container:
+        cmd = [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            f"PGPASSWORD={cfg['password']}",
+            container,
+            "psql",
+            "-U",
+            cfg["user"],
+            "-d",
+            cfg["name"],
+            "-v",
+            "ON_ERROR_STOP=1",
+        ]
+        with open(filepath, "r") as in_f:
+            result = subprocess.run(
+                cmd,
+                env=env,
+                stdin=in_f,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=300,
+            )
+    else:
+        cmd = [
+            "psql",
+            "-h", cfg["host"],
+            "-p", str(cfg["port"]),
+            "-U", cfg["user"],
+            "-d", cfg["name"],
+            "-v", "ON_ERROR_STOP=1",
+            "-f", filepath,
+        ]
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
 
     if result.returncode != 0:
         log.error("psql restore failed: %s", result.stderr)
         raise RuntimeError(f"psql restore failed: {result.stderr.strip()}")
 
     log.info("SQL restore complete")
+
+    # Restore model files if present in backup dir (matching timestamp)
+    # Try to infer timestamp from backup filename
+    base = os.path.basename(filepath)
+    ts = None
+    if base.startswith("lightning_backup_"):
+        try:
+            ts = base.split("_")[2].split(".")[0]
+        except Exception:
+            pass
+    if ts:
+        for model_file in ["energy_model.pkl", "energy_scaler.pkl", "energy_model_schema.json"]:
+            backup_model = os.path.join(BACKUP_DIR, f"{model_file}.{ts}")
+            if os.path.exists(backup_model):
+                dst = os.path.join(MODEL_DIR, model_file)
+                shutil.copy2(backup_model, dst)
+                log.info(f"Restored model file {model_file} from backup {backup_model}")
+            else:
+                log.warning(f"Model file {model_file}.{ts} not found in backup dir")
 
 
 # ═══════════════════════════════════════════════════════════════════

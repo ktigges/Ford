@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- =========================
 -- Core vehicle metadata
@@ -332,6 +333,41 @@ CREATE TABLE oauth_credentials (
 );
 
 -- =========================
+-- Local auth users + sessions
+-- =========================
+CREATE TABLE local_users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL,
+    email TEXT,
+    password_hash TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    mfa_secret TEXT,
+    mfa_enrolled_at TIMESTAMPTZ,
+    last_login_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX local_users_username_lower_uidx
+ON local_users (LOWER(username));
+
+CREATE TABLE local_auth_sessions (
+    id UUID PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES local_users(id) ON DELETE CASCADE,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    mfa_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    ip_address TEXT,
+    user_agent TEXT
+);
+
+CREATE INDEX local_auth_sessions_user_idx
+ON local_auth_sessions (user_id, revoked_at, expires_at);
+
+-- =========================
 -- Drive sessions
 -- =========================
 CREATE TABLE drives (
@@ -357,6 +393,16 @@ CREATE TABLE drives (
     -- Environment
     avg_ambient_temp_c REAL,
     avg_outside_temp_c REAL,
+    weather_temp_c REAL,
+    weather_humidity_pct REAL,
+    weather_pressure_hpa REAL,
+    precipitation_mm REAL,
+    wind_speed_avg_kmh REAL,
+    wind_direction_avg_deg REAL,
+    headwind_component_kmh REAL,
+    tailwind_component_kmh REAL,
+    sidewind_component_kmh REAL,
+    wind_context TEXT,
 
     -- Location at start/end
     start_lat DOUBLE PRECISION,
@@ -375,6 +421,11 @@ CREATE TABLE drives (
     duration_sec REAL,
     max_speed_kmh REAL,
     regen_energy_kwh REAL,
+    route_bearing_deg REAL,
+    avg_altitude_m REAL,
+    elevation_gain_m REAL,
+    elevation_loss_m REAL,
+    net_elevation_change_m REAL,
 
     created_at TIMESTAMPTZ DEFAULT now(),
 
@@ -426,6 +477,19 @@ CREATE TABLE drive_points (
     outside_temp_c REAL,
     engine_coolant_temp_c REAL,
 
+    -- Weather (at point location/time)
+    weather_temp_c REAL,
+    weather_humidity_pct REAL,
+    weather_pressure_hpa REAL,
+    precipitation_mm REAL,
+    wind_speed_avg_kmh REAL,
+    wind_direction_avg_deg REAL,
+    headwind_component_kmh REAL,
+    tailwind_component_kmh REAL,
+    sidewind_component_kmh REAL,
+    weather_fetch_status TEXT,
+    weather_fetch_error TEXT,
+
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -444,3 +508,104 @@ CREATE INDEX idx_charging_history_vin_time ON charging_history (vin, polled_at D
 CREATE INDEX idx_charging_history_session_uuid ON charging_history (charging_session_uuid);
 CREATE INDEX idx_charging_sessions_vin_start ON charging_sessions (vin, started_at DESC);
 CREATE INDEX idx_charging_sessions_open ON charging_sessions (vin) WHERE in_progress = TRUE;
+
+-- =========================
+-- EV Charger Network (NLR)
+-- =========================
+CREATE TABLE ev_stations (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'NREL',
+    source_authority TEXT NOT NULL DEFAULT 'NREL',
+    nlr_station_id BIGINT UNIQUE,
+    ocm_station_id BIGINT,
+    
+    station_name TEXT NOT NULL,
+    street_address TEXT,
+    city TEXT,
+    state TEXT,
+    zip TEXT,
+    country TEXT DEFAULT 'US',
+    
+    -- Geo (for route planning and nearest-charger queries)
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    
+    -- Status and access
+    status_code TEXT,  -- 'E' = operational
+    fuel_type_code TEXT DEFAULT 'ELEC',
+    access_code TEXT,  -- 'public', 'private', etc.
+    access_detail TEXT,
+    owner_type_code TEXT,
+    facility_type TEXT,
+    
+    -- Network operator info
+    network_name TEXT,  -- e.g., 'SHELL_RECHARGE', 'Non-Networked'
+    
+    -- Timestamps
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    nlr_updated_at TIMESTAMPTZ,  -- Last update from NLR API
+    created_at TIMESTAMPTZ DEFAULT now(),
+    
+    -- Raw data for future schema evolution
+    raw_data JSONB
+);
+
+CREATE TABLE ev_charger_connectors (
+    id BIGSERIAL PRIMARY KEY,
+    station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
+    source TEXT NOT NULL DEFAULT 'NREL',
+    nlr_station_id BIGINT,
+    ocm_station_id BIGINT,
+    
+    -- Connector type (J1772, CHADEMO, J1772COMBO, etc.)
+    connector_type TEXT NOT NULL,
+    
+    -- Network / charging level
+    network TEXT,  -- 'SHELL_RECHARGE', 'Non-Networked', etc.
+    charging_level TEXT,  -- 'level_1', 'level_2', 'dc_fast', etc.
+    
+    -- Power capacity
+    power_kw REAL,  -- Max power output in kW
+    port_count INTEGER,  -- Number of ports for this connector type
+    
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    created_at TIMESTAMPTZ DEFAULT now(),
+
+    UNIQUE (station_id, connector_type, network)
+);
+
+-- Track import/sync operations for audit trail and delta updates
+CREATE TABLE ev_sync_runs (
+    id BIGSERIAL PRIMARY KEY,
+    sync_type TEXT NOT NULL,  -- 'manual_import', 'scheduled_sync', etc.
+    state_filter TEXT,  -- US state code or 'all'
+    status TEXT NOT NULL,  -- 'in_progress', 'completed', 'failed'
+    
+    -- Timestamps
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    
+    -- Statistics
+    stations_imported INTEGER DEFAULT 0,
+    stations_updated INTEGER DEFAULT 0,
+    errors INTEGER DEFAULT 0,
+    last_error TEXT,
+    
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- =========================
+-- Indexes for charger queries
+-- =========================
+CREATE INDEX idx_ev_stations_state ON ev_stations (state) WHERE country = 'US';
+CREATE UNIQUE INDEX idx_ev_stations_ocm_id_uniq ON ev_stations (ocm_station_id) WHERE ocm_station_id IS NOT NULL;
+CREATE INDEX idx_ev_stations_location ON ev_stations USING GIST (
+    ll_to_earth(latitude, longitude)
+);
+CREATE INDEX idx_ev_connectors_network ON ev_charger_connectors (network);
+CREATE INDEX idx_ev_connectors_charging_level ON ev_charger_connectors (charging_level);
+CREATE INDEX idx_ev_connectors_ocm_station_id ON ev_charger_connectors (ocm_station_id);
+CREATE INDEX idx_ev_sync_runs_status ON ev_sync_runs (status);
+CREATE INDEX idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC);
+CREATE INDEX idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC);

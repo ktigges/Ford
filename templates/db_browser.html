@@ -1,7 +1,56 @@
 {% extends "base.html" %}
-{% block title %}Database Browser – Lightning{% endblock %}
+{% block title %}Database Browser – MLLighting{% endblock %}
 {% block content %}
 <h1>Database Browser</h1>
+
+<div class="card">
+  <h2>SQL / psql Console</h2>
+  <p class="help-text">Run one SQL statement or a supported psql meta-command: \dt, \dn, \di, \d table_name.</p>
+  <form method="post">
+    <textarea
+      name="console_command"
+      rows="5"
+      style="width:100%; font-family:monospace;"
+      placeholder="Example: SELECT * FROM charging_state LIMIT 20;"
+    >{{ console_command or '' }}</textarea>
+    <div style="margin-top:0.75rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+      <button type="submit" class="btn btn-primary">Run Command</button>
+      <span class="help-text" style="margin:0;">One statement per run.</span>
+    </div>
+  </form>
+
+  {% if console_result %}
+    <div style="margin-top:1rem;">
+      {% if console_result.ok %}
+        <p class="status-ok">{{ console_result.message }}</p>
+        {% if console_result.columns and console_result.rows %}
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  {% for c in console_result.columns %}
+                  <th>{{ c }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in console_result.rows %}
+                <tr>
+                  {% for c in console_result.columns %}
+                  <td>{{ row[c] }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="error-text">{{ console_result.error }}</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
 
 <div class="card">
   <table>
@@ -19,4 +68,16 @@
     </tbody>
   </table>
 </div>
+
+<style>
+.help-text {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.status-ok {
+  color: #1f6f2e;
+  font-weight: 600;
+}
+</style>
 {% endblock %}

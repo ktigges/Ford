@@ -1,0 +1,88 @@
+
+<form method="post" action="{{ url_for('settings') }}" class="card form-card" style="margin-bottom:2rem;">
+  <input type="hidden" name="return_to" value="settings_chargers_page">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <h2 style="margin-bottom:1.5rem;">EV Charger Network (NIL/NLR/NREL)</h2>
+  <div style="margin-bottom:1rem;">
+    <label>NREL API Key:
+      <input type="text" name="nlr_api_key" value="{{ settings.nlr_api_key }}" placeholder="NREL API Key">
+      <span class="form-desc" style="font-size:0.95em; color:#666;">(Required for NREL/AFDC charger import)</span>
+    </label>
+    <label style="margin-left:2em;">OCM API Key:
+      <input type="text" name="ocm_api_key" value="{{ settings.ocm_api_key }}" placeholder="Open Charge Map API Key">
+      <span class="form-desc" style="font-size:0.95em; color:#666;">(Optional, for Open Charge Map integration)</span>
+    </label>
+    <button type="submit" name="action" value="save_charger_api_key" style="margin-left:1em;">Save API Keys</button>
+  </div>
+  <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
+    <legend><b>Import Options</b></legend>
+    <label>Scope:
+      <select name="charger_scope">
+        <option value="all_us" {% if settings.charger_scope == 'all_us' %}selected{% endif %}>All US</option>
+        <option value="single_state" {% if settings.charger_scope == 'single_state' %}selected{% endif %}>Single State</option>
+      </select>
+    </label>
+    <label style="margin-left:2em;">State Filter:
+      <input type="text" name="charger_state_filter" value="{{ settings.charger_state_filter }}" maxlength="2" placeholder="e.g. TX">
+    </label>
+    <label style="margin-left:2em;">Fetch Strategy:
+      <select name="charger_fetch_strategy">
+        <option value="all_then_200" {% if settings.charger_fetch_strategy == 'all_then_200' %}selected{% endif %}>All then 200</option>
+        <option value="paged_200" {% if settings.charger_fetch_strategy == 'paged_200' %}selected{% endif %}>Paged 200</option>
+      </select>
+    </label>
+    <label style="margin-left:2em;">Page Size:
+      <input type="number" name="charger_page_size" value="{{ settings.charger_page_size }}" min="50" max="1000">
+    </label>
+    <button type="submit" name="action" value="save_charger_options" style="margin-left:2em;">Save Import Options</button>
+  </fieldset>
+  <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
+    <legend><b>Auto-Update Schedule</b></legend>
+    <label><input type="checkbox" name="charger_auto_update" {% if settings.charger_auto_update == 'on' %}checked{% endif %}> Enable Auto-Update</label>
+    <label style="margin-left:2em;">Interval (hours):
+      <input type="number" name="charger_auto_update_hours" value="{{ settings.charger_auto_update_hours }}" min="1" max="168">
+    </label>
+    <button type="submit" name="action" value="save_charger_schedule" style="margin-left:2em;">Save Auto-Update Schedule</button>
+  </fieldset>
+  <div style="margin-bottom:1.5rem;">
+    <button type="submit" name="action" value="run_charger_import">Run Charger Import Now</button>
+  </div>
+</form>
+
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Debug / Charger Status</h3>
+  <ul style="margin-bottom:0;">
+    <li>NREL API Key: <b>{{ settings.nlr_api_key|default('unset') }}</b></li>
+    <li>OCM API Key: <b>{{ settings.ocm_api_key|default('unset') }}</b></li>
+    </ul>
+    <div style="margin-top:1em; font-size:0.97em; color:#555;">
+      <b>NREL API Key:</b> Get your key at <a href="https://developer.nrel.gov/signup/" target="_blank">developer.nrel.gov/signup</a> (required for NREL/AFDC charger import).<br>
+      <b>OCM API Key:</b> Get your key at <a href="https://openchargemap.org/site/develop/api" target="_blank">openchargemap.org</a> (optional, for Open Charge Map integration).
+    </div>
+    <li>Scope: <b>{{ settings.charger_scope }}</b></li>
+    <li>State Filter: <b>{{ settings.charger_state_filter }}</b></li>
+    <li>Fetch Strategy: <b>{{ settings.charger_fetch_strategy }}</b></li>
+    <li>Page Size: <b>{{ settings.charger_page_size }}</b></li>
+    <li>Auto-Update: <b>{{ settings.charger_auto_update }}</b></li>
+    <li>Auto-Update Interval: <b>{{ settings.charger_auto_update_hours }}</b> h</li>
+    <li>Status: <b>{{ charger_status.status if charger_status else 'unknown' }}</b></li>
+    <li>Failure Class: <b>{{ charger_failure_class }}</b></li>
+    <li>Job Running: <b>{{ charger_job_running }}</b></li>
+  </ul>
+</div>
+
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Latest Charger Logs</h3>
+  <pre style="max-height:300px; overflow:auto; background:#222; color:#eee; padding:1em; border-radius:6px;">
+{{ charger_logs|default('No charger logs found.') }}
+  </pre>
+  <a href="{{ url_for('view_log', log_name='debug_chargers.log') }}" class="btn">View Full Charger Logs</a>
+</div>
+
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Latest Charger Sync Audit</h3>
+  <pre style="max-height:300px; overflow:auto; background:#222; color:#eee; padding:1em; border-radius:6px;">
+{{ charger_audit_logs|default('No charger audit logs found.') }}
+  </pre>
+  <a href="{{ url_for('view_log', log_name='charger_sync_audit.log') }}" class="btn">View Full Audit Log</a>
+</div>

@@ -1,0 +1,49 @@
+{
+  "environment": "development",
+  "port": 8443,
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "lightning",
+    "user": "CHANGE_ME_DB_USER",
+    "password": "CHANGE_ME_DB_PASSWORD"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_sql": false
+  },
+  "collector": {
+    "default_poll_interval_sec": 60,
+    "max_consecutive_failures": 5
+  },
+  "devloper": {
+    "enabled": false,
+    "ip_allowlist": [
+      "127.0.0.1",
+      "::1"
+    ]
+  },
+  "ssl": {
+    "enabled": true,
+    "cert": "/path/to/server.crt",
+    "key": "/path/to/server.key"
+  },
+  "ocm_api_key": "CHANGE_ME_OCM_KEY",  // Open Charge Map API key (optional, for OCM integration)
+  "external_id": {
+    "enabled": true,
+    "client_id": "CHANGE_ME_APP_ID",
+    "client_secret": "CHANGE_ME_CLIENT_SECRET",
+    "redirect_uri": "https://your-hostname/oidc/callback",
+    "scope": "openid profile email offline_access",
+    "authority": "https://yourtenant.ciamlogin.com/YOUR_TENANT_ID",
+    "metadata_url": "https://yourtenant.ciamlogin.com/YOUR_TENANT_ID/v2.0/.well-known/openid-configuration",
+    "allowed_tenants": [
+      "YOUR_TENANT_ID"
+    ],
+    "consent_authority": "https://login.microsoftonline.com",
+    "allowed_groups": [],
+    "allowed_group_names": [
+      "YOUR_ROLE_GUID"
+    ]
+  }
+}

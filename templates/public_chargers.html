@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+{% block title %}Public Chargers – MLLighting{% endblock %}
+{% block content %}
+<h1>Public Chargers</h1>
+<p class="muted">Summary of imported public charging data.</p>
+
+<div class="card">
+  <h2>Find Chargers</h2>
+  <form method="get" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:0.75rem; align-items:end;">
+    <div>
+      <label for="location">Location</label>
+      <input type="text" id="location" name="location" class="form-input" value="{{ filters.location }}"
+             placeholder="City, state, ZIP, station, address">
+    </div>
+    <div>
+      <label for="origin">Origin (for distance)</label>
+      <input type="text" id="origin" name="origin" class="form-input" value="{{ filters.origin }}"
+             placeholder="Denver, CO or ZIP">
+    </div>
+    <div>
+      <label for="radius_miles">Radius (miles)</label>
+      <input type="number" id="radius_miles" name="radius_miles" class="form-input" min="1" step="1"
+             value="{{ filters.radius_miles }}" placeholder="25">
+    </div>
+    <div>
+      <label for="network">Network</label>
+      <select id="network" name="network" class="form-select">
+        <option value="">Any network</option>
+        {% for net in network_options %}
+        <option value="{{ net.network_name }}" {% if filters.network == net.network_name %}selected{% endif %}>{{ net.network_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="min_kw">Minimum Speed (kW)</label>
+      <input type="number" id="min_kw" name="min_kw" class="form-input" min="0" step="1"
+             value="{{ filters.min_kw }}" placeholder="50">
+    </div>
+    <div>
+      <label for="limit">Rows</label>
+      <select id="limit" name="limit" class="form-select">
+        {% for n in [50, 100, 200, 500] %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="display:flex; gap:0.5rem;">
+      <button type="submit" class="btn">Search</button>
+      <a href="{{ url_for('public_chargers') }}" class="btn" style="text-decoration:none; text-align:center;">Reset</a>
+    </div>
+  </form>
+  <p class="muted" style="margin-top:0.5rem;">
+    Matched stations: {{ filtered_total }}{% if filtered_total > filters.limit %} (showing top {{ filters.limit }}){% endif %}
+  </p>
+  {% if origin_geo %}
+  <p class="muted" style="margin-top:0.25rem;">
+    Distance origin resolved to: {{ origin_geo.label }}
+  </p>
+  {% endif %}
+  <div id="chargers-map" style="height:420px; border:1px solid var(--border); border-radius:var(--radius); margin-bottom:0.75rem;"></div>
+  <div class="table-scroll" style="max-height:420px; overflow-y:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Station</th>
+          <th>Location</th>
+          <th>Network</th>
+          <th>SOA</th>
+          <th>Distance (mi)</th>
+          <th>Max kW</th>
+          <th>Connector Types</th>
+          <th>Charging Levels</th>
+          <th>Ports</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in filtered_stations %}
+        <tr>
+          <td>{{ row.station_name }}</td>
+          <td>{{ row.street_address }}<br>{{ row.city }}, {{ row.state }} {{ row.zip }}</td>
+          <td>{{ row.network_name }}</td>
+          <td>{{ row.source_authority or row.source or 'UNKNOWN' }}</td>
+          <td>{% if row.distance_miles is not none %}{{ '%.1f'|format(row.distance_miles) }}{% else %}--{% endif %}</td>
+          <td>{{ '%.1f'|format(row.max_power_kw) if row.max_power_kw is not none else '0.0' }}</td>
+          <td>{{ row.connector_types or 'UNKNOWN' }}</td>
+          <td>{{ row.charging_levels or 'UNKNOWN' }}</td>
+          <td>{{ row.connector_count }}</td>
+          <td>
+            <details>
+              <summary>All Stats</summary>
+              <div style="margin-top:0.35rem; font-size:0.85rem; line-height:1.45;">
+                <div><strong>NLR ID:</strong> {{ row.nlr_station_id }}</div>
+                <div><strong>Status:</strong> {{ row.status_code or 'UNKNOWN' }}</div>
+                <div><strong>Fuel Type:</strong> {{ row.fuel_type_code or 'UNKNOWN' }}</div>
+                <div><strong>Access:</strong> {{ row.access_code or 'UNKNOWN' }}</div>
+                <div><strong>Access Detail:</strong> {{ row.access_detail or 'N/A' }}</div>
+                <div><strong>Owner Type:</strong> {{ row.owner_type_code or 'N/A' }}</div>
+                <div><strong>Facility Type:</strong> {{ row.facility_type or 'N/A' }}</div>
+                <div><strong>Coordinates:</strong>
+                  {% if row.latitude is not none and row.longitude is not none %}
+                  {{ '%.6f'|format(row.latitude) }}, {{ '%.6f'|format(row.longitude) }}
+                  {% else %}
+                  N/A
+                  {% endif %}
+                </div>
+                <div><strong>Updated:</strong> {{ row.updated_at }}</div>
+              </div>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Stations</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.stations }}</p>
+  </div>
+  <div class="card">
+    <h2>Connectors</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.connectors }}</p>
+  </div>
+  <div class="card">
+    <h2>States Covered</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.states }}</p>
+  </div>
+  <div class="card">
+    <h2>Networks</h2>
+    <p style="font-size:1.6rem; font-weight:700; margin:0.25rem 0;">{{ totals.networks }}</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Latest Sync</h2>
+  {% if sync_status %}
+  <table>
+    <tbody>
+      <tr><th>Status</th><td>{{ sync_status.status }}</td></tr>
+      <tr><th>Type</th><td>{{ sync_status.sync_type }}</td></tr>
+      <tr><th>State Filter</th><td>{{ sync_status.state_filter }}</td></tr>
+      <tr><th>Started</th><td>{{ sync_status.started_at }}</td></tr>
+      <tr><th>Heartbeat</th><td>{{ sync_status.last_heartbeat_at or 'N/A' }}{% if sync_status.heartbeat_age_seconds is not none %} ({{ sync_status.heartbeat_age_seconds }}s ago){% endif %}</td></tr>
+      <tr><th>Completed</th><td>{{ sync_status.completed_at or 'In progress' }}</td></tr>
+      <tr><th>Imported</th><td>{{ sync_status.stations_imported or 0 }}</td></tr>
+      <tr><th>Updated</th><td>{{ sync_status.stations_updated or 0 }}</td></tr>
+      <tr><th>Errors</th><td>{{ sync_status.errors or 0 }}</td></tr>
+      {% if sync_status.status == 'failed' %}
+      <tr><th>Failure Class</th><td>{{ sync_status_failure_class }}</td></tr>
+      {% endif %}
+      <tr><th>Last Error</th><td>{{ sync_status.last_error or 'None' }}</td></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No sync runs yet.</p>
+  {% endif %}
+</div>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Stations By State (Present)</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>State</th><th>Stations</th></tr></thead>
+        <tbody>
+          {% for row in by_state %}
+          <tr><td>{{ row.state }}</td><td>{{ row.station_count }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>All States Coverage</h2>
+    <div class="table-scroll" style="max-height:420px; overflow-y:auto;">
+      <table>
+        <thead><tr><th>State</th><th>Stations</th></tr></thead>
+        <tbody>
+          {% for row in all_states_counts %}
+          <tr><td>{{ row.state }}</td><td>{{ row.station_count }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card-grid">
+  <div class="card">
+    <h2>Connector Types</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Connector</th><th>Connectors</th><th>Stations</th></tr></thead>
+        <tbody>
+          {% for row in connector_types %}
+          <tr>
+            <td>{{ row.connector_type }}</td>
+            <td>{{ row.connector_count }}</td>
+            <td>{{ row.station_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Charging Levels</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th>Connectors</th></tr></thead>
+        <tbody>
+          {% for row in charging_levels %}
+          <tr>
+            <td>{{ row.charging_level }}</td>
+            <td>{{ row.connector_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Top Networks</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Network</th><th>Stations</th></tr></thead>
+      <tbody>
+        {% for row in network_breakdown %}
+        <tr><td>{{ row.network_name }}</td><td>{{ row.station_count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Recent Sync Runs</h2>
+  {% if recent_runs %}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Type</th>
+          <th>State</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Heartbeat</th>
+          <th>Completed</th>
+          <th>Updated</th>
+          <th>Errors</th>
+          <th>Failure Class</th>
+          <th>Last Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in recent_runs %}
+        <tr>
+          <td>{{ run.id }}</td>
+          <td>{{ run.sync_type }}</td>
+          <td>{{ run.state_filter }}</td>
+          <td>{{ run.status }}</td>
+          <td>{{ run.started_at }}</td>
+          <td>{{ run.last_heartbeat_at or 'N/A' }}</td>
+          <td>{{ run.completed_at or 'In progress' }}</td>
+          <td>{{ run.stations_updated or 0 }}</td>
+          <td>{{ run.errors or 0 }}</td>
+          <td>{{ run.failure_class }}</td>
+          <td style="max-width:360px; word-break:break-word;">{{ run.last_error or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No sync history available.</p>
+  {% endif %}
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  (function () {
+    const points = {{ map_points | tojson }};
+    const origin = {{ origin_geo | tojson }};
+    const mapEl = document.getElementById("chargers-map");
+    if (!mapEl) return;
+
+    const map = L.map("chargers-map");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    const bounds = [];
+    for (const p of points) {
+      if (p.lat == null || p.lon == null) continue;
+      const marker = L.marker([p.lat, p.lon]).addTo(map);
+      const locationText = [p.city, p.state, p.zip].filter(Boolean).join(", ");
+      const distanceText = p.distance_miles == null ? "" : `<br>Distance: ${p.distance_miles.toFixed(1)} mi`;
+      marker.bindPopup(
+        `<strong>${p.name || "Station"}</strong><br>${locationText}<br>` +
+        `Network: ${p.network || "UNKNOWN"}<br>Max kW: ${(p.max_kw || 0).toFixed(1)}${distanceText}`
+      );
+      bounds.push([p.lat, p.lon]);
+    }
+
+    if (origin && origin.lat != null && origin.lon != null) {
+      const originMarker = L.circleMarker([origin.lat, origin.lon], {
+        radius: 7,
+        color: "#214a78",
+        fillColor: "#2d5f9a",
+        fillOpacity: 0.8,
+      }).addTo(map);
+      originMarker.bindPopup(`<strong>Origin</strong><br>${origin.label || ""}`);
+      bounds.push([origin.lat, origin.lon]);
+    }
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [24, 24] });
+    } else {
+      map.setView([39.5, -98.35], 4);
+    }
+  })();
+</script>
+{% endblock %}

@@ -9,12 +9,12 @@ PYTHON_CMD="${PYTHON_CMD:-python3}"
 
 DB_CONTAINER="${DB_CONTAINER:-lightning-db}"
 DB_VOLUME="${DB_VOLUME:-lightning_pgdata}"
-POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16}"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgis/postgis:16-3.4}"
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-lightning}"
-DB_USER="${DB_USER:-lightning}"
-DB_PASSWORD="${DB_PASSWORD:-lightningpass}"
+DB_USER="${DB_USER:-}"
+DB_PASSWORD="${DB_PASSWORD:-}"
 DB_WAIT_SECONDS="${DB_WAIT_SECONDS:-60}"
 
 PG_SHARED_BUFFERS="${PG_SHARED_BUFFERS:-512MB}"
@@ -24,6 +24,16 @@ PG_EFFECTIVE_CACHE_SIZE="${PG_EFFECTIVE_CACHE_SIZE:-1536MB}"
 PG_MAX_WAL_SIZE="${PG_MAX_WAL_SIZE:-2GB}"
 PG_MIN_WAL_SIZE="${PG_MIN_WAL_SIZE:-512MB}"
 PG_CHECKPOINT_COMPLETION_TARGET="${PG_CHECKPOINT_COMPLETION_TARGET:-0.9}"
+
+if [[ -z "${DB_USER}" ]]; then
+  echo "ERROR: DB_USER is required. Export DB_USER before running install." >&2
+  exit 1
+fi
+
+if [[ -z "${DB_PASSWORD}" ]]; then
+  echo "ERROR: DB_PASSWORD is required. Export DB_PASSWORD before running install." >&2
+  exit 1
+fi
 
 ensure_python_env() {
   if ! command -v "${PYTHON_CMD}" >/dev/null 2>&1; then

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Poller Control – Lightning{% endblock %}
+{% block title %}Poller Control – MLLighting{% endblock %}
 {% block content %}
 <h1>Poller Control</h1>
 
@@ -46,6 +46,9 @@
       <form method="post" style="display:inline">
         <input type="hidden" name="action" value="stop">
         <button type="submit" class="btn btn-danger" {% if not running %}disabled{% endif %}>Stop</button>
+      </form>
+      <form method="post" action="{{ url_for('poller_poll_now') }}" style="display:inline">
+        <button type="submit" class="btn btn-primary">Poll Now</button>
       </form>
     </div>
   </div>

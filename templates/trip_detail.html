@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+{% block title %}Trip Analysis - Baseline vs ML{% endblock %}
+{% block content %}
+<h1>Trip Analysis: {{ plan.source_name }} → {{ plan.destination_name }}</h1>
+
+<div class="container-fluid">
+  <!-- Top Summary Row - Side by Side Comparison -->
+  <div class="row mb-3">
+    <div class="col-md-6">
+      <div class="card border-primary">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">📊 Baseline Route (Statistics Only)</h5>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-6">
+              <small class="text-muted">Energy Needed</small>
+              <h4>{{ "%.1f"|format(plan.baseline_energy_needed_kwh) }} kWh</h4>
+            </div>
+            <div class="col-md-6">
+              <small class="text-muted">Method</small>
+              <h5>Distance × 0.28 kWh/km</h5>
+            </div>
+          </div>
+          <hr>
+          <div class="row">
+            <div class="col-md-6">
+              <small class="text-muted">Charging Stops</small>
+              <h4><span class="badge bg-warning text-dark">{{ plan.baseline_charging_stops|length }} Stop{% if plan.baseline_charging_stops|length != 1 %}s{% endif %}</span></h4>
+            </div>
+            <div class="col-md-6">
+              <small class="text-muted">Feasible</small>
+              <h4>
+                {% if plan.feasible %}
+                  <span class="badge bg-success">Yes</span>
+                {% else %}
+                  <span class="badge bg-danger">No</span>
+                {% endif %}
+              </h4>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card border-success">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0">🤖 ML Model Route (With Training Data)</h5>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-6">
+              <small class="text-muted">Energy Needed</small>
+              <h4>{{ "%.1f"|format(plan.ml_energy_needed_kwh if plan.ml_energy_needed_kwh > 0 else plan.baseline_energy_needed_kwh) }} kWh</h4>
+            </div>
+            <div class="col-md-6">
+              <small class="text-muted">Method</small>
+              <h5>ML Model Prediction</h5>
+            </div>
+          </div>
+          <hr>
+          <div class="row">
+            <div class="col-md-6">
+              <small class="text-muted">Charging Stops</small>
+              <h4><span class="badge bg-info">{{ plan.ml_charging_stops|length }} Stop{% if plan.ml_charging_stops|length != 1 %}s{% endif %}</span></h4>
+            </div>
+            <div class="col-md-6">
+              <small class="text-muted">Feasible</small>
+              <h4>
+                {% if plan.feasible %}
+                  <span class="badge bg-success">Yes</span>
+                {% else %}
+                  <span class="badge bg-danger">No</span>
+                {% endif %}
+              </h4>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Route Overview -->
+  <div class="row mb-3">
+    <div class="col-md-12">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">Trip Overview</h5>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-3">
+              <small class="text-muted">Total Distance</small>
+              {% if unit_system == 'imperial' %}
+              <h5>{{ "%.1f"|format(plan.total_distance_km * 0.621371) }} miles</h5>
+              {% else %}
+              <h5>{{ "%.1f"|format(plan.total_distance_km) }} km</h5>
+              {% endif %}
+            </div>
+            <div class="col-md-3">
+              <small class="text-muted">Duration</small>
+              <h5>{{ plan.estimated_duration_min }} minutes</h5>
+            </div>
+            <div class="col-md-3">
+              <small class="text-muted">Starting SOC</small>
+              <h5>{{ plan.start_soc_percent|int }}%</h5>
+            </div>
+            <div class="col-md-3">
+              <small class="text-muted">Energy Difference</small>
+              {% if plan.ml_energy_needed_kwh > 0 %}
+              <h5>
+                {{ "%.1f"|format(plan.ml_energy_needed_kwh - plan.baseline_energy_needed_kwh) }} kWh
+                <small>({{ "%.1f"|format((plan.ml_energy_needed_kwh - plan.baseline_energy_needed_kwh) / plan.baseline_energy_needed_kwh * 100) }}%)</small>
+              </h5>
+              {% else %}
+              <h5><small class="text-muted">ML N/A</small></h5>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Baseline Charging Stops Table -->
+  {% if plan.baseline_charging_stops or plan.ml_charging_stops %}
+  <div class="row mb-3">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">📍 Baseline Charging Stops ({{ plan.baseline_charging_stops|length }})</h5>
+        </div>
+        <div class="card-body">
+          {% if plan.baseline_charging_stops %}
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>Stop</th>
+                <th>Distance</th>
+                <th>Arrive</th>
+                <th>Charge To</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for stop in plan.baseline_charging_stops %}
+              <tr>
+                <td><strong>Charge Point {{ loop.index }}</strong></td>
+                <td>
+                  {% if unit_system == 'imperial' %}
+                    {{ "%.1f"|format(stop.distance_km_from_start * 0.621371) }} mi
+                  {% else %}
+                    {{ "%.1f"|format(stop.distance_km_from_start) }} km
+                  {% endif %}
+                </td>
+                <td>{{ stop.arrival_soc_percent|int }}%</td>
+                <td>{{ stop.charge_to_soc_percent|int }}%</td>
+                <td>{{ stop.charge_time_min }}m</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="text-success"><strong>No charging stops required!</strong> Direct trip feasible.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ML Charging Stops Table -->
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0">📍 ML Model Charging Stops ({{ plan.ml_charging_stops|length }})</h5>
+        </div>
+        <div class="card-body">
+          {% if plan.ml_charging_stops %}
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>Stop</th>
+                <th>Distance</th>
+                <th>Arrive</th>
+                <th>Charge To</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for stop in plan.ml_charging_stops %}
+              <tr>
+                <td><strong>Charge Point {{ loop.index }}</strong></td>
+                <td>
+                  {% if unit_system == 'imperial' %}
+                    {{ "%.1f"|format(stop.distance_km_from_start * 0.621371) }} mi
+                  {% else %}
+                    {{ "%.1f"|format(stop.distance_km_from_start) }} km
+                  {% endif %}
+                </td>
+                <td>{{ stop.arrival_soc_percent|int }}%</td>
+                <td>{{ stop.charge_to_soc_percent|int }}%</td>
+                <td>{{ stop.charge_time_min }}m</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="text-success"><strong>No charging stops required!</strong> ML model predicts direct trip is feasible.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Route Steps Comparison -->
+  <div class="row mb-3">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">📊 Baseline Route - Step by Step</h5>
+        </div>
+        <div class="card-body" style="max-height: 700px; overflow-y: auto;">
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Distance</th>
+                <th>Battery SOC</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% set cumulative_dist = 0 %}
+              {% for step in plan.baseline_route_steps %}
+              {% set segment_dist = step.get('distance_km', 0) %}
+              {% set cumulative_dist = cumulative_dist + segment_dist %}
+              {% set soc = step.get('step_soc_percent', 100) %}
+              {% set is_charging_point = false %}
+              {% for stop in plan.baseline_charging_stops %}
+                {% if stop.distance_km_from_start >= cumulative_dist - segment_dist and stop.distance_km_from_start <= cumulative_dist %}
+                  {% set is_charging_point = true %}
+                {% endif %}
+              {% endfor %}
+              <tr {% if is_charging_point %}class="table-warning"{% elif soc < 10 %}class="table-danger"{% endif %}>
+                <td><strong>{{ loop.index }}</strong></td>
+                <td>
+                  {% if unit_system == 'imperial' %}
+                    {{ "%.1f"|format(cumulative_dist * 0.621371) }} mi
+                  {% else %}
+                    {{ "%.1f"|format(cumulative_dist) }} km
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="progress" style="height: 20px;">
+                    <div class="progress-bar {% if soc < 10 %}bg-danger{% elif soc < 20 %}bg-warning{% endif %}" role="progressbar" 
+                         style="width: {{ soc }}%">
+                      {{ soc|int }}%
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  {% if is_charging_point %}
+                    <span class="badge bg-warning text-dark">⚡ CHARGE HERE</span>
+                  {% elif soc < 10 %}
+                    <span class="badge bg-danger">⚠️ CRITICAL</span>
+                  {% elif soc < 20 %}
+                    <span class="badge bg-warning">⚠️ LOW</span>
+                  {% else %}
+                    <span class="badge bg-success">✓ OK</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0">🤖 ML Model Route - Step by Step</h5>
+        </div>
+        <div class="card-body" style="max-height: 700px; overflow-y: auto;">
+          <table class="table table-sm table-striped">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Distance</th>
+                <th>Battery SOC</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% set cumulative_dist = 0 %}
+              {% for step in plan.ml_route_steps %}
+              {% set segment_dist = step.get('distance_km', 0) %}
+              {% set cumulative_dist = cumulative_dist + segment_dist %}
+              {% set soc = step.get('step_soc_percent', 100) %}
+              {% set is_charging_point = false %}
+              {% for stop in plan.ml_charging_stops %}
+                {% if stop.distance_km_from_start >= cumulative_dist - segment_dist and stop.distance_km_from_start <= cumulative_dist %}
+                  {% set is_charging_point = true %}
+                {% endif %}
+              {% endfor %}
+              <tr {% if is_charging_point %}class="table-info"{% elif soc < 10 %}class="table-danger"{% endif %}>
+                <td><strong>{{ loop.index }}</strong></td>
+                <td>
+                  {% if unit_system == 'imperial' %}
+                    {{ "%.1f"|format(cumulative_dist * 0.621371) }} mi
+                  {% else %}
+                    {{ "%.1f"|format(cumulative_dist) }} km
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="progress" style="height: 20px;">
+                    <div class="progress-bar bg-success {% if soc < 10 %}bg-danger{% elif soc < 20 %}bg-warning{% endif %}" role="progressbar" 
+                         style="width: {{ soc }}%">
+                      {{ soc|int }}%
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  {% if is_charging_point %}
+                    <span class="badge bg-info">⚡ CHARGE HERE</span>
+                  {% elif soc < 10 %}
+                    <span class="badge bg-danger">⚠️ CRITICAL</span>
+                  {% elif soc < 20 %}
+                    <span class="badge bg-warning">⚠️ LOW</span>
+                  {% else %}
+                    <span class="badge bg-success">✓ OK</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Training Data Status -->
+  <div class="row">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">📈 ML Model Quality</h5>
+        </div>
+        <div class="card-body">
+          <ul class="mb-0">
+            <li><strong>Training Drives:</strong> {{ ml_retrain_status.schema_num_training_drives|default('Unknown') }}</li>
+            <li><strong>Last Trained:</strong> {{ ml_retrain_status.schema_training_date|default('Never') }}</li>
+            <li><strong>Model Status:</strong> {{ ml_retrain_status.status }}</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">💡 Analysis</h5>
+        </div>
+        <div class="card-body">
+          {% if plan.baseline_charging_stops|length > plan.ml_charging_stops|length %}
+          <div class="alert alert-success mb-0">
+            <strong>✓ ML Optimized</strong><br>
+            The ML model predicts {{ plan.baseline_charging_stops|length - plan.ml_charging_stops|length }} fewer charging stop(s) 
+            than statistics suggest.
+          </div>
+          {% elif plan.baseline_charging_stops|length < plan.ml_charging_stops|length %}
+          <div class="alert alert-warning mb-0">
+            <strong>⚠️ ML Conservative</strong><br>
+            The ML model predicts {{ plan.ml_charging_stops|length - plan.baseline_charging_stops|length }} more charging stop(s) 
+            than statistics suggest. This may indicate weather/terrain factors.
+          </div>
+          {% else %}
+          <div class="alert alert-info mb-0">
+            <strong>ℹ️ Agreement</strong><br>
+            Both estimates agree on {{ plan.baseline_charging_stops|length }} charging stop(s) needed.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<br>
+<a href="{{ url_for('trip_planner') }}" class="btn btn-secondary">← Back to Trip Planner</a>
+{% endblock %}

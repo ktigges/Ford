@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Profile – MLLighting{% endblock %}
+{% block content %}
+<h1>Profile</h1>
+<p class="muted">Current signed-in local account and session policy.</p>
+
+<div class="card form-card">
+  <h2>Account</h2>
+  <table>
+    <tr>
+      <th style="width: 220px;">User ID</th>
+      <td>{{ current_user.id }}</td>
+    </tr>
+    <tr>
+      <th>Username</th>
+      <td>{{ current_user.username }}</td>
+    </tr>
+    <tr>
+      <th>Role</th>
+      <td>{% if current_user.is_admin %}Administrator{% else %}Standard User{% endif %}</td>
+    </tr>
+  </table>
+</div>
+
+<div class="card form-card">
+  <h2>Session Security</h2>
+  <table>
+    <tr>
+      <th style="width: 220px;">Idle Timeout</th>
+      <td>{{ idle_timeout_minutes }} minutes</td>
+    </tr>
+    <tr>
+      <th>Absolute Session Lifetime</th>
+      <td>{{ absolute_timeout_hours }} hours</td>
+    </tr>
+  </table>
+  <p class="muted" style="margin-top: 0.75rem; margin-bottom: 0;">
+    Update inactivity timeout from Settings → General Options.
+  </p>
+</div>
+{% endblock %}

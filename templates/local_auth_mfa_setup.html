@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MFA Setup</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main style="max-width: 680px; margin: 40px auto;">
+    <h1>Set Up MFA</h1>
+    <p>MFA is required. Add this secret to your authenticator app, then enter a 6-digit code.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <p><strong>Secret:</strong> <code>{{ secret }}</code></p>
+    <p><strong>Provisioning URI:</strong></p>
+    <textarea rows="4" style="width: 100%;" readonly>{{ otp_uri }}</textarea>
+
+    {% if qr_data_uri %}
+    <p><strong>Scan QR Code:</strong></p>
+    <p><img src="{{ qr_data_uri }}" alt="MFA QR Code" width="220" height="220"></p>
+    {% endif %}
+
+    <form method="post" style="margin-top: 16px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Authenticator Code</label>
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required>
+      <button type="submit">Verify and Sign In</button>
+    </form>
+  </main>
+</body>
+</html>

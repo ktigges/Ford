@@ -1,0 +1,92 @@
+
+<form method="post" action="{{ url_for('settings') }}" class="card form-card" style="margin-bottom:2rem;">
+  <input type="hidden" name="return_to" value="settings_options_page">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <h2 style="margin-bottom:1.5rem;">General Options</h2>
+  <div style="margin-bottom:1rem;">
+    <label>Display Units:<br>
+      <select name="units">
+        <option value="imperial" {% if settings.units == 'imperial' %}selected{% endif %}>Imperial (mi, °F)</option>
+        <option value="metric" {% if settings.units == 'metric' %}selected{% endif %}>Metric (km, °C)</option>
+      </select>
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Timezone:<br>
+      <input type="text" name="timezone" value="{{ settings.timezone }}" placeholder="America/Chicago">
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Log Level:<br>
+      <select name="log_level">
+        <option value="DEBUG" {% if settings.log_level == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+        <option value="INFO" {% if settings.log_level == 'INFO' %}selected{% endif %}>INFO</option>
+        <option value="WARNING" {% if settings.log_level == 'WARNING' %}selected{% endif %}>WARNING</option>
+        <option value="ERROR" {% if settings.log_level == 'ERROR' %}selected{% endif %}>ERROR</option>
+      </select>
+    </label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label><input type="checkbox" name="conservative_polling" {% if settings.conservative_polling == 'on' %}checked{% endif %}> Conservative Polling</label>
+    <label style="margin-left:2em;"><input type="checkbox" name="autostart_poller" {% if settings.autostart_poller == 'on' %}checked{% endif %}> Autostart Poller</label>
+    <label style="margin-left:2em;"><input type="checkbox" name="developing" {% if settings.developing == 'on' %}checked{% endif %}> Developing Mode</label>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Startup Timeout (seconds):
+      <input type="number" name="startup_delay_seconds" value="{{ settings.startup_delay_seconds }}" min="0" max="300">
+    </label>
+    <small style="display:block; color:#666; margin-top:0.35rem;">Used at app startup before UI/poller become available. Ignored when Developing Mode is enabled.</small>
+    <small style="display:block; color:#666; margin-top:0.35rem;">Current behavior: {% if settings.developing == 'on' %}Developer Mode is ON, startup timeout is bypassed.{% else %}Startup timeout applies for {{ settings.startup_delay_seconds }} seconds.{% endif %}</small>
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label>Auto Logout on Inactivity (minutes):
+      <input type="number" name="local_auth_idle_timeout_minutes" value="{{ settings.local_auth_idle_timeout_minutes }}" min="1" max="1440">
+    </label>
+    <small style="display:block; color:#666; margin-top:0.35rem;">If no activity occurs for this duration, the current user session is signed out automatically.</small>
+  </div>
+  <fieldset style="margin-bottom:1.5rem; padding:1em; border:1px solid #ccc; border-radius:6px;">
+    <legend><b>Polling Intervals (seconds)</b></legend>
+    <div style="margin-bottom:1rem;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Ignition Off</b>
+        <input type="number" name="poll_interval_off" value="{{ settings.poll_interval_off }}" min="10" max="3600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle when parked and off (slower to save battery)</small>
+    </div>
+    <div style="margin-bottom:1rem;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Ignition On</b>
+        <input type="number" name="poll_interval_on" value="{{ settings.poll_interval_on }}" min="10" max="3600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle when turned on but not moving</small>
+    </div>
+    <div style="margin-bottom:1rem;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Moving</b>
+        <input type="number" name="poll_interval_moving" value="{{ settings.poll_interval_moving }}" min="5" max="600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle while driving (highest frequency for real-time updates)</small>
+    </div>
+    <div style="margin-bottom:0;">
+      <label style="display:block; margin-bottom:0.3rem;"><b>Charging</b>
+        <input type="number" name="poll_interval_charging" value="{{ settings.poll_interval_charging }}" min="10" max="3600" style="margin-left:1rem;">
+      </label>
+      <small style="color:#666; margin-left:1rem;">How often to check vehicle while charging (frequent updates for charging progress)</small>
+    </div>
+  </fieldset>
+  <button type="submit" name="action" value="save_settings">Save General Options</button>
+</form>
+
+<div class="card" style="margin-bottom:2rem;">
+  <h3>Debug / Current Values</h3>
+  <ul style="margin-bottom:0;">
+    <li>Units: <b>{{ settings.units }}</b></li>
+    <li>Timezone: <b>{{ settings.timezone }}</b></li>
+    <li>Log Level: <b>{{ settings.log_level }}</b></li>
+    <li>Conservative Polling: <b>{{ settings.conservative_polling }}</b></li>
+    <li>Autostart Poller: <b>{{ settings.autostart_poller }}</b></li>
+    <li>Developing Mode: <b>{{ settings.developing }}</b></li>
+    <li>Auth Idle Timeout: <b>{{ settings.local_auth_idle_timeout_minutes }}</b> min</li>
+    <li>Polling Off: <b>{{ settings.poll_interval_off }}</b> sec</li>
+    <li>Polling On: <b>{{ settings.poll_interval_on }}</b> sec</li>
+    <li>Polling Moving: <b>{{ settings.poll_interval_moving }}</b> sec</li>
+    <li>Polling Charging: <b>{{ settings.poll_interval_charging }}</b> sec</li>
+  </ul>
+</div>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Drive {{ drive.drive_uuid|string|truncate(8, True, "") }} – Lightning{% endblock %}
+{% block title %}Drive {{ drive.drive_uuid|string|truncate(8, True, "") }} – MLLighting{% endblock %}
 {% block content %}
 <h1>Drive {{ drive.drive_uuid }}</h1>
 <p class="muted">Times are shown in {{ display_timezone }}.</p>
@@ -103,6 +103,38 @@
     <div class="drive-kpi">
       <div class="drive-kpi-label">Points</div>
       <div class="drive-kpi-value">{{ points|length }}</div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Weather Temp</div>
+      <div class="drive-kpi-value">
+        {% if drive.weather_temp_c is not none %}
+          {{ convert(drive.weather_temp_c, 'weather_temp_c')|round(1) }} {{ ulabel('temperature') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Wind Speed</div>
+      <div class="drive-kpi-value">
+        {% if drive.wind_speed_avg_kmh is not none %}
+          {{ drive.wind_speed_avg_kmh|round(1) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Headwind</div>
+      <div class="drive-kpi-value">
+        {% if drive.headwind_component_kmh is not none %}
+          {{ drive.headwind_component_kmh|round(1) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
+    </div>
+    <div class="drive-kpi">
+      <div class="drive-kpi-label">Tailwind</div>
+      <div class="drive-kpi-value">
+        {% if drive.tailwind_component_kmh is not none %}
+          {{ drive.tailwind_component_kmh|round(1) }} {{ ulabel('speed') }}
+        {% else %}–{% endif %}
+      </div>
     </div>
   </div>
 </div>

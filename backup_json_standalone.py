@@ -1,11 +1,9 @@
-"""
-Standalone script to export all tables to a portable JSON backup for Ford Lightning DB.
+"""Ford Lightning source file.
 
-- Exports all tables (including credentials, decrypted for portability)
-- Output file is placed in backups/ directory as lightning_backup_<timestamp>.json
-- Usage: python backup_json_standalone.py
-
-Author: Copilot
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import os

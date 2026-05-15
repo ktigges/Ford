@@ -1,21 +1,76 @@
-"""Flask application for Ford Lightning telemetry dashboard.
+"""Lightning - Ford EV Telemetry & Trip Planning Application
+Version 0.7
 
-Serves the web UI for vehicle state monitoring, OAuth configuration,
-poller control, database browsing, settings, and vehicle management.
+Main Flask application for vehicle telemetry, trip planning, and energy analysis.
+Contains app factory, route registration, scheduler coordination, background jobs,
+and settings persistence.
 
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.6.0
-Date:        2026-05-08
+DISCLAIMER & LEGAL NOTICES:
+===========================
+
+1. THIRD-PARTY API USAGE
+   This application uses the Ford Connected Vehicle API to access vehicle data.
+   This is an UNOFFICIAL application not endorsed by, affiliated with, or 
+   supported by Ford Motor Company.
+
+2. NO LIABILITY FOR API RESTRICTIONS
+   The developer is NOT responsible for:
+   - Ford API rate limits, throttling, or access revocation
+   - Changes to Ford API functionality or endpoints
+   - Data availability, accuracy, or format changes
+   - Service interruptions or downtime
+   - Your vehicle's connection to Ford servers
+   
+   Use of this application is at your own risk. The Ford API is subject to
+   Ford's Terms of Service and may change or be discontinued at any time.
+
+3. NO WARRANTY
+   This software is provided "as-is" without warranty of any kind, express
+   or implied, including warranties of fitness for a particular purpose.
+
+4. USER RESPONSIBILITY
+   You are solely responsible for:
+   - Obtaining proper credentials to use the Ford API
+   - Complying with Ford's Terms of Service and API usage policies
+   - Monitoring your own vehicle's telemetry and state
+   - Your vehicle's charging schedule and route planning decisions
+   
+5. NO AFFILIATION WITH FORD
+   Ford, F-150 Lightning, and related trademarks are property of Ford Motor
+   Company. This application is not an official Ford product.
+
+6. DATA PRIVACY
+   This application may collect and store vehicle telemetry data. Ensure you
+   understand what data is being collected and stored locally.
+
+For complete terms, see README.md
+
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
 """
 
 import logging
+import glob
 import os
+import re
+import ipaddress
+import subprocess
 import sys
+import threading
+import json
+import time
+import hmac
+import secrets
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Flask, redirect, render_template, request, url_for, flash, send_file
+from cachelib import SimpleCache
+from flask import Flask, redirect, render_template, request, url_for, flash, send_file, jsonify, session
+from flask_session import Session
+import requests
 from werkzeug.utils import secure_filename
 
 import config
@@ -25,6 +80,11 @@ import poller
 import units
 import backup
 import crypto
+import local_auth
+import nlr_chargers
+import ocm_chargers
+import trip_planner as tp_service
+import energy_model
 
 # ── Logging setup ──────────────────────────────────────────────────
 
@@ -74,6 +134,11 @@ def _setup_logging() -> None:
         "oauth": "debug_oauth.log",
         "ford_api": "debug_api.log",
         "poller": "debug_poller.log",
+        "nlr_chargers": "debug_chargers.log",
+        "ocm_chargers": "debug_chargers.log",
+        "nlr_api": "debug_nlr_api.log",
+        "local_auth": "debug_local_auth.log",
+        "settings": "debug_settings.log",
     }
     for logger_name, filename in debug_files.items():
         fh = logging.FileHandler(os.path.join(log_dir, filename))
@@ -119,110 +184,696 @@ def get_log_level() -> str:
     return config.logging_config().get("level", "INFO").upper()
 
 
+# ── Scheduler/thread helpers (must be defined before create_app) ──
+
+
+# (Repeat this pattern for _ml_retrain_scheduler helpers: move them above create_app)
+
+# ...existing code for _ml_retrain_scheduler helpers...
+
 # ── App factory ────────────────────────────────────────────────────
 
-def create_app() -> Flask:
+
+def create_app():
+    """Flask application factory."""
+    app = Flask(__name__)
     config.load()
+    secret_key = (os.environ.get("LIGHTNING_SECRET_KEY") or "").strip()
+    if not secret_key:
+        raise RuntimeError(
+            "LIGHTNING_SECRET_KEY environment variable must be set. "
+            "Generate a secure key: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+        )
+    app.config["SECRET_KEY"] = secret_key
+    app.secret_key = secret_key
+
+    # Server-side session store keeps auth tokens off browser cookies.
+    # Default to in-memory session storage to avoid persisting auth state on disk.
+    app.config["SESSION_TYPE"] = os.environ.get("LIGHTNING_SESSION_TYPE", "cachelib").strip() or "cachelib"
+    if app.config["SESSION_TYPE"] == "filesystem":
+        session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".flask_session")
+        os.makedirs(session_dir, exist_ok=True)
+        app.config["SESSION_FILE_DIR"] = session_dir
+        app.config["SESSION_FILE_THRESHOLD"] = int(os.environ.get("LIGHTNING_SESSION_FILE_THRESHOLD", "2000"))
+    elif app.config["SESSION_TYPE"] == "cachelib":
+        app.config["SESSION_CACHELIB"] = SimpleCache(default_timeout=60 * 60 * 8)
+
+    app.config["SESSION_USE_SIGNER"] = True
+    app.config["SESSION_PERMANENT"] = False
+    app.config["SESSION_COOKIE_NAME"] = "lightning_session"
+
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    session_cookie_secure = (
+        os.environ.get("LIGHTNING_SESSION_COOKIE_SECURE", "1") or "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    app.config["SESSION_COOKIE_SECURE"] = session_cookie_secure
+    app.config["REQUIRE_HTTPS_SENSITIVE"] = (
+        (os.environ.get("LIGHTNING_REQUIRE_HTTPS_SENSITIVE", "1") or "1").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    app.config["LOCAL_AUTH_STORE_CLIENT_META"] = (
+        (os.environ.get("LIGHTNING_LOCAL_AUTH_STORE_CLIENT_META", "0") or "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    app.config["LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS"] = int(
+        os.environ.get("LIGHTNING_LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", "8") or "8"
+    )
+    app.config["LOCAL_AUTH_IDLE_TIMEOUT_MINUTES"] = int(
+        os.environ.get("LIGHTNING_LOCAL_AUTH_IDLE_TIMEOUT_MINUTES", "30") or "30"
+    )
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
+        hours=max(1, app.config["LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS"])
+    )
+    Session(app)
+    # Stamp build metadata once so templates can show the active build.
+    from datetime import datetime as _dt
+    app.config["APP_VERSION"] = "0.8.6"
+    app.config["APP_BUILD_TIME"] = _dt.now().strftime("%Y-%m-%d %H:%M")
     _setup_logging()
-
     log = logging.getLogger(__name__)
-    log.info("Starting Lightning app (env=%s)", config.environment())
+    log.info("Starting MLLighting app (env=%s)", config.environment())
+    app.config["LOCAL_AUTH_ENABLED"] = True
 
-    # Attempt database connection – enter setup mode if unavailable
+    # Initialize DB pool at startup so normal routes don't fall into setup mode.
     try:
         db.init_pool()
-        # Restore saved log level from app_config if available
-        try:
-            row = db.fetch_one("SELECT value FROM app_config WHERE key = 'log_level'")
-            if row:
-                set_log_level(row["value"])
-        except Exception:
-            pass  # table may not exist yet
-
-        # Migrate: ensure all client_secret values are encrypted with this host's key.
-        # After a backup/restore the ciphertext may be from a different host's key,
-        # so we try to decrypt — if that fails, the value is either plaintext or
-        # foreign ciphertext. Either way we need to flag it.
-        try:
-            from cryptography.fernet import InvalidToken
-            creds = db.fetch_all("SELECT id, client_secret FROM oauth_credentials WHERE client_secret IS NOT NULL")
-            for cred in creds:
-                secret = cred["client_secret"]
-                if not secret:
-                    continue
-
-                # Try decrypting with our key
-                try:
-                    crypto._get_fernet().decrypt(secret.encode("utf-8"))
-                    # Success — already encrypted with our key, nothing to do
-                except (InvalidToken, Exception):
-                    # Not encrypted with our key. Could be:
-                    #  a) plaintext secret → encrypt it
-                    #  b) ciphertext from another host's key → unusable, clear it
-                    if secret.startswith("gAAAAA"):
-                        # Foreign Fernet token — can't recover the original secret
-                        db.execute(
-                            "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
-                            ("", cred["id"]),
-                        )
-                        log.warning(
-                            "client_secret for cred id=%s was encrypted with a different key "
-                            "and cannot be decrypted. It has been cleared — please re-enter "
-                            "your client_secret via OAuth Config.", cred["id"],
-                        )
-                    else:
-                        # Plaintext — encrypt it
-                        encrypted = crypto.encrypt(secret)
-                        db.execute(
-                            "UPDATE oauth_credentials SET client_secret = %s WHERE id = %s",
-                            (encrypted, cred["id"]),
-                        )
-                        log.info("Migrated client_secret to encrypted form (cred id=%s)", cred["id"])
-        except Exception:
-            pass  # table may not exist yet
-
     except Exception as exc:
-        log.warning("Database unavailable at startup: %s", exc)
-        log.info("Entering setup mode – configure the database via the web UI")
+        log.warning("Database pool init failed at startup: %s", exc)
 
-    app = Flask(__name__)
-    app.secret_key = os.urandom(32)
-    app.config["APP_VERSION"] = "0.6.0"
-    app.config["APP_BUILD_TIME"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    app.config["STARTUP_DB_NOTICE"] = None
-
-    # ── Settings helper (reads from app_config table) ──────────────
-
-    def _default_timezone_name() -> str:
-        """Best-effort local timezone name, falling back to UTC."""
-        local_tz = datetime.now().astimezone().tzinfo
-        tz_key = getattr(local_tz, "key", None)
-        if tz_key:
-            return tz_key
-        tz_env = os.environ.get("TZ", "").strip()
-        if tz_env:
-            return tz_env
-        return "UTC"
+    if db.is_available():
+        try:
+            local_auth.ensure_schema()
+        except Exception as exc:
+            log.error("Local auth schema init failed: %s", exc)
 
     _SETTINGS_DEFAULTS = {
         "units": "imperial",
-        "timezone": _default_timezone_name(),
+        "timezone": "UTC",
+        "log_level": "INFO",
+        "local_auth_idle_timeout_minutes": "30",
+        "conservative_polling": "off",
+        "autostart_poller": "off",
+        "developing": "off",
+        "startup_delay_seconds": "30",
         "poll_interval_off": "120",
         "poll_interval_on": "60",
         "poll_interval_moving": "15",
         "poll_interval_charging": "60",
-        "conservative_polling": "off",
-        "autostart_poller": "off",
-        "developing": "off",  # disables startup delay if 'on'
+        "charger_scope": "all_us",
+        "charger_state_filter": "",
+        "charger_fetch_strategy": "all_then_200",
+        "charger_page_size": "200",
+        "charger_auto_update": "off",
+        "charger_auto_update_hours": "24",
+        "ml_retrain_schedule_enabled": "off",
+        "ml_retrain_schedule_hours": "24",
+        "ml_retrain_after_x_drives_enabled": "on",
+        "ml_retrain_after_x_drives": "10",
+        "backup_schedule_enabled": "off",
+        "backup_schedule_hours": "24",
+        "backup_last_completed_at": "",
+        "backup_last_error": "",
     }
 
-    # Safety limits for polling intervals (seconds)
     _POLL_LIMITS = {
-        "poll_interval_off":      {"min": 60, "max": 3600},
-        "poll_interval_on":       {"min": 60, "max": 3600},
-        "poll_interval_moving":   {"min": 15, "max": 3600},
+        "poll_interval_off": {"min": 60, "max": 3600},
+        "poll_interval_on": {"min": 60, "max": 3600},
+        "poll_interval_moving": {"min": 15, "max": 3600},
         "poll_interval_charging": {"min": 60, "max": 3600},
     }
+
+    _charger_import_guard = threading.Lock()
+    _charger_import_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _charger_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _charger_scheduler_stop_event = threading.Event()
+
+    _ml_retrain_guard = threading.Lock()
+    _ml_retrain_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _ml_retrain_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _ml_retrain_scheduler_stop_event = threading.Event()
+
+    _backup_scheduler_thread: dict[str, threading.Thread | None] = {"thread": None}
+    _backup_scheduler_stop_event = threading.Event()
+
+    # Keep large trip plans server-side and store only a small key in cookie session.
+    _trip_plan_cache_lock = threading.Lock()
+    _trip_plan_cache: dict[str, dict] = {}
+    _trip_plan_cache_order: list[str] = []
+    _TRIP_PLAN_CACHE_MAX = 64
+
+    def _store_trip_plan_for_session(plan_dict: dict) -> None:
+        key = str(uuid4())
+        with _trip_plan_cache_lock:
+            _trip_plan_cache[key] = plan_dict
+            _trip_plan_cache_order.append(key)
+            while len(_trip_plan_cache_order) > _TRIP_PLAN_CACHE_MAX:
+                stale = _trip_plan_cache_order.pop(0)
+                _trip_plan_cache.pop(stale, None)
+        session["last_trip_plan_key"] = key
+        session.pop("last_trip_plan", None)
+
+    def _get_trip_plan_for_session() -> dict | None:
+        key = session.get("last_trip_plan_key")
+        if key:
+            with _trip_plan_cache_lock:
+                cached = _trip_plan_cache.get(str(key))
+            if isinstance(cached, dict):
+                return cached
+
+        # Backward compatibility for any previously stored session payload.
+        legacy = session.get("last_trip_plan")
+        if isinstance(legacy, dict):
+            return legacy
+        return None
+
+
+
+    def _run_charger_import_background(state_for_import: str | None, fetch_strategy: str, page_size: int) -> None:
+        try:
+            log.info(
+                "Background charger import started (state=%s, strategy=%s, page_size=%s)",
+                state_for_import or "all",
+                fetch_strategy,
+                page_size,
+            )
+            result = nlr_chargers.import_ev_stations_with_strategy(
+                state=state_for_import,
+                strategy=fetch_strategy,
+                page_size=page_size,
+            )
+            log.info(
+                "Background charger import completed (sync_run_id=%s, mode=%s, processed=%s, errors=%s)",
+                result.get("sync_run_id"),
+                result.get("fetch_mode_used", "paged"),
+                result.get("processed", result.get("updated", 0)),
+                result.get("errors", 0),
+            )
+        except Exception as exc:
+            log.exception(
+                "Background charger import failed (state=%s, strategy=%s, page_size=%s): %s",
+                state_for_import or "all",
+                fetch_strategy,
+                page_size,
+                exc,
+            )
+        finally:
+            with _charger_import_guard:
+                _charger_import_thread["thread"] = None
+
+    def _charger_import_is_running() -> bool:
+        t = _charger_import_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _charger_import_db_in_progress() -> bool:
+        """Return True if the DB has an active in-progress charger sync run."""
+        try:
+            if not _table_exists("ev_sync_runs"):
+                return False
+            row = db.fetch_one(
+                """
+                SELECT 1 AS active
+                FROM ev_sync_runs
+                WHERE status = 'in_progress' AND completed_at IS NULL
+                LIMIT 1
+                """
+            )
+            return bool(row)
+        except Exception as exc:
+            log.warning("Failed checking in-progress charger runs: %s", exc)
+            return False
+
+    def _start_charger_import_job(
+        state_for_import: str | None,
+        fetch_strategy: str,
+        page_size: int,
+        trigger: str,
+    ) -> tuple[bool, str]:
+        """Start a charger import background thread if nothing else is already running."""
+        with _charger_import_guard:
+            if _charger_import_is_running():
+                return False, "thread_running"
+
+            try:
+                stale_count = nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
+                if stale_count:
+                    log.warning("Detected and closed %d stale charger import run(s)", stale_count)
+            except Exception as exc:
+                log.warning("Failed stale-run cleanup before charger import start: %s", exc)
+
+            if _charger_import_db_in_progress():
+                return False, "db_run_in_progress"
+
+            t = threading.Thread(
+                target=_run_charger_import_background,
+                args=(state_for_import, fetch_strategy, page_size),
+                name="charger-import-job",
+                daemon=True,
+            )
+            _charger_import_thread["thread"] = t
+            t.start()
+
+        log.info(
+            "Charger import submitted (trigger=%s, state=%s, strategy=%s, page_size=%s)",
+            trigger,
+            state_for_import or "all",
+            fetch_strategy,
+            page_size,
+        )
+        return True, "started"
+
+    def _charger_scheduler_is_running() -> bool:
+        t = _charger_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _int_setting(key: str, default: int, min_value: int, max_value: int) -> int:
+        """Read a numeric app setting with min/max clamping and fallback."""
+        try:
+            value = int((_get_setting(key) or str(default)).strip())
+        except (ValueError, TypeError, AttributeError):
+            value = default
+        return max(min_value, min(max_value, value))
+
+    def _mask_setting_value_for_log(key: str, value: str) -> str:
+        """Return a redacted value for sensitive settings in logs."""
+        if "api_key" not in key:
+            return value
+        raw = str(value or "")
+        if len(raw) <= 8:
+            return "*" * len(raw)
+        return raw[:3] + ("*" * (len(raw) - 6)) + raw[-3:]
+
+    def _run_charger_auto_sync_loop() -> None:
+        """Periodic charger sync scheduler loop."""
+        while not _charger_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _charger_scheduler_stop_event.wait(60)
+                    continue
+
+                enabled = (_get_setting("charger_auto_update") or "off").strip().lower() == "on"
+                if not enabled:
+                    _charger_scheduler_stop_event.wait(60)
+                    continue
+
+                interval_hours = _int_setting("charger_auto_update_hours", 24, 1, 168)
+
+                if _charger_import_is_running() or _charger_import_db_in_progress():
+                    _charger_scheduler_stop_event.wait(60)
+                    continue
+
+                last_completed = None
+                if _table_exists("ev_sync_runs"):
+                    row = db.fetch_one(
+                        """
+                        SELECT completed_at
+                        FROM ev_sync_runs
+                        WHERE status = 'completed' AND completed_at IS NOT NULL
+                        ORDER BY completed_at DESC
+                        LIMIT 1
+                        """
+                    )
+                    if row:
+                        last_completed = row.get("completed_at")
+
+                now_utc = datetime.now(timezone.utc)
+                due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
+                if due:
+                    scope = (_get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"]).strip()
+                    if scope not in ("all_us", "single_state"):
+                        scope = "all_us"
+
+                    state_filter = (_get_setting("charger_state_filter") or "").strip().upper()
+                    if scope != "single_state":
+                        state_filter = ""
+                    if scope == "single_state" and state_filter not in nlr_chargers.US_STATES:
+                        state_filter = ""
+                        scope = "all_us"
+
+                    fetch_strategy = (
+                        (_get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"])
+                        .strip()
+                    )
+                    if fetch_strategy not in ("all_then_200", "paged_200"):
+                        fetch_strategy = "all_then_200"
+
+                    page_size = _int_setting("charger_page_size", 200, 50, 1000)
+                    state_for_import = state_filter if scope == "single_state" and state_filter else None
+
+                    started, reason = _start_charger_import_job(
+                        state_for_import,
+                        fetch_strategy,
+                        page_size,
+                        trigger=f"auto_{interval_hours}h",
+                    )
+                    if started:
+                        log.info(
+                            "Auto charger sync started (interval_hours=%s, scope=%s, state=%s, strategy=%s)",
+                            interval_hours,
+                            scope,
+                            state_for_import or "all",
+                            fetch_strategy,
+                        )
+                    else:
+                        log.info("Auto charger sync skipped (%s)", reason)
+            except Exception as exc:
+                log.exception("Charger auto-sync loop error: %s", exc)
+
+            _charger_scheduler_stop_event.wait(60)
+
+    def _start_charger_auto_sync_scheduler() -> None:
+        """Ensure the periodic charger sync scheduler is running."""
+        if _charger_scheduler_is_running():
+            return
+
+        t = threading.Thread(
+            target=_run_charger_auto_sync_loop,
+            name="charger-auto-sync",
+            daemon=True,
+        )
+        _charger_scheduler_thread["thread"] = t
+        t.start()
+        log.info("Charger auto-sync scheduler thread started")
+
+    def _ml_retrain_is_running() -> bool:
+        t = _ml_retrain_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _ml_retrain_scheduler_is_running() -> bool:
+        t = _ml_retrain_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _parse_utc_iso(value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _read_model_schema() -> dict:
+        schema_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "models",
+            "energy_model_schema.json",
+        )
+        if not os.path.isfile(schema_path):
+            return {}
+        try:
+            with open(schema_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            log.warning("Failed reading model schema: %s", exc)
+            return {}
+
+    def _count_completed_training_drives() -> int:
+        try:
+            if not _table_exists("drives"):
+                return 0
+            row = db.fetch_one(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM drives
+                WHERE in_progress = FALSE
+                  AND energy_used_kwh > 0
+                  AND distance_km > 5
+                """
+            )
+            return int(row["cnt"]) if row and row.get("cnt") is not None else 0
+        except Exception as exc:
+            log.warning("Failed counting completed drives for retraining: %s", exc)
+            return 0
+
+    def _ml_last_trained_drive_count() -> int:
+        raw = (_get_setting("ml_retrain_last_trained_drive_count") or "").strip()
+        if raw:
+            try:
+                value = int(raw)
+                if value >= 0:
+                    return value
+            except (TypeError, ValueError):
+                pass
+
+        schema = _read_model_schema()
+        schema_count = schema.get("num_training_drives")
+        if isinstance(schema_count, int) and schema_count >= 0:
+            return schema_count
+
+        return _count_completed_training_drives()
+
+    def _ml_confidence_from_training_data() -> dict:
+        """Estimate model confidence level from current training-drive coverage."""
+        schema = _read_model_schema()
+        trained_drives = schema.get("num_training_drives")
+        if not isinstance(trained_drives, int) or trained_drives < 0:
+            trained_drives = 0
+
+        if trained_drives >= 30:
+            level = "high"
+        elif trained_drives >= 15:
+            level = "medium"
+        elif trained_drives > 0:
+            level = "low"
+        else:
+            level = "n/a"
+
+        return {
+            "level": level,
+            "training_drives": trained_drives,
+            "training_date": schema.get("training_date") or "",
+        }
+
+    def _run_ml_retrain_background(trigger: str) -> None:
+        started_at = datetime.now(timezone.utc)
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        python_bin = os.path.join(project_dir, "venv", "bin", "python")
+        if not os.path.isfile(python_bin):
+            python_bin = sys.executable
+
+        train_script = os.path.join(project_dir, "train_energy_model.py")
+        retrain_log_path = os.path.join(project_dir, "logs", "ml_retrain.log")
+
+        _set_setting("ml_retrain_status", "in_progress", "ML retraining job status")
+        _set_setting("ml_retrain_last_started_at", started_at.isoformat(), "ML retraining last start timestamp")
+        _set_setting("ml_retrain_last_trigger", trigger, "ML retraining trigger source")
+        _set_setting("ml_retrain_last_error", "", "ML retraining last error message")
+
+        try:
+            os.makedirs(os.path.dirname(retrain_log_path), exist_ok=True)
+            with open(retrain_log_path, "a", encoding="utf-8") as retrain_log:
+                retrain_log.write(
+                    f"\n=== ML retrain start {started_at.isoformat()} trigger={trigger} ===\n"
+                )
+                result = subprocess.run(
+                    [python_bin, train_script],
+                    cwd=project_dir,
+                    stdout=retrain_log,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+
+            completed_at = datetime.now(timezone.utc)
+            duration_sec = max(0, int((completed_at - started_at).total_seconds()))
+            _set_setting("ml_retrain_last_completed_at", completed_at.isoformat(), "ML retraining last completion timestamp")
+            _set_setting("ml_retrain_last_duration_sec", str(duration_sec), "ML retraining duration in seconds")
+            _set_setting("ml_retrain_last_exit_code", str(result.returncode), "ML retraining process exit code")
+
+            if result.returncode == 0:
+                schema = _read_model_schema()
+                trained_count = schema.get("num_training_drives")
+                if not isinstance(trained_count, int) or trained_count < 0:
+                    trained_count = _count_completed_training_drives()
+                _set_setting(
+                    "ml_retrain_last_trained_drive_count",
+                    str(trained_count),
+                    "Completed drive baseline count from last successful ML retraining",
+                )
+                _set_setting("ml_retrain_status", "completed", "ML retraining job status")
+                _set_setting("ml_retrain_last_error", "", "ML retraining last error message")
+
+                # Reset lazy-loaded model cache so new predictions use fresh artifacts.
+                for attr in ("_model", "_scaler", "_schema"):
+                    if hasattr(energy_model, attr):
+                        setattr(energy_model, attr, None)
+
+                log.info(
+                    "ML retraining completed successfully (trigger=%s, duration=%ss, trained_drives=%s)",
+                    trigger,
+                    duration_sec,
+                    trained_count,
+                )
+            else:
+                err_msg = (
+                    f"Retraining failed with exit code {result.returncode}. "
+                    "See logs/ml_retrain.log"
+                )
+                _set_setting("ml_retrain_status", "failed", "ML retraining job status")
+                _set_setting("ml_retrain_last_error", err_msg, "ML retraining last error message")
+                log.warning("%s (trigger=%s)", err_msg, trigger)
+
+        except Exception as exc:
+            _set_setting("ml_retrain_status", "failed", "ML retraining job status")
+            _set_setting("ml_retrain_last_error", str(exc), "ML retraining last error message")
+            _set_setting("ml_retrain_last_exit_code", "", "ML retraining process exit code")
+            log.exception("ML retraining background job failed (trigger=%s): %s", trigger, exc)
+        finally:
+            with _ml_retrain_guard:
+                _ml_retrain_thread["thread"] = None
+
+    def _start_ml_retrain_job(trigger: str) -> tuple[bool, str]:
+        with _ml_retrain_guard:
+            if _ml_retrain_is_running():
+                return False, "thread_running"
+
+            t = threading.Thread(
+                target=_run_ml_retrain_background,
+                args=(trigger,),
+                name="ml-retrain-job",
+                daemon=True,
+            )
+            _ml_retrain_thread["thread"] = t
+            t.start()
+
+        log.info("ML retraining submitted (trigger=%s)", trigger)
+        return True, "started"
+
+    def _run_ml_retrain_scheduler_loop() -> None:
+        while not _ml_retrain_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _ml_retrain_scheduler_stop_event.wait(60)
+                    continue
+
+                if _ml_retrain_is_running():
+                    _ml_retrain_scheduler_stop_event.wait(60)
+                    continue
+
+                now_utc = datetime.now(timezone.utc)
+                due = False
+                trigger = ""
+
+                schedule_enabled = (_get_setting("ml_retrain_schedule_enabled") or "off").strip().lower() == "on"
+                if schedule_enabled:
+                    interval_hours = _int_setting("ml_retrain_schedule_hours", 24, 1, 168)
+                    last_completed = _parse_utc_iso((_get_setting("ml_retrain_last_completed_at") or "").strip())
+                    if last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours):
+                        due = True
+                        trigger = f"schedule_{interval_hours}h"
+
+                if not due:
+                    after_x_enabled = (
+                        (_get_setting("ml_retrain_after_x_drives_enabled") or "off").strip().lower() == "on"
+                    )
+                    if after_x_enabled:
+                        threshold = _int_setting("ml_retrain_after_x_drives", 10, 1, 500)
+                        current_count = _count_completed_training_drives()
+                        baseline_count = _ml_last_trained_drive_count()
+                        new_drives = max(0, current_count - baseline_count)
+                        if new_drives >= threshold:
+                            due = True
+                            trigger = f"after_{threshold}_drives"
+
+                if due:
+                    started, reason = _start_ml_retrain_job(trigger)
+                    if started:
+                        log.info("Auto ML retraining started (trigger=%s)", trigger)
+                    else:
+                        log.info("Auto ML retraining skipped (%s)", reason)
+
+            except Exception as exc:
+                log.exception("ML retraining scheduler loop error: %s", exc)
+
+            _ml_retrain_scheduler_stop_event.wait(60)
+
+    def _start_ml_retrain_scheduler() -> None:
+        if _ml_retrain_scheduler_is_running():
+            return
+
+        t = threading.Thread(
+            target=_run_ml_retrain_scheduler_loop,
+            name="ml-retrain-scheduler",
+            daemon=True,
+        )
+        _ml_retrain_scheduler_thread["thread"] = t
+        t.start()
+        log.info("ML retraining scheduler thread started")
+
+    def _backup_scheduler_is_running() -> bool:
+        t = _backup_scheduler_thread.get("thread")
+        return bool(t and t.is_alive())
+
+    def _cleanup_old_backups() -> None:
+        """Retain only the 5 most recent backup files."""
+        backup_dir = backup.BACKUP_DIR
+        if not os.path.isdir(backup_dir):
+            return
+
+        keep = 5
+        candidates: list[tuple[float, str]] = []
+        for name in os.listdir(backup_dir):
+            if not (name.startswith("lightning_backup_") and (name.endswith(".sql") or name.endswith(".json"))):
+                continue
+            path = os.path.join(backup_dir, name)
+            try:
+                candidates.append((os.path.getmtime(path), path))
+            except OSError:
+                continue
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for _, old_path in candidates[keep:]:
+            try:
+                os.remove(old_path)
+                log.info("Deleted old backup: %s", os.path.basename(old_path))
+            except Exception as exc:
+                log.warning("Failed deleting old backup %s: %s", old_path, exc)
+
+    def _run_backup_scheduler_loop() -> None:
+        while not _backup_scheduler_stop_event.is_set():
+            try:
+                if not db.is_available():
+                    _backup_scheduler_stop_event.wait(60)
+                    continue
+
+                enabled = (_get_setting("backup_schedule_enabled") or "off").strip().lower() == "on"
+                if not enabled:
+                    _backup_scheduler_stop_event.wait(60)
+                    continue
+
+                interval_hours = _int_setting("backup_schedule_hours", 24, 1, 168)
+                last_completed = _parse_utc_iso((_get_setting("backup_last_completed_at") or "").strip())
+                now_utc = datetime.now(timezone.utc)
+                due = last_completed is None or (now_utc - last_completed) >= timedelta(hours=interval_hours)
+
+                if due:
+                    try:
+                        backup_path = backup.backup_sql()
+                        _set_setting("backup_last_completed_at", now_utc.isoformat(), "Last scheduled backup time")
+                        _set_setting("backup_last_error", "", "Last backup error")
+                        _cleanup_old_backups()
+                        log.info("Scheduled backup completed: %s", backup_path)
+                    except Exception as exc:
+                        _set_setting("backup_last_error", str(exc), "Last backup error")
+                        log.warning("Scheduled backup failed: %s", exc)
+            except Exception as exc:
+                log.exception("Backup scheduler loop error: %s", exc)
+
+            _backup_scheduler_stop_event.wait(60)
+
+    def _start_backup_scheduler() -> None:
+        if _backup_scheduler_is_running():
+            return
+
+        t = threading.Thread(
+            target=_run_backup_scheduler_loop,
+            name="backup-scheduler",
+            daemon=True,
+        )
+        _backup_scheduler_thread["thread"] = t
+        t.start()
+        log.info("Backup scheduler thread started")
 
     def _clamp_interval(key: str, raw_value: str) -> int:
         """Clamp a polling interval to its configured min/max range."""
@@ -234,20 +885,181 @@ def create_app() -> Flask:
         return max(limits["min"], min(limits["max"], val))
 
     def _get_setting(key: str) -> str:
-        """Read a single app setting from the app_config table, with fallback defaults."""
-        row = db.fetch_one("SELECT value FROM app_config WHERE key = %s", (key,))
-        return row["value"] if row else _SETTINGS_DEFAULTS.get(key, "")
+        """Read a single app setting from the app_config table, with fallback defaults. Logs all reads."""
+        try:
+            row = db.fetch_one("SELECT value FROM app_config WHERE key = %s", (key,))
+            value = row["value"] if row else _SETTINGS_DEFAULTS.get(key, "")
+            log = logging.getLogger("settings")
+            masked = _mask_setting_value_for_log(key, value)
+            log.info(f"_get_setting: key={key!r} value={masked!r} (row_present={row is not None})")
+            return value
+        except Exception as exc:
+            log = logging.getLogger("settings")
+            log.exception(f"_get_setting ERROR: key={key!r} exc={exc}")
+            return _SETTINGS_DEFAULTS.get(key, "")
 
     def _set_setting(key: str, value: str, description: str = "") -> None:
-        """Write a single app setting to the app_config table (upsert)."""
-        db.execute(
-            """
-            INSERT INTO app_config (key, value, description, updated_at)
-            VALUES (%s, %s, %s, now())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-            """,
-            (key, value, description),
-        )
+        """Write a single app setting to the app_config table (upsert). Logs all writes."""
+        log = logging.getLogger("settings")
+        try:
+            masked = _mask_setting_value_for_log(key, value)
+            log.info(f"_set_setting: key={key!r} value={masked!r} description={description!r}")
+            db.execute(
+                """
+                INSERT INTO app_config (key, value, description, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (key, value, description),
+            )
+        except Exception as exc:
+            log.exception(f"_set_setting ERROR: key={key!r} value={value!r} exc={exc}")
+
+    def _get_component_status() -> dict:
+        """Check status of all system components and dependencies."""
+        status = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "database": {},
+            "postgis": {},
+            "python_packages": {},
+        }
+
+        try:
+            # Database connection
+            result = db.fetch_one("SELECT 1")
+            if result is not None:
+                status["database"]["status"] = "OK"
+                status["database"]["connected"] = True
+                
+                # PostgreSQL version
+                try:
+                    version_row = db.fetch_one("SELECT version() as ver")
+                    if version_row:
+                        # Handle both dict-like and tuple-like results
+                        if isinstance(version_row, dict):
+                            version_str = version_row.get("ver", "Unknown")
+                        else:
+                            version_str = version_row[0] if version_row else "Unknown"
+                        
+                        if version_str and isinstance(version_str, str):
+                            version_str = version_str.split(",")[0]
+                        status["database"]["version"] = version_str
+                except Exception as ve:
+                    status["database"]["version"] = "Unable to fetch version"
+            else:
+                status["database"]["status"] = "NO RESULT"
+                status["database"]["connected"] = False
+        except Exception as e:
+            status["database"]["status"] = "ERROR"
+            status["database"]["connected"] = False
+            # Format the error message better
+            if hasattr(e, '__class__'):
+                error_msg = f"{e.__class__.__name__}: {str(e)}" if str(e) else e.__class__.__name__
+            else:
+                error_msg = str(e)
+            status["database"]["error"] = error_msg if error_msg and error_msg.strip() else "Connection failed"
+
+        try:
+            # PostGIS extension
+            postgis_row = db.fetch_one("SELECT postgis_version() as pgver")
+            if postgis_row:
+                # Handle both dict-like and tuple-like results
+                if isinstance(postgis_row, dict):
+                    postgis_ver = postgis_row.get("pgver")
+                else:
+                    postgis_ver = postgis_row[0] if postgis_row else None
+                    
+                if postgis_ver:
+                    status["postgis"]["available"] = True
+                    status["postgis"]["version"] = postgis_ver
+                    status["postgis"]["status"] = "OK"
+                    
+                    # Check spatial index
+                    try:
+                        index_row = db.fetch_one(
+                            "SELECT indexname FROM pg_indexes WHERE indexname = 'idx_ev_stations_location'"
+                        )
+                        status["postgis"]["spatial_index"] = "EXISTS" if index_row else "MISSING"
+                    except Exception:
+                        status["postgis"]["spatial_index"] = "UNKNOWN"
+                else:
+                    status["postgis"]["available"] = False
+                    status["postgis"]["status"] = "NOT INSTALLED"
+            else:
+                status["postgis"]["available"] = False
+                status["postgis"]["status"] = "NOT INSTALLED"
+        except Exception as e:
+            status["postgis"]["available"] = False
+            status["postgis"]["status"] = "ERROR"
+            # Format the error message better
+            if hasattr(e, '__class__'):
+                error_msg = f"{e.__class__.__name__}: {str(e)}" if str(e) else e.__class__.__name__
+            else:
+                error_msg = str(e)
+            status["postgis"]["error"] = error_msg if error_msg and error_msg.strip() else "Query failed"
+
+        # Python packages
+        packages = {
+            "flask": ("Flask", None),
+            "psycopg2": ("psycopg2", None),
+            "requests": ("requests", None),
+            "xgboost": ("xgboost", "xgboost.__version__"),
+            "sklearn": ("scikit-learn", "sklearn.__version__"),
+            "numpy": ("numpy", "numpy.__version__"),
+            "pandas": ("pandas", "pandas.__version__"),
+        }
+        
+        for pkg_name, (display_name, version_attr) in packages.items():
+            try:
+                mod = __import__(pkg_name)
+                version = "installed"
+                if version_attr:
+                    try:
+                        version = eval(version_attr)
+                    except Exception:
+                        version = "installed"
+                status["python_packages"][display_name] = {
+                    "status": "OK",
+                    "version": str(version)
+                }
+            except ImportError:
+                status["python_packages"][display_name] = {
+                    "status": "MISSING"
+                }
+            except Exception as e:
+                status["python_packages"][display_name] = {
+                    "status": "ERROR",
+                    "error": str(e) if str(e) else "Unknown"
+                }
+
+        return status
+
+    def _charger_failure_class(run: dict | None) -> str:
+        """Classify charger sync failures into clearer user-facing categories."""
+        if not run:
+            return "N/A"
+
+        status = str(run.get("status") or "").strip().lower()
+        if status != "failed":
+            return "N/A"
+
+        err = str(run.get("last_error") or "").strip().lower()
+        if not err:
+            return "Unknown failure"
+
+        if "heartbeat" in err and ("stale" in err or "timeout" in err or "no heartbeat" in err):
+            return "Stale heartbeat timeout"
+
+        if "api key" in err or "not configured" in err or "config" in err:
+            return "Configuration error"
+
+        if "request failed" in err or "http" in err or "api" in err:
+            return "API request failure"
+
+        if "timeout" in err:
+            return "Request timeout"
+
+        return "Other failure"
 
     def _table_exists(table_name: str) -> bool:
         """Return True when a table exists in the current PostgreSQL schema."""
@@ -279,6 +1091,98 @@ def create_app() -> Flask:
             if _column_exists(table_name, col):
                 return col
         return None
+
+    def _align_id_sequence(table_name: str) -> bool:
+        """Align table id sequence to MAX(id)+1 when the table uses a serial/bigserial id."""
+        if not _table_exists(table_name) or not _column_exists(table_name, "id"):
+            return False
+
+        row = db.fetch_one("SELECT pg_get_serial_sequence(%s, 'id') AS seq", (table_name,))
+        seq_name = row["seq"] if row else None
+        if not seq_name:
+            return False
+
+        db.execute(
+            f"""
+            SELECT setval(
+                pg_get_serial_sequence('{table_name}', 'id'),
+                COALESCE((SELECT MAX(id) FROM {table_name}), 0) + 1,
+                false
+            )
+            """
+        )
+        return True
+
+    _SEQUENCE_ALIGNMENT_MARKER_KEY = "startup_sequence_alignment_v1_done"
+    _SEQUENCE_ALIGNMENT_FORCE_KEY = "startup_sequence_alignment_force_next_startup"
+    _SEQUENCE_ALIGNMENT_TABLES = (
+        "telemetry",
+        "charging_history",
+        "charging_sessions",
+        "polling_config",
+        "oauth_credentials",
+        "drives",
+        "drive_points",
+        "ev_stations",
+        "ev_charger_connectors",
+        "ev_sync_runs",
+    )
+
+    def _run_sequence_alignment(force: bool = False) -> list[str]:
+        """Align serial/bigserial sequences to MAX(id)+1 (one-time unless forced)."""
+        if not _table_exists("app_config"):
+            return []
+
+        marker = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_MARKER_KEY,),
+        )
+        force_row = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_FORCE_KEY,),
+        )
+        force_requested = (
+            force_row is not None
+            and str(force_row.get("value", "")).strip().lower() in ("on", "true", "1", "yes")
+        )
+
+        should_run = force or force_requested or marker is None
+        if not should_run:
+            return []
+
+        aligned_tables: list[str] = []
+        for table_name in _SEQUENCE_ALIGNMENT_TABLES:
+            if _align_id_sequence(table_name):
+                aligned_tables.append(table_name)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            """
+            INSERT INTO app_config (key, value, description, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (
+                _SEQUENCE_ALIGNMENT_MARKER_KEY,
+                now_iso,
+                "One-time startup repair: aligned serial sequences to MAX(id)+1",
+            ),
+        )
+        # Clear one-shot force flag after a run.
+        db.execute(
+            """
+            INSERT INTO app_config (key, value, description, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (
+                _SEQUENCE_ALIGNMENT_FORCE_KEY,
+                "off",
+                "If on, run sequence alignment once at next app startup",
+            ),
+        )
+
+        return aligned_tables
 
     def _run_startup_migrations() -> list[str]:
         """Apply lightweight schema migrations at startup and return applied change labels."""
@@ -323,6 +1227,170 @@ def create_app() -> Flask:
             db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_charging_sessions_open ON charging_sessions (vin) WHERE in_progress = TRUE"
             )
+
+        # Create EV charger tables for NLR API integration
+        if not _table_exists("ev_stations"):
+            db.execute(
+                """
+                CREATE TABLE ev_stations (
+                    id BIGSERIAL PRIMARY KEY,
+                    source TEXT NOT NULL DEFAULT 'NREL',
+                    source_authority TEXT NOT NULL DEFAULT 'NREL',
+                    nlr_station_id BIGINT UNIQUE,
+                    ocm_station_id BIGINT,
+                    station_name TEXT NOT NULL,
+                    street_address TEXT,
+                    city TEXT,
+                    state TEXT,
+                    zip TEXT,
+                    country TEXT DEFAULT 'US',
+                    latitude DOUBLE PRECISION NOT NULL,
+                    longitude DOUBLE PRECISION NOT NULL,
+                    status_code TEXT,
+                    fuel_type_code TEXT DEFAULT 'ELEC',
+                    access_code TEXT,
+                    access_detail TEXT,
+                    owner_type_code TEXT,
+                    facility_type TEXT,
+                    network_name TEXT,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    nlr_updated_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    raw_data JSONB
+                )
+                """
+            )
+            applied.append("Created ev_stations table")
+
+        if not _table_exists("ev_charger_connectors"):
+            db.execute(
+                """
+                CREATE TABLE ev_charger_connectors (
+                    id BIGSERIAL PRIMARY KEY,
+                    station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
+                    source TEXT NOT NULL DEFAULT 'NREL',
+                    nlr_station_id BIGINT,
+                    ocm_station_id BIGINT,
+                    connector_type TEXT NOT NULL,
+                    network TEXT,
+                    charging_level TEXT,
+                    power_kw REAL,
+                    port_count INTEGER,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    UNIQUE (station_id, connector_type, network)
+                )
+                """
+            )
+            applied.append("Created ev_charger_connectors table")
+
+        if not _table_exists("ev_sync_runs"):
+            db.execute(
+                """
+                CREATE TABLE ev_sync_runs (
+                    id BIGSERIAL PRIMARY KEY,
+                    sync_type TEXT NOT NULL,
+                    state_filter TEXT,
+                    status TEXT NOT NULL,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    completed_at TIMESTAMPTZ,
+                    stations_imported INTEGER DEFAULT 0,
+                    stations_updated INTEGER DEFAULT 0,
+                    errors INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            applied.append("Created ev_sync_runs table")
+
+        # Create indexes for charger tables
+        if _table_exists("ev_stations"):
+            if not _column_exists("ev_stations", "source"):
+                db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+                applied.append("Added ev_stations.source")
+            if not _column_exists("ev_stations", "source_authority"):
+                db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source_authority TEXT NOT NULL DEFAULT 'NREL'")
+                applied.append("Added ev_stations.source_authority")
+            if not _column_exists("ev_stations", "ocm_station_id"):
+                db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
+                applied.append("Added ev_stations.ocm_station_id")
+            db.execute("ALTER TABLE ev_stations ALTER COLUMN nlr_station_id DROP NOT NULL")
+            db.execute("UPDATE ev_stations SET source = 'NREL' WHERE source IS NULL OR source = ''")
+            db.execute(
+                """
+                UPDATE ev_stations
+                SET source_authority = CASE
+                    WHEN nlr_station_id IS NOT NULL AND ocm_station_id IS NOT NULL THEN 'BOTH'
+                    WHEN ocm_station_id IS NOT NULL THEN 'OCM'
+                    ELSE 'NREL'
+                END
+                WHERE source_authority IS NULL OR source_authority = ''
+                """
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_ev_stations_ocm_id_uniq ON ev_stations (ocm_station_id) WHERE ocm_station_id IS NOT NULL"
+            )
+
+        if _table_exists("ev_charger_connectors"):
+            if not _column_exists("ev_charger_connectors", "source"):
+                db.execute("ALTER TABLE ev_charger_connectors ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+                applied.append("Added ev_charger_connectors.source")
+            if not _column_exists("ev_charger_connectors", "ocm_station_id"):
+                db.execute("ALTER TABLE ev_charger_connectors ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
+                applied.append("Added ev_charger_connectors.ocm_station_id")
+            db.execute("ALTER TABLE ev_charger_connectors ALTER COLUMN nlr_station_id DROP NOT NULL")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)"
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_ocm_station_id ON ev_charger_connectors (ocm_station_id)")
+
+        if _table_exists("ev_sync_runs"):
+            if not _column_exists("ev_sync_runs", "last_heartbeat_at"):
+                db.execute(
+                    "ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                )
+                applied.append("Added ev_sync_runs.last_heartbeat_at")
+            if not _column_exists("ev_sync_runs", "last_error"):
+                db.execute("ALTER TABLE ev_sync_runs ADD COLUMN IF NOT EXISTS last_error TEXT")
+                applied.append("Added ev_sync_runs.last_error")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_status ON ev_sync_runs (status)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_started ON ev_sync_runs (started_at DESC)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_sync_runs_heartbeat ON ev_sync_runs (last_heartbeat_at DESC)")
+
+        # Drive feature expansion for weather, wind impact, and elevation-aware ML training.
+        if _table_exists("drives"):
+            drive_feature_columns = {
+                "weather_temp_c": "REAL",
+                "weather_humidity_pct": "REAL",
+                "weather_pressure_hpa": "REAL",
+                "precipitation_mm": "REAL",
+                "wind_speed_avg_kmh": "REAL",
+                "wind_direction_avg_deg": "REAL",
+                "headwind_component_kmh": "REAL",
+                "tailwind_component_kmh": "REAL",
+                "sidewind_component_kmh": "REAL",
+                "wind_context": "TEXT",
+                "route_bearing_deg": "REAL",
+                "avg_altitude_m": "REAL",
+                "elevation_gain_m": "REAL",
+                "elevation_loss_m": "REAL",
+                "net_elevation_change_m": "REAL",
+            }
+            for column_name, column_type in drive_feature_columns.items():
+                if not _column_exists("drives", column_name):
+                    db.execute(f"ALTER TABLE drives ADD COLUMN IF NOT EXISTS {column_name} {column_type}")
+                    applied.append(f"Added drives.{column_name}")
+
+        # One-time repair after backup/restore (or when queued by UI):
+        # align serial sequences to table MAX(id)+1 to prevent duplicate PKs.
+        aligned_tables = _run_sequence_alignment(force=False)
+        if aligned_tables:
+            applied.append("Aligned ID sequences: " + ", ".join(aligned_tables))
 
         if _table_exists("app_config") and applied:
             db.execute(
@@ -549,28 +1617,24 @@ def create_app() -> Flask:
         if idle_display and idle_comm:
             return False
 
+        # Strict: Require real electrical flow for session to be active, unless time-to-full is positive and at least one status is active.
         power_kw = _charging_power_kw_from_row(charging)
-        if power_kw is not None:
-            try:
-                if float(power_kw) > 0.5:
-                    # If communication is explicitly idle and only display appears active,
-                    # do not trust stale electrical values by themselves.
-                    if idle_comm and active_display and not active_comm:
-                        break_flow = True
-                        time_to_full = charging.get("time_to_full_min")
-                        try:
-                            break_flow = not (time_to_full is not None and float(time_to_full) > 0)
-                        except (TypeError, ValueError):
-                            break_flow = True
-                        if break_flow:
-                            return False
-                    return True
-            except (TypeError, ValueError):
-                pass
-
         charger_voltage = charging.get("charger_voltage")
         charger_current = charging.get("charger_current")
         evse_dc_current = charging.get("evse_dc_current")
+        time_to_full = charging.get("time_to_full_min")
+        ttf_positive = False
+        try:
+            ttf_positive = time_to_full is not None and float(time_to_full) > 0
+        except (TypeError, ValueError):
+            ttf_positive = False
+
+        # Require real power or voltage/current for active session
+        try:
+            if power_kw is not None and float(power_kw) > 0.5:
+                return True
+        except (TypeError, ValueError):
+            pass
         try:
             if (
                 charger_voltage is not None and float(charger_voltage) > 20 and
@@ -589,21 +1653,12 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             pass
 
-        # If there is no measurable electrical flow, require corroborating
-        # active signals (status + time-to-full) to avoid stale "IN_PROGRESS"
-        # causing false positives.
-        if idle_comm and not active_display:
-            return False
+        # If no electrical flow, only allow session to be active if time-to-full is positive and at least one status is active
+        if ttf_positive and (active_display or active_comm):
+            return True
 
-        time_to_full = charging.get("time_to_full_min")
-        ttf_positive = False
-        try:
-            ttf_positive = time_to_full is not None and float(time_to_full) > 0
-        except (TypeError, ValueError):
-            ttf_positive = False
-
-        active_signal_count = sum([1 if active_display else 0, 1 if active_comm else 0, 1 if ttf_positive else 0])
-        return active_signal_count >= 2
+        # Otherwise, not active
+        return False
 
     def _charging_mode_from_data(charging: dict | None, voltage_series: list[int | None]) -> str:
         """Infer charging profile from power-type hints and observed voltage samples."""
@@ -629,14 +1684,7 @@ def create_app() -> Flask:
 
     def _charging_sample_meaningful(row: dict) -> bool:
         """Return True when a history row likely represents a real charging sample."""
-        comm = (row.get("communication_status") or "").strip().lower()
-        active_tokens = ("charging", "active", "in_progress", "powering")
-        idle_tokens = (
-            "not_detected", "station_ready", "ready", "waiting", "scheduled",
-            "complete", "completed", "stopped", "stop",
-        )
-
-        # Prefer physical electrical flow over status tokens.
+        # Only consider a row meaningful if there is real electrical flow.
         try:
             if row.get("charge_power_kw") is not None and float(row.get("charge_power_kw")) > 0.5:
                 return True
@@ -655,21 +1703,8 @@ def create_app() -> Flask:
                 return True
         except (TypeError, ValueError):
             pass
-
-        if any(token in comm for token in active_tokens):
-            return True
-        if any(token in comm for token in idle_tokens):
-            return False
-
-        if not _plug_status_idle(row.get("plug_status")):
-            return True
-        power_raw = row.get("charge_power_kw")
-        if power_raw is None:
-            return False
-        try:
-            return float(power_raw) > 0.1
-        except (TypeError, ValueError):
-            return False
+        # Otherwise, not meaningful (ignore status tokens alone)
+        return False
 
     def _latest_charging_session(rows_desc: list[dict], max_gap_minutes: int = 45) -> list[dict]:
         """Return the most recent contiguous charging session from DESC history rows."""
@@ -1026,12 +2061,24 @@ def create_app() -> Flask:
                 return units.unit_label(cat, system)
             return ""
 
+        def _format_minutes_to_hms(minutes: int | float) -> str:
+            """Convert minutes to human-readable format: '7h 14m' or '30m'."""
+            if not minutes or minutes <= 0:
+                return "0m"
+            minutes = int(minutes)
+            hours = minutes // 60
+            mins = minutes % 60
+            if hours > 0:
+                return f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
+            return f"{mins}m"
+
         return {
             "unit_system": system,
             "convert": lambda val, field: units.convert_for_display(val, field, system),
             "ulabel": lambda cat: units.unit_label(cat, system),
             "ulabel_for_field": _ulabel_for_field,
             "format_local_dt": _format_local_datetime,
+            "format_minutes_to_hms": _format_minutes_to_hms,
             "display_timezone": tz_name,
         }
 
@@ -1055,6 +2102,286 @@ def create_app() -> Flask:
         )
         return creds is None
 
+    def _safe_next_url(candidate: str | None) -> str:
+        """Return a safe relative URL for post-login redirect."""
+        if not candidate:
+            return url_for("dashboard")
+        parsed = urlparse(candidate)
+        if parsed.scheme or parsed.netloc:
+            return url_for("dashboard")
+        if not candidate.startswith("/"):
+            return url_for("dashboard")
+        return candidate
+
+    def _csrf_token() -> str:
+        token = str(session.get("csrf_token") or "")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+        return token
+
+    def _csrf_valid() -> bool:
+        expected = str(session.get("csrf_token") or "")
+        provided = str(request.form.get("csrf_token") or "")
+        return bool(expected and provided and hmac.compare_digest(expected, provided))
+
+    @app.context_processor
+    def _inject_csrf_token():
+        return {"csrf_token": _csrf_token}
+
+    def _is_mobile_browser_request() -> bool:
+        """Best-effort mobile browser detection using UA and client hints."""
+        ch_mobile = (request.headers.get("Sec-CH-UA-Mobile", "") or "").strip()
+        if ch_mobile == "?1":
+            return True
+
+        ua = (request.headers.get("User-Agent", "") or "").lower()
+        if not ua:
+            return False
+
+        mobile_markers = (
+            "android",
+            "iphone",
+            "ipad",
+            "ipod",
+            "mobile",
+            "windows phone",
+            "blackberry",
+            "opera mini",
+            "webos",
+        )
+        return any(marker in ua for marker in mobile_markers)
+
+    @app.context_processor
+    def _inject_client_platform():
+        return {"is_mobile_browser": _is_mobile_browser_request()}
+
+    def _clear_local_auth_session() -> None:
+        """Revoke and clear local auth session values."""
+        local_auth.revoke_session(session)
+        local_auth.clear_session(session)
+        session.pop("devloper_auth_bypassed", None)
+
+    def _effective_local_auth_idle_timeout_minutes() -> int:
+        """Resolve idle timeout from settings with safe fallback and bounds."""
+        default_idle = max(1, int(app.config.get("LOCAL_AUTH_IDLE_TIMEOUT_MINUTES", 30)))
+        if not db.is_available():
+            return default_idle
+
+        raw = (_get_setting("local_auth_idle_timeout_minutes") or str(default_idle)).strip()
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            value = default_idle
+        return max(1, min(1440, value))
+
+    def _request_client_ip() -> str:
+        """Return client IP from direct socket peer.
+
+        Intentionally ignores forwarded headers to avoid spoofing unless a
+        trusted proxy layer is explicitly implemented.
+        """
+        return (request.remote_addr or "").strip()
+
+    def _devloper_auth_bypass_allowed() -> bool:
+        """Allow local-auth bypass for explicitly allowed IPs when Devloper mode is enabled.
+
+        This is configured only via server-side config.json (devloper block)
+        and is intentionally not exposed in the web UI.
+        """
+        dev_cfg = config.devloper_config()
+        enabled_raw = dev_cfg.get("enabled", False)
+        if isinstance(enabled_raw, bool):
+            enabled = enabled_raw
+        else:
+            enabled = str(enabled_raw).strip().lower() == "true"
+        if not enabled:
+            return False
+
+        allowlist_cfg = dev_cfg.get("ip_allowlist", [])
+        if isinstance(allowlist_cfg, str):
+            entries = [entry.strip() for entry in allowlist_cfg.split(",") if entry.strip()]
+        elif isinstance(allowlist_cfg, list):
+            entries = [str(entry).strip() for entry in allowlist_cfg if str(entry).strip()]
+        else:
+            entries = []
+
+        client_ip = _request_client_ip()
+        if not client_ip:
+            return False
+
+        if not entries:
+            return False
+
+        try:
+            client_addr = ipaddress.ip_address(client_ip)
+        except ValueError:
+            return False
+
+        # Defense-in-depth: bypass is only for internal/testing addresses.
+        if not (client_addr.is_private or client_addr.is_loopback):
+            return False
+
+        for entry in entries:
+            try:
+                if "/" in entry:
+                    candidate_net = ipaddress.ip_network(entry, strict=False)
+                    if not (candidate_net.is_private or candidate_net.is_loopback):
+                        continue
+                    if client_addr in candidate_net:
+                        return True
+                else:
+                    candidate_ip = ipaddress.ip_address(entry)
+                    if not (candidate_ip.is_private or candidate_ip.is_loopback):
+                        continue
+                    if client_addr == candidate_ip:
+                        return True
+            except ValueError:
+                continue
+
+        return False
+
+    def _complete_local_login(user: dict, next_url: str) -> str:
+        client_meta_enabled = bool(app.config.get("LOCAL_AUTH_STORE_CLIENT_META", False))
+        local_auth.issue_authenticated_session(
+            session,
+            user,
+            ip_address=(request.remote_addr or "") if client_meta_enabled else "",
+            user_agent=(request.headers.get("User-Agent", "") if client_meta_enabled else ""),
+            lifetime_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
+        )
+        session["devloper_auth_bypassed"] = False
+        local_auth.clear_login_attempts(str(user.get("username") or ""), request.remote_addr or "")
+        flash("Signed in successfully.", "success")
+        return redirect(_safe_next_url(next_url))
+
+    @app.route("/auth/login", methods=["GET", "POST"])
+    @app.route("/oauth/login", methods=["GET", "POST"])
+    def auth_login():
+        """Authenticate local user credentials, then require MFA setup/verification."""
+        if not db.is_available():
+            return redirect(url_for("db_setup"))
+
+        no_users = local_auth.user_count() == 0
+        next_url = _safe_next_url(request.values.get("next"))
+        if request.method == "POST":
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for("auth_login", next=next_url))
+
+            if no_users:
+                flash("No local users exist yet. Use the standalone user admin app first.", "error")
+                return render_template("local_auth_login.html", next_url=next_url, no_users=True)
+
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            otp_code = (request.form.get("otp_code") or "").strip()
+
+            is_locked, seconds_left = local_auth.login_is_locked(username, request.remote_addr or "")
+            if is_locked:
+                mins = max(1, (seconds_left + 59) // 60)
+                flash(f"Too many failed sign-in attempts. Try again in about {mins} minute(s).", "error")
+                return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+
+            user = local_auth.verify_password(username, password)
+            if not user:
+                local_auth.register_failed_login(username, request.remote_addr or "")
+                flash("Invalid username or password.", "error")
+                return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+
+            if bool(user.get("mfa_enabled")):
+                if not otp_code:
+                    local_auth.register_failed_login(username, request.remote_addr or "")
+                    flash("Enter your OTP code to sign in.", "error")
+                    return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+                if not local_auth.verify_totp(str(user.get("mfa_secret") or ""), otp_code):
+                    local_auth.register_failed_login(username, request.remote_addr or "")
+                    flash("Invalid OTP code.", "error")
+                    return render_template("local_auth_login.html", next_url=next_url, no_users=False)
+                return _complete_local_login(user, next_url)
+
+            local_auth.begin_pending_login(session, int(user["id"]), next_url, "setup")
+            session["local_pending_mfa_secret"] = local_auth.generate_mfa_secret()
+            return redirect(url_for("auth_mfa_setup"))
+
+        return render_template("local_auth_login.html", next_url=next_url, no_users=no_users)
+
+    @app.route("/auth/mfa/setup", methods=["GET", "POST"])
+    def auth_mfa_setup():
+        """Force MFA enrollment for users that are not yet enrolled."""
+        pending = local_auth.pending_login(session)
+        if pending["stage"] != "setup" or not pending["user_id"]:
+            return redirect(url_for("auth_login"))
+
+        user = local_auth.get_user_by_id(int(pending["user_id"]))
+        if not user or not bool(user.get("is_active")):
+            local_auth.clear_session(session)
+            return redirect(url_for("auth_login"))
+
+        secret = str(session.get("local_pending_mfa_secret") or "").strip()
+        if not secret:
+            secret = local_auth.generate_mfa_secret()
+            session["local_pending_mfa_secret"] = secret
+        otp_uri = local_auth.provisioning_uri(user, secret)
+        qr_data_uri = local_auth.otp_qr_data_uri(otp_uri)
+
+        if request.method == "POST":
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for("auth_mfa_setup"))
+
+            code = request.form.get("code") or ""
+            if not local_auth.verify_totp(secret, code):
+                local_auth.register_failed_login(str(user.get("username") or ""), request.remote_addr or "")
+                flash("Invalid MFA code. Try again.", "error")
+            else:
+                local_auth.enable_mfa(int(user["id"]), secret)
+                user = local_auth.get_user_by_id(int(user["id"]))
+                next_url = pending["next_url"] or url_for("dashboard")
+                return _complete_local_login(user, next_url)
+
+        return render_template(
+            "local_auth_mfa_setup.html",
+            secret=secret,
+            otp_uri=otp_uri,
+            qr_data_uri=qr_data_uri,
+        )
+
+    @app.route("/auth/mfa/verify", methods=["GET", "POST"])
+    def auth_mfa_verify():
+        """Verify TOTP code for users that already enrolled in MFA."""
+        pending = local_auth.pending_login(session)
+        if pending["stage"] != "verify" or not pending["user_id"]:
+            return redirect(url_for("auth_login"))
+
+        user = local_auth.get_user_by_id(int(pending["user_id"]))
+        if not user or not bool(user.get("is_active")) or not bool(user.get("mfa_enabled")):
+            local_auth.clear_session(session)
+            return redirect(url_for("auth_login"))
+
+        if request.method == "POST":
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for("auth_mfa_verify"))
+
+            code = request.form.get("code") or ""
+            if not local_auth.verify_totp(str(user.get("mfa_secret") or ""), code):
+                local_auth.register_failed_login(str(user.get("username") or ""), request.remote_addr or "")
+                flash("Invalid MFA code.", "error")
+            else:
+                next_url = pending["next_url"] or url_for("dashboard")
+                return _complete_local_login(user, next_url)
+
+        return render_template("local_auth_mfa_verify.html")
+
+    @app.route("/auth/logout", methods=["GET"])
+    @app.route("/oauth/logout", methods=["GET"])
+    def auth_logout():
+        """Clear local auth session."""
+        _clear_local_auth_session()
+        flash("Signed out.", "success")
+        return redirect(url_for("auth_login", signed_out="1"))
+
     # Run startup DB migrations once the table helpers are available.
     if db.is_available():
         try:
@@ -1070,6 +2397,41 @@ def create_app() -> Flask:
 
     # ── Request hook: force HTTPS when SSL is active ─────────────
 
+    _SENSITIVE_HTTPS_ENDPOINTS = frozenset({
+        "auth_login",
+        "auth_mfa_setup",
+        "auth_mfa_verify",
+        "auth_logout",
+        "profile",
+        "settings",
+        "settings_options_page",
+        "settings_chargers_page",
+        "settings_ai_page",
+        "settings_backup_page",
+        "settings_ssl_page",
+        "settings_status_page",
+    })
+
+    @app.before_request
+    def _enforce_https_sensitive_routes():
+        """Require HTTPS for sensitive auth/settings routes."""
+        if not bool(app.config.get("REQUIRE_HTTPS_SENSITIVE", True)):
+            return
+
+        endpoint = request.endpoint or ""
+        if endpoint not in _SENSITIVE_HTTPS_ENDPOINTS:
+            return
+
+        forwarded_proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        is_secure = bool(request.is_secure or forwarded_proto == "https")
+        if is_secure:
+            return
+
+        if app.config.get("SSL_ACTIVE"):
+            url = request.url.replace("http://", "https://", 1)
+            return redirect(url, code=301)
+        return ("HTTPS is required for this operation.", 403)
+
     @app.before_request
     def _force_https():
         """Redirect HTTP requests to HTTPS when SSL is enabled."""
@@ -1077,16 +2439,94 @@ def create_app() -> Flask:
             url = request.url.replace("http://", "https://", 1)
             return redirect(url, code=301)
 
+    @app.after_request
+    def _security_headers(response):
+        """Apply baseline security headers and no-store policy for auth pages."""
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+
+        endpoint = request.endpoint or ""
+        if endpoint in {
+            "auth_login",
+            "auth_mfa_setup",
+            "auth_mfa_verify",
+            "auth_logout",
+            "profile",
+            "settings",
+            "settings_options_page",
+            "settings_chargers_page",
+            "settings_ai_page",
+            "settings_backup_page",
+            "settings_ssl_page",
+        }:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
     # ── Request hook: redirect to setup if not configured ──────────
 
     _SETUP_SAFE_ENDPOINTS = frozenset({
         "db_setup", "db_setup_test", "db_setup_create",
         "db_setup_restore", "db_setup_upload",
+        "auth_login", "auth_logout", "auth_mfa_setup", "auth_mfa_verify",
         "oauth_config", "reset", "manage", "manage_delete_vin",
         "manage_repoll", "db_browser", "db_table", "db_delete_row",
         "settings", "backup_page", "backup_create", "backup_restore",
         "backup_download", "backup_delete", "backup_upload", "static",
     })
+
+    _AUTH_SAFE_ENDPOINTS = frozenset({"static", "auth_login", "auth_logout", "auth_mfa_setup", "auth_mfa_verify"})
+
+    @app.before_request
+    def _check_local_auth():
+        """Require authenticated local session + completed MFA on each request."""
+        if not app.config.get("LOCAL_AUTH_ENABLED"):
+            return
+
+        endpoint = request.endpoint or ""
+        if endpoint in _AUTH_SAFE_ENDPOINTS or endpoint.startswith("static"):
+            return
+
+        if _devloper_auth_bypass_allowed():
+            session["local_user_id"] = 0
+            session["local_username"] = "devloper-bypass"
+            session["local_is_admin"] = True
+            session["devloper_auth_bypassed"] = True
+            return
+
+        session.pop("devloper_auth_bypassed", None)
+
+        user = local_auth.validate_authenticated_session(
+            session,
+            absolute_timeout_hours=max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8))),
+            idle_timeout_minutes=_effective_local_auth_idle_timeout_minutes(),
+        )
+        if not user:
+            _clear_local_auth_session()
+            return redirect(url_for("auth_login", next=request.full_path or request.path))
+
+        session["local_user_id"] = int(user["id"])
+        session["local_username"] = str(user.get("username") or "")
+        session["local_is_admin"] = bool(user.get("is_admin"))
+
+    @app.route("/profile", methods=["GET"])
+    def profile():
+        """Show local authenticated user details and active session timeout policy."""
+        current_user = {
+            "id": int(session.get("local_user_id") or 0),
+            "username": str(session.get("local_username") or ""),
+            "is_admin": bool(session.get("local_is_admin")),
+        }
+        idle_timeout_minutes = _effective_local_auth_idle_timeout_minutes()
+        absolute_timeout_hours = max(1, int(app.config.get("LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS", 8)))
+        return render_template(
+            "profile.html",
+            current_user=current_user,
+            idle_timeout_minutes=idle_timeout_minutes,
+            absolute_timeout_hours=absolute_timeout_hours,
+        )
 
     @app.before_request
     def _check_setup():
@@ -1122,32 +2562,261 @@ def create_app() -> Flask:
                 files.append({"name": name, "size": size, "size_fmt": backup._format_size(size)})
         return files
 
-    @app.route("/setup", methods=["GET", "POST"])
-    def db_setup():
-        """Database setup page — shown when PostgreSQL is unreachable."""
-        db_cfg = config.database()
+
+
+
+    # General Options sub-page
+    @app.route("/settings/options", methods=["GET", "POST"])
+    def settings_options_page():
+        current = {
+            "units": _get_setting("units"),
+            "timezone": _get_setting("timezone") or _SETTINGS_DEFAULTS["timezone"],
+            "log_level": get_log_level(),
+            "poll_interval_off": _get_setting("poll_interval_off"),
+            "poll_interval_on": _get_setting("poll_interval_on"),
+            "poll_interval_moving": _get_setting("poll_interval_moving"),
+            "poll_interval_charging": _get_setting("poll_interval_charging"),
+            "conservative_polling": _get_setting("conservative_polling"),
+            "autostart_poller": _get_setting("autostart_poller"),
+            "developing": _get_setting("developing"),
+            "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
+            "local_auth_idle_timeout_minutes": _get_setting("local_auth_idle_timeout_minutes") or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
+        }
+        ssl_cfg = config.ssl_config()
+        ssl_status = {
+            "active": app.config.get("SSL_ACTIVE", False),
+            "recovery": app.config.get("SSL_RECOVERY", False),
+        }
+        sequence_alignment = {"last_run": None, "force_next_startup": False}  # Placeholder or fetch as needed
+        return render_template(
+            "settings_options_page.html",
+            settings=current,
+            sequence_alignment=sequence_alignment,
+            ssl=ssl_cfg,
+            ssl_status=ssl_status,
+        )
+
+    # SSL / TLS sub-page
+    @app.route("/settings/ssl-page", methods=["GET"])
+    def settings_ssl_page():
+        ssl_cfg = config.ssl_config()
+        ssl_status = {
+            "active": app.config.get("SSL_ACTIVE", False),
+            "recovery": app.config.get("SSL_RECOVERY", False),
+        }
+        # Validate current user certs if they exist
+        if ssl_cfg.get("cert") and ssl_cfg.get("key"):
+            if os.path.isfile(ssl_cfg["cert"]) and os.path.isfile(ssl_cfg["key"]):
+                valid, msg = crypto.validate_ssl_files(ssl_cfg["cert"], ssl_cfg["key"])
+                ssl_status["cert_valid"] = valid
+                ssl_status["cert_message"] = msg
+            else:
+                ssl_status["cert_valid"] = False
+                ssl_status["cert_message"] = "Certificate or key file not found on disk"
+
+        return render_template(
+            "settings_ssl_page.html",
+            ssl=ssl_cfg,
+            ssl_status=ssl_status,
+        )
+
+
+    # Charger Networks sub-page
+    @app.route("/settings/chargers", methods=["GET", "POST"])
+    def settings_chargers_page():
         if request.method == "POST":
-            new_cfg = {
-                "host": request.form.get("host", "localhost").strip(),
-                "port": int(request.form.get("port", 5432)),
-                "name": request.form.get("name", "lightning").strip(),
-                "user": request.form.get("user", "lightning").strip(),
-                "password": request.form.get("password", "").strip(),
-                "connect_timeout": int(request.form.get("connect_timeout", 10)),
-            }
-            config.save_database(new_cfg)
-            db_cfg = new_cfg
+            nlr_api_key = request.form.get("nlr_api_key")
+            ocm_api_key = request.form.get("ocm_api_key")
+            if (
+                nlr_api_key is not None
+                and nlr_api_key.strip()
+                and "*" not in nlr_api_key
+                and nlr_api_key.strip().lower() != "unset"
+            ):
+                _set_setting("nlr_api_key", nlr_api_key.strip(), "NREL Alt Fuel Stations API key for EV charger data (see https://developer.nrel.gov/docs/transportation/alt-fuel-stations-v1/)" )
+            if (
+                ocm_api_key is not None
+                and ocm_api_key.strip()
+                and "*" not in ocm_api_key
+                and ocm_api_key.strip().lower() != "unset"
+            ):
+                _set_setting("ocm_api_key", ocm_api_key.strip(), "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)")
+            for k in [
+                "charger_scope",
+                "charger_state_filter",
+                "charger_fetch_strategy",
+                "charger_page_size",
+                "charger_auto_update",
+                "charger_auto_update_hours",
+            ]:
+                v = request.form.get(k)
+                if v is not None:
+                    _set_setting(k, v, f"Charger setting: {k}")
+            flash("Charger settings updated.", "success")
 
-            # Attempt to connect with the new settings
+        def obfuscate_key(key):
+            if not key:
+                return "unset"
+            if len(key) <= 8:
+                return "*" * len(key)
+            return key[:3] + "*" * (len(key) - 6) + key[-3:]
+
+        # Always fetch fresh after POST
+        current = {
+            "nlr_api_key": _get_setting("nlr_api_key") or "",
+            "ocm_api_key": _get_setting("ocm_api_key") or "",
+            "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
+            "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
+            "charger_fetch_strategy": _get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"],
+            "charger_page_size": _get_setting("charger_page_size") or _SETTINGS_DEFAULTS["charger_page_size"],
+            "charger_auto_update": _get_setting("charger_auto_update") or _SETTINGS_DEFAULTS["charger_auto_update"],
+            "charger_auto_update_hours": _get_setting("charger_auto_update_hours") or _SETTINGS_DEFAULTS["charger_auto_update_hours"],
+        }
+        charger_status = nlr_chargers.get_sync_status()
+        charger_failure_class = _charger_failure_class(charger_status)
+        charger_job_running = _charger_import_is_running()
+
+        logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        charger_logs = ""
+        charger_log_path = os.path.join(logs_dir, "debug_chargers.log")
+        if os.path.isfile(charger_log_path):
+            with open(charger_log_path, "r") as f:
+                charger_logs = "".join(f.readlines()[-20:])
+
+        charger_audit_logs = ""
+        charger_audit_path = os.path.join(logs_dir, "charger_sync_audit.log")
+        if os.path.isfile(charger_audit_path):
+            with open(charger_audit_path, "r") as f:
+                charger_audit_logs = "".join(f.readlines()[-20:])
+
+        # Obfuscate API keys for display
+        display_settings = dict(current)
+        display_settings["nlr_api_key"] = obfuscate_key(current["nlr_api_key"])
+        display_settings["ocm_api_key"] = obfuscate_key(current["ocm_api_key"])
+
+        return render_template(
+            "settings_chargers_page.html",
+            settings=display_settings,
+            charger_status=charger_status,
+            charger_failure_class=charger_failure_class,
+            charger_job_running=charger_job_running,
+            charger_logs=charger_logs,
+            charger_audit_logs=charger_audit_logs,
+        )
+
+
+    # AI / ML sub-page
+    @app.route("/settings/ai", methods=["GET", "POST"])
+    def settings_ai_page():
+        current = {
+            "ml_retrain_schedule_enabled": _get_setting("ml_retrain_schedule_enabled") or _SETTINGS_DEFAULTS["ml_retrain_schedule_enabled"],
+            "ml_retrain_schedule_hours": _get_setting("ml_retrain_schedule_hours") or _SETTINGS_DEFAULTS["ml_retrain_schedule_hours"],
+            "ml_retrain_after_x_drives_enabled": _get_setting("ml_retrain_after_x_drives_enabled") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives_enabled"],
+            "ml_retrain_after_x_drives": _get_setting("ml_retrain_after_x_drives") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives"],
+        }
+        ml_retrain_job_running = _ml_retrain_is_running()
+        ml_baseline_drives = _ml_last_trained_drive_count()
+        ml_completed_drives = _count_completed_training_drives()
+        ml_new_drives = max(0, ml_completed_drives - ml_baseline_drives)
+        ml_schema = _read_model_schema()
+        ml_retrain_status = {
+            "status": _get_setting("ml_retrain_status") or "idle",
+            "last_started_at": _get_setting("ml_retrain_last_started_at") or "",
+            "last_completed_at": _get_setting("ml_retrain_last_completed_at") or "",
+            "last_trigger": _get_setting("ml_retrain_last_trigger") or "",
+            "last_error": _get_setting("ml_retrain_last_error") or "",
+            "last_duration_sec": _get_setting("ml_retrain_last_duration_sec") or "",
+            "last_exit_code": _get_setting("ml_retrain_last_exit_code") or "",
+            "baseline_drives": ml_baseline_drives,
+            "completed_drives": ml_completed_drives,
+            "new_drives_since_last_train": ml_new_drives,
+            "schema_training_date": str(ml_schema.get("training_date") or ""),
+            "schema_num_training_drives": ml_schema.get("num_training_drives"),
+            "scheduler_running": _ml_retrain_scheduler_is_running(),
+        }
+        # Show last 20 lines of ml_retrain.log
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "ml_retrain.log")
+        ml_logs = ""
+        if os.path.isfile(log_path):
+            with open(log_path, "r") as f:
+                lines = f.readlines()
+                ml_logs = "".join(lines[-20:])
+        return render_template(
+            "settings_ai_page.html",
+            settings=current,
+            ml_retrain_status=ml_retrain_status,
+            ml_retrain_job_running=ml_retrain_job_running,
+            ml_logs=ml_logs,
+        )
+
+
+    # Backup sub-page
+    @app.route("/settings/backup", methods=["GET", "POST"])
+    def settings_backup_page():
+        current = {
+            "backup_schedule_enabled": _get_setting("backup_schedule_enabled") or _SETTINGS_DEFAULTS["backup_schedule_enabled"],
+            "backup_schedule_hours": _get_setting("backup_schedule_hours") or _SETTINGS_DEFAULTS["backup_schedule_hours"],
+            "backup_last_completed_at": _get_setting("backup_last_completed_at") or _SETTINGS_DEFAULTS["backup_last_completed_at"],
+            "backup_last_error": _get_setting("backup_last_error") or _SETTINGS_DEFAULTS["backup_last_error"],
+        }
+        # Show last 20 lines of lightning_app.log
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "lightning_app.log")
+        backup_logs = ""
+        if os.path.isfile(log_path):
+            with open(log_path, "r") as f:
+                lines = f.readlines()
+                backup_logs = "".join(lines[-20:])
+        return render_template(
+            "settings_backup_page.html",
+            settings=current,
+            backup_logs=backup_logs,
+        )
+
+    @app.route("/settings/about", methods=["GET"])
+    def settings_about_page():
+        """About page with app info and disclaimers."""
+        return render_template(
+            "settings_about_page.html",
+            app_version="0.7",
+            app_purpose="Ford Lightning EV Telemetry, Trip Planning & Energy Analysis",
+        )
+
+    # Status page
+    @app.route("/settings/status", methods=["GET"])
+    def settings_status_page():
+        status = _get_component_status()
+        return render_template("settings_status_page.html", status=status)
+
+    @app.route("/api/system-status", methods=["GET"])
+    def api_system_status():
+        status = _get_component_status()
+        return jsonify(status)
+
+    # ── Log viewing routes ─────────────────────────────────────────────
+    @app.route("/logs", methods=["GET"])
+    def logs():
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        log_files = [os.path.basename(f) for f in glob.glob(os.path.join(log_dir, "*.log"))]
+        selected_log = request.args.get("log_name") or (log_files[0] if log_files else None)
+        log_content = ""
+        if selected_log and selected_log in log_files:
             try:
-                db.init_pool()
-                flash("Database connected successfully!", "success")
-                return redirect(url_for("db_setup"))
+                with open(os.path.join(log_dir, selected_log), "r") as f:
+                    log_content = f.read()[-6000:]  # Show last ~6000 chars
             except Exception as exc:
-                flash(f"Connection failed: {exc}", "error")
+                log_content = f"Error reading log: {exc}"
+        return render_template("logs.html", log_files=log_files, selected_log=selected_log, log_content=log_content)
 
-        return render_template("db_setup.html", db=db_cfg, connected=db.is_available(),
-                               backup_files=_setup_backup_list())
+    @app.route("/logs/<log_name>")
+    def view_log(log_name):
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        safe_log = os.path.basename(log_name)
+        log_path = os.path.join(log_dir, safe_log)
+        if not os.path.isfile(log_path):
+            return f"Log file not found: {safe_log}", 404
+        with open(log_path, "r") as f:
+            content = f.read()
+        return f"<pre style='background:#222;color:#eee;padding:1em;'>{content}</pre>"
 
     @app.route("/setup/test", methods=["POST"])
     def db_setup_test():
@@ -1259,6 +2928,36 @@ def create_app() -> Flask:
         # Determine vehicle image filename
         vehicle_img = _get_setting("vehicle_image") or "vehicle.png"
         refresh_interval = request.args.get("refresh", 0, type=int)
+        ml_status = _ml_confidence_from_training_data()
+        poller_running = poller.is_running()
+        poll_interval_sec = config.collector_config().get("default_poll_interval_sec", 60)
+        if vin:
+            try:
+                # Reuse poller's own interval resolution logic so dashboard stays
+                # compatible with polling_config schema changes.
+                poll_interval_sec = int(poller._get_poll_interval(vin, int(poll_interval_sec)))
+            except Exception:
+                pass
+
+        poller_stale_threshold_sec = max(120, poll_interval_sec * 2 + 15)
+        poller_last_poll_age_sec = None
+        poller_health = "unknown"
+        if status and status.get("last_poll"):
+            last_poll = status["last_poll"]
+            now_utc = datetime.now(timezone.utc)
+            if isinstance(last_poll, datetime) and last_poll.tzinfo is None:
+                last_poll = last_poll.replace(tzinfo=timezone.utc)
+            if isinstance(last_poll, datetime):
+                poller_last_poll_age_sec = max(0, int((now_utc - last_poll).total_seconds()))
+
+        if not poller_running:
+            poller_health = "down"
+        elif poller_last_poll_age_sec is None:
+            poller_health = "unknown"
+        elif poller_last_poll_age_sec > poller_stale_threshold_sec:
+            poller_health = "stale"
+        else:
+            poller_health = "healthy"
 
         return render_template(
             "dashboard.html",
@@ -1274,8 +2973,17 @@ def create_app() -> Flask:
             vehicle_summary=vehicle_summary,
             tires=tires,
             vehicle_img=vehicle_img,
-            poller_running=poller.is_running(),
+            poller_running=poller_running,
+            poller_health=poller_health,
+            poller_last_poll_age_sec=poller_last_poll_age_sec,
+            poller_stale_threshold_sec=poller_stale_threshold_sec,
+            poller_interval_sec=poll_interval_sec,
+            poller_last_error=status.get("last_error") if status else None,
+            poller_consecutive_failures=status.get("consecutive_failures") if status else None,
             refresh_interval=refresh_interval,
+            ml_confidence_level=ml_status["level"],
+            ml_training_drives=ml_status["training_drives"],
+            ml_training_date=ml_status["training_date"],
         )
 
     @app.route("/vehicle")
@@ -1452,10 +3160,18 @@ def create_app() -> Flask:
 
                 started_at = row.get("started_at")
                 ended_at = row.get("ended_at")
+                in_progress = bool(row.get("in_progress"))
                 duration_min = None
                 if started_at and ended_at:
                     try:
                         duration_min = max(0.0, (ended_at - started_at).total_seconds() / 60.0)
+                    except Exception:
+                        duration_min = None
+                elif started_at and in_progress:
+                    try:
+                        now_ts = datetime.now(timezone.utc)
+                        start_ts = started_at if started_at.tzinfo else started_at.replace(tzinfo=timezone.utc)
+                        duration_min = max(0.0, (now_ts - start_ts).total_seconds() / 60.0)
                     except Exception:
                         duration_min = None
 
@@ -1467,7 +3183,7 @@ def create_app() -> Flask:
                         "selected": bool(session_uuid and session_uuid == selected_session_uuid),
                         "started_at": started_at,
                         "ended_at": ended_at,
-                        "in_progress": bool(row.get("in_progress")),
+                        "in_progress": in_progress,
                         "duration_min": duration_min,
                         "start_soc": start_soc,
                         "end_soc": end_soc,
@@ -1714,6 +3430,10 @@ def create_app() -> Flask:
         distance_values_km = [float(d["distance_km"]) for d in drives if d.get("distance_km") is not None]
         energy_values_kwh = [float(d["energy_used_kwh"]) for d in drives if d.get("energy_used_kwh") is not None]
         max_speed_values_kmh = [float(d["max_speed_kmh"]) for d in drives if d.get("max_speed_kmh") is not None]
+        weather_temp_values = [float(d["weather_temp_c"]) for d in drives if d.get("weather_temp_c") is not None]
+        wind_speed_values = [float(d["wind_speed_avg_kmh"]) for d in drives if d.get("wind_speed_avg_kmh") is not None]
+        headwind_values = [float(d["headwind_component_kmh"]) for d in drives if d.get("headwind_component_kmh") is not None]
+        tailwind_values = [float(d["tailwind_component_kmh"]) for d in drives if d.get("tailwind_component_kmh") is not None]
 
         drive_stats = {
             "total_distance_km": sum(distance_values_km) if distance_values_km else None,
@@ -1721,6 +3441,10 @@ def create_app() -> Flask:
             "total_energy_kwh": sum(energy_values_kwh) if energy_values_kwh else None,
             "avg_energy_kwh": (sum(energy_values_kwh) / len(energy_values_kwh)) if energy_values_kwh else None,
             "avg_max_speed_kmh": (sum(max_speed_values_kmh) / len(max_speed_values_kmh)) if max_speed_values_kmh else None,
+            "avg_weather_temp_c": (sum(weather_temp_values) / len(weather_temp_values)) if weather_temp_values else None,
+            "avg_wind_speed_kmh": (sum(wind_speed_values) / len(wind_speed_values)) if wind_speed_values else None,
+            "avg_headwind_kmh": (sum(headwind_values) / len(headwind_values)) if headwind_values else None,
+            "avg_tailwind_kmh": (sum(tailwind_values) / len(tailwind_values)) if tailwind_values else None,
         }
 
         return render_template(
@@ -2181,6 +3905,21 @@ def create_app() -> Flask:
             conservative=poller.conservative_mode(),
         )
 
+    @app.route("/poller/poll_now", methods=["POST"])
+    def poller_poll_now():
+        """Trigger a single poll cycle immediately from the UI."""
+        vin = _active_vin()
+        provider = config.ford_provider() if hasattr(config, "ford_provider") else "ford"
+        if not vin:
+            flash("No VIN found in garage.", "error")
+            return redirect(url_for("poller_control"))
+        try:
+            poller.poll_once(provider, vin)
+            flash("Poll triggered successfully.", "success")
+        except Exception as exc:
+            flash(f"Poll failed: {exc}", "error")
+        return redirect(url_for("poller_control"))
+
     @app.route("/reset", methods=["GET", "POST"])
     def reset():
         """Factory reset: delete all data for the active VIN and return to setup mode."""
@@ -2229,6 +3968,227 @@ def create_app() -> Flask:
     def settings():
         """Application settings: display units, polling intervals, log level."""
         if request.method == "POST":
+            action = (request.form.get("action") or "save_settings").strip()
+            redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+            if redirect_endpoint not in {
+                "settings",
+                "settings_options_page",
+                "settings_chargers_page",
+                "settings_ai_page",
+                "settings_backup_page",
+                "settings_ssl_page",
+            }:
+                redirect_endpoint = "settings"
+            if not _csrf_valid():
+                flash("Security check failed. Please try again.", "error")
+                return redirect(url_for(redirect_endpoint))
+
+            if action in ("save_retrain_options", "run_retrain_now"):
+                retrain_schedule_enabled = (
+                    "on" if request.form.get("ml_retrain_schedule_enabled") == "on" else "off"
+                )
+                retrain_schedule_hours_raw = (request.form.get("ml_retrain_schedule_hours", "24") or "24").strip()
+                try:
+                    retrain_schedule_hours = int(retrain_schedule_hours_raw)
+                except (ValueError, TypeError):
+                    retrain_schedule_hours = 24
+                retrain_schedule_hours = max(1, min(168, retrain_schedule_hours))
+
+                retrain_after_x_enabled = (
+                    "on" if request.form.get("ml_retrain_after_x_drives_enabled") == "on" else "off"
+                )
+                retrain_after_x_raw = (request.form.get("ml_retrain_after_x_drives", "10") or "10").strip()
+                try:
+                    retrain_after_x = int(retrain_after_x_raw)
+                except (ValueError, TypeError):
+                    retrain_after_x = 10
+                retrain_after_x = max(1, min(500, retrain_after_x))
+
+                if action == "save_retrain_options":
+                    _set_setting(
+                        "ml_retrain_schedule_enabled",
+                        retrain_schedule_enabled,
+                        "Enable periodic ML retraining scheduler",
+                    )
+                    _set_setting(
+                        "ml_retrain_schedule_hours",
+                        str(retrain_schedule_hours),
+                        "Periodic ML retraining interval in hours",
+                    )
+                    _set_setting(
+                        "ml_retrain_after_x_drives_enabled",
+                        retrain_after_x_enabled,
+                        "Enable ML retraining after X new drives",
+                    )
+                    _set_setting(
+                        "ml_retrain_after_x_drives",
+                        str(retrain_after_x),
+                        "Retrain ML model after this many new completed drives",
+                    )
+
+                    baseline_raw = (_get_setting("ml_retrain_last_trained_drive_count") or "").strip()
+                    if not baseline_raw:
+                        _set_setting(
+                            "ml_retrain_last_trained_drive_count",
+                            str(_ml_last_trained_drive_count()),
+                            "Completed drive baseline count from last successful ML retraining",
+                        )
+
+                    flash(
+                        "ML retraining settings saved. "
+                        f"Schedule: {'enabled' if retrain_schedule_enabled == 'on' else 'disabled'} "
+                        f"({retrain_schedule_hours}h), "
+                        f"After-X: {'enabled' if retrain_after_x_enabled == 'on' else 'disabled'} "
+                        f"({retrain_after_x} drives).",
+                        "success",
+                    )
+                    return redirect(url_for(redirect_endpoint))
+
+                started, reason = _start_ml_retrain_job(trigger="manual_settings")
+                if not started:
+                    flash("Model retraining is already running in the background.", "warning")
+                    log.info("Manual ML retraining skipped (%s)", reason)
+                else:
+                    flash(
+                        "Model retraining started in background. "
+                        "You can leave this page; status updates below.",
+                        "success",
+                    )
+                return redirect(url_for(redirect_endpoint))
+
+            if action == "save_backup_schedule":
+                backup_enabled = "on" if request.form.get("backup_schedule_enabled") == "on" else "off"
+                backup_hours_raw = (request.form.get("backup_schedule_hours", "24") or "24").strip()
+                try:
+                    backup_hours = int(backup_hours_raw)
+                except (ValueError, TypeError):
+                    backup_hours = 24
+                backup_hours = max(1, min(168, backup_hours))
+
+                _set_setting("backup_schedule_enabled", backup_enabled, "Enable periodic backup scheduler")
+                _set_setting("backup_schedule_hours", str(backup_hours), "Periodic backup interval in hours")
+
+                flash(
+                    f"Backup schedule saved ({'enabled' if backup_enabled == 'on' else 'disabled'}, every {backup_hours}h).",
+                    "success",
+                )
+                return redirect(url_for(redirect_endpoint))
+
+            if action in ("save_charger_api_key", "save_charger_options", "save_charger_schedule", "run_charger_import"):
+                nlr_api_key = (request.form.get("nlr_api_key", "") or "").strip()
+                ocm_api_key = (request.form.get("ocm_api_key", "") or "").strip()
+
+                nlr_updated = False
+                ocm_updated = False
+
+                if nlr_api_key and "*" not in nlr_api_key and nlr_api_key.lower() != "unset":
+                    nlr_chargers.set_nlr_api_key(nlr_api_key)
+                    log.info("NLR API key updated")
+                    nlr_updated = True
+
+                if ocm_api_key and "*" not in ocm_api_key and ocm_api_key.lower() != "unset":
+                    _set_setting(
+                        "ocm_api_key",
+                        ocm_api_key,
+                        "Open Charge Map API key for charger data (see https://openchargemap.org/site/develop/api)",
+                    )
+                    log.info("OCM API key updated")
+                    ocm_updated = True
+
+                charger_scope = (request.form.get("charger_scope", "all_us") or "all_us").strip()
+                if charger_scope not in ("all_us", "single_state"):
+                    charger_scope = "all_us"
+
+                state_filter = (request.form.get("charger_state_filter", "") or "").strip().upper()
+                if charger_scope != "single_state":
+                    state_filter = ""
+                if charger_scope == "single_state" and state_filter and state_filter not in nlr_chargers.US_STATES:
+                    flash(f"Invalid state code '{state_filter}'. Falling back to all US.", "warning")
+                    charger_scope = "all_us"
+                    state_filter = ""
+
+                fetch_strategy = (request.form.get("charger_fetch_strategy", "all_then_200") or "all_then_200").strip()
+                if fetch_strategy not in ("all_then_200", "paged_200"):
+                    fetch_strategy = "all_then_200"
+
+                page_size_raw = (request.form.get("charger_page_size", "200") or "200").strip()
+                try:
+                    page_size = int(page_size_raw)
+                except (ValueError, TypeError):
+                    page_size = 200
+                page_size = max(50, min(1000, page_size))
+
+                if action == "save_charger_options":
+                    _set_setting("charger_scope", charger_scope, "Charger import scope: all_us or single_state")
+                    _set_setting("charger_state_filter", state_filter, "State code filter for charger import")
+                    _set_setting(
+                        "charger_fetch_strategy",
+                        fetch_strategy,
+                        "Charger import strategy: all_then_200 or paged_200",
+                    )
+                    _set_setting("charger_page_size", str(page_size), "Charger import page size")
+
+                auto_update = "on" if request.form.get("charger_auto_update") == "on" else "off"
+                auto_hours_raw = (request.form.get("charger_auto_update_hours", "24") or "24").strip()
+                try:
+                    auto_hours = int(auto_hours_raw)
+                except (ValueError, TypeError):
+                    auto_hours = 24
+                auto_hours = max(1, min(168, auto_hours))
+
+                if action == "save_charger_schedule":
+                    _set_setting("charger_auto_update", auto_update, "Enable periodic charger sync scheduler")
+                    _set_setting(
+                        "charger_auto_update_hours",
+                        str(auto_hours),
+                        "Periodic charger sync interval in hours",
+                    )
+                    flash(
+                        f"Charger auto-update schedule saved ({'enabled' if auto_update == 'on' else 'disabled'}, every {auto_hours}h).",
+                        "success",
+                    )
+                    return redirect(url_for(redirect_endpoint))
+
+                if action == "save_charger_api_key":
+                    if nlr_updated and ocm_updated:
+                        flash("NREL and OCM API keys saved.", "success")
+                    elif nlr_updated:
+                        flash("NREL API key saved.", "success")
+                    elif ocm_updated:
+                        flash("OCM API key saved.", "success")
+                    else:
+                        flash("No API key changes detected.", "warning")
+                    return redirect(url_for(redirect_endpoint))
+
+                if action == "save_charger_options":
+                    flash("Charger import options saved.", "success")
+                    return redirect(url_for(redirect_endpoint))
+
+                state_for_import = state_filter if charger_scope == "single_state" and state_filter else None
+                started, reason = _start_charger_import_job(
+                    state_for_import,
+                    fetch_strategy,
+                    page_size,
+                    trigger="manual_settings",
+                )
+
+                if not started:
+                    flash("A charger import is already running. Check Last Sync Status/logs for progress.", "warning")
+                    log.info("Manual charger import skipped (%s)", reason)
+                else:
+                    log.info(
+                        "Manual charger import submitted as background job (scope=%s, state=%s, strategy=%s, page_size=%s)",
+                        charger_scope,
+                        state_for_import or "all",
+                        fetch_strategy,
+                        page_size,
+                    )
+                    flash(
+                        "Charger import started in background. You can leave this page; progress is logged and status updates below.",
+                        "success",
+                    )
+                return redirect(url_for(redirect_endpoint))
+
             _set_setting("units", request.form.get("units", "imperial"), "Display unit system")
 
             requested_tz = (request.form.get("timezone", "") or "").strip() or _SETTINGS_DEFAULTS["timezone"]
@@ -2260,6 +4220,37 @@ def create_app() -> Flask:
             # Developing mode toggle
             developing = "on" if request.form.get("developing") == "on" else "off"
             _set_setting("developing", developing, "Disable startup delay for development")
+
+            startup_delay_raw = (request.form.get("startup_delay_seconds", _SETTINGS_DEFAULTS["startup_delay_seconds"]) or _SETTINGS_DEFAULTS["startup_delay_seconds"]).strip()
+            try:
+                startup_delay = int(startup_delay_raw)
+            except (ValueError, TypeError):
+                startup_delay = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
+            startup_delay = max(0, min(300, startup_delay))
+            _set_setting(
+                "startup_delay_seconds",
+                str(startup_delay),
+                "Startup delay before UI/poller become available (seconds); ignored in developing mode",
+            )
+
+            idle_timeout_raw = (
+                request.form.get(
+                    "local_auth_idle_timeout_minutes",
+                    _get_setting("local_auth_idle_timeout_minutes")
+                    or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
+                )
+                or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"]
+            ).strip()
+            try:
+                idle_timeout_minutes = int(idle_timeout_raw)
+            except (ValueError, TypeError):
+                idle_timeout_minutes = int(_SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"])
+            idle_timeout_minutes = max(1, min(1440, idle_timeout_minutes))
+            _set_setting(
+                "local_auth_idle_timeout_minutes",
+                str(idle_timeout_minutes),
+                "Auto-logout idle timeout for local auth sessions (minutes)",
+            )
 
             # Clamp all polling intervals to safe limits
             iv_off      = _clamp_interval("poll_interval_off",      request.form.get("poll_interval_off", "120"))
@@ -2303,7 +4294,7 @@ def create_app() -> Flask:
                 )
 
             flash("Settings saved.", "success")
-            return redirect(url_for("settings"))
+            return redirect(url_for(redirect_endpoint))
 
         current = {
             "units": _get_setting("units"),
@@ -2316,6 +4307,23 @@ def create_app() -> Flask:
             "conservative_polling": _get_setting("conservative_polling"),
             "autostart_poller": _get_setting("autostart_poller"),
             "developing": _get_setting("developing"),
+            "startup_delay_seconds": _get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"],
+            "local_auth_idle_timeout_minutes": _get_setting("local_auth_idle_timeout_minutes") or _SETTINGS_DEFAULTS["local_auth_idle_timeout_minutes"],
+            "nlr_api_key": _get_setting("nlr_api_key") or "",
+            "charger_scope": _get_setting("charger_scope") or _SETTINGS_DEFAULTS["charger_scope"],
+            "charger_state_filter": _get_setting("charger_state_filter") or _SETTINGS_DEFAULTS["charger_state_filter"],
+            "charger_fetch_strategy": _get_setting("charger_fetch_strategy") or _SETTINGS_DEFAULTS["charger_fetch_strategy"],
+            "charger_page_size": _get_setting("charger_page_size") or _SETTINGS_DEFAULTS["charger_page_size"],
+            "charger_auto_update": _get_setting("charger_auto_update") or _SETTINGS_DEFAULTS["charger_auto_update"],
+            "charger_auto_update_hours": _get_setting("charger_auto_update_hours") or _SETTINGS_DEFAULTS["charger_auto_update_hours"],
+            "ml_retrain_schedule_enabled": _get_setting("ml_retrain_schedule_enabled") or _SETTINGS_DEFAULTS["ml_retrain_schedule_enabled"],
+            "ml_retrain_schedule_hours": _get_setting("ml_retrain_schedule_hours") or _SETTINGS_DEFAULTS["ml_retrain_schedule_hours"],
+            "ml_retrain_after_x_drives_enabled": _get_setting("ml_retrain_after_x_drives_enabled") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives_enabled"],
+            "ml_retrain_after_x_drives": _get_setting("ml_retrain_after_x_drives") or _SETTINGS_DEFAULTS["ml_retrain_after_x_drives"],
+            "backup_schedule_enabled": _get_setting("backup_schedule_enabled") or _SETTINGS_DEFAULTS["backup_schedule_enabled"],
+            "backup_schedule_hours": _get_setting("backup_schedule_hours") or _SETTINGS_DEFAULTS["backup_schedule_hours"],
+            "backup_last_completed_at": _get_setting("backup_last_completed_at") or _SETTINGS_DEFAULTS["backup_last_completed_at"],
+            "backup_last_error": _get_setting("backup_last_error") or _SETTINGS_DEFAULTS["backup_last_error"],
         }
         ssl_cfg = config.ssl_config()
         ssl_status = {
@@ -2331,29 +4339,138 @@ def create_app() -> Flask:
             else:
                 ssl_status["cert_valid"] = False
                 ssl_status["cert_message"] = "Certificate or key file not found on disk"
+        
+        charger_job_running = _charger_import_is_running()
+        if not charger_job_running:
+            stale_count = nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
+            if stale_count:
+                log.warning("Detected and closed %d stale charger import run(s)", stale_count)
+
+        # Get charger sync status
+        charger_status = nlr_chargers.get_sync_status()
+        charger_failure_class = _charger_failure_class(charger_status)
+        charger_heartbeat_stale = False
+        if charger_status and charger_status.get("status") == "in_progress":
+            try:
+                charger_heartbeat_stale = int(charger_status.get("heartbeat_age_seconds") or 0) > 300
+            except (TypeError, ValueError):
+                charger_heartbeat_stale = False
+
+        ml_retrain_job_running = _ml_retrain_is_running()
+        ml_baseline_drives = _ml_last_trained_drive_count()
+        ml_completed_drives = _count_completed_training_drives()
+        ml_new_drives = max(0, ml_completed_drives - ml_baseline_drives)
+        ml_schema = _read_model_schema()
+        ml_retrain_status = {
+            "status": _get_setting("ml_retrain_status") or "idle",
+            "last_started_at": _get_setting("ml_retrain_last_started_at") or "",
+            "last_completed_at": _get_setting("ml_retrain_last_completed_at") or "",
+            "last_trigger": _get_setting("ml_retrain_last_trigger") or "",
+            "last_error": _get_setting("ml_retrain_last_error") or "",
+            "last_duration_sec": _get_setting("ml_retrain_last_duration_sec") or "",
+            "last_exit_code": _get_setting("ml_retrain_last_exit_code") or "",
+            "baseline_drives": ml_baseline_drives,
+            "completed_drives": ml_completed_drives,
+            "new_drives_since_last_train": ml_new_drives,
+            "schema_training_date": str(ml_schema.get("training_date") or ""),
+            "schema_num_training_drives": ml_schema.get("num_training_drives"),
+            "scheduler_running": _ml_retrain_scheduler_is_running(),
+        }
+        if ml_retrain_job_running:
+            ml_retrain_status["status"] = "in_progress"
+
+        seq_marker = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_MARKER_KEY,),
+        )
+        seq_force = db.fetch_one(
+            "SELECT value FROM app_config WHERE key = %s",
+            (_SEQUENCE_ALIGNMENT_FORCE_KEY,),
+        )
+        sequence_alignment = {
+            "last_run": seq_marker["value"] if seq_marker else None,
+            "force_next_startup": (
+                seq_force is not None
+                and str(seq_force.get("value", "")).strip().lower() in ("on", "true", "1", "yes")
+            ),
+        }
+        
         return render_template("settings.html", settings=current, ssl=ssl_cfg,
-                               ssl_status=ssl_status)
+                               ssl_status=ssl_status, charger_status=charger_status,
+                               charger_failure_class=charger_failure_class,
+                               sequence_alignment=sequence_alignment,
+                               charger_job_running=charger_job_running,
+                               charger_heartbeat_stale=charger_heartbeat_stale,
+                               ml_retrain_status=ml_retrain_status,
+                               ml_retrain_job_running=ml_retrain_job_running)
+
+    @app.route("/settings/sequence-alignment", methods=["POST"])
+    def sequence_alignment_settings():
+        """Manage database ID sequence alignment controls from the Settings page."""
+        action = (request.form.get("action") or "").strip()
+        redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+        if redirect_endpoint not in {
+            "settings",
+            "settings_options_page",
+            "settings_chargers_page",
+            "settings_ai_page",
+            "settings_backup_page",
+            "settings_ssl_page",
+        }:
+            redirect_endpoint = "settings"
+
+        if action == "run_now":
+            aligned_tables = _run_sequence_alignment(force=True)
+            if aligned_tables:
+                flash(
+                    "Sequence alignment completed for: " + ", ".join(aligned_tables),
+                    "success",
+                )
+            else:
+                flash(
+                    "Sequence alignment completed. No serial ID tables required adjustment.",
+                    "success",
+                )
+        elif action == "save_restore_option":
+            force_next = "on" if request.form.get("force_next_startup") == "on" else "off"
+            _set_setting(
+                _SEQUENCE_ALIGNMENT_FORCE_KEY,
+                force_next,
+                "If on, run sequence alignment once at next app startup",
+            )
+            if force_next == "on":
+                flash("Sequence alignment is queued for next startup.", "success")
+            else:
+                flash("Sequence alignment is not queued for next startup.", "success")
+        else:
+            flash("Unknown sequence-alignment action.", "warning")
+
+        return redirect(url_for(redirect_endpoint))
 
     @app.route("/settings/upload-image", methods=["POST"])
     def upload_vehicle_image():
         """Handle vehicle image upload from the settings page."""
+        redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+        if redirect_endpoint not in {"settings", "settings_ssl_page"}:
+            redirect_endpoint = "settings"
+
         file = request.files.get("vehicle_image")
         if not file or file.filename == "":
             flash("No file selected.", "error")
-            return redirect(url_for("settings"))
+            return redirect(url_for(redirect_endpoint))
 
         ALLOWED = {"png", "jpg", "jpeg", "gif", "webp"}
         ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
         if ext not in ALLOWED:
             flash(f"Invalid file type. Allowed: {', '.join(ALLOWED)}", "error")
-            return redirect(url_for("settings"))
+            return redirect(url_for(redirect_endpoint))
 
         filename = secure_filename(f"vehicle.{ext}")
         save_path = os.path.join(app.static_folder, filename)
         file.save(save_path)
         _set_setting("vehicle_image", filename, "Custom vehicle image filename")
         flash("Vehicle image updated.", "success")
-        return redirect(url_for("settings"))
+        return redirect(url_for(redirect_endpoint))
 
     @app.route("/settings/ssl", methods=["POST"])
     def ssl_settings():
@@ -2363,6 +4480,10 @@ def create_app() -> Flask:
         Paths and enabled flag are persisted to config.json.
         A restart is required for SSL changes to take effect.
         """
+        redirect_endpoint = (request.form.get("return_to") or "settings").strip()
+        if redirect_endpoint not in {"settings", "settings_ssl_page"}:
+            redirect_endpoint = "settings"
+
         certs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
         os.makedirs(certs_dir, exist_ok=True)
 
@@ -2374,7 +4495,7 @@ def create_app() -> Flask:
             cert_ext = cert_file.filename.rsplit(".", 1)[-1].lower() if "." in cert_file.filename else ""
             if cert_ext not in ("pem", "crt", "cer"):
                 flash("Certificate must be .pem, .crt, or .cer", "error")
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
             cert_path = os.path.join(certs_dir, "server.crt")
             cert_file.save(cert_path)
             ssl_cfg["cert"] = cert_path
@@ -2386,7 +4507,7 @@ def create_app() -> Flask:
             key_ext = key_file.filename.rsplit(".", 1)[-1].lower() if "." in key_file.filename else ""
             if key_ext not in ("pem", "key"):
                 flash("Key must be .pem or .key", "error")
-                return redirect(url_for("settings"))
+                return redirect(url_for(redirect_endpoint))
             key_path = os.path.join(certs_dir, "server.key")
             key_file.save(key_path)
             # Restrict permissions on the private key
@@ -2399,56 +4520,98 @@ def create_app() -> Flask:
 
         config.save_ssl(ssl_cfg)
         flash("SSL settings saved. Restart the application for changes to take effect.", "success")
-        return redirect(url_for("settings"))
+        return redirect(url_for(redirect_endpoint))
 
     # ── Manage Vehicles ──────────────────────────────────────────────
 
-    _VIN_TABLES = [
-        "garage", "telemetry", "vehicle_state", "battery_state",
-        "charging_state", "charging_history", "location_state", "tire_state", "door_state",
-        "window_state", "brake_state", "security_state", "environment_state",
-        "vehicle_configuration", "departure_schedule",
-        "polling_config", "collector_status", "oauth_credentials",
-    ]
+    # Backup scheduler thread and functions (moved out of _SETTINGS_DEFAULTS)
 
     @app.route("/manage")
     def manage():
-        """Show all VINs in the system with per-table row counts."""
+        """Manage known VINs and show per-table row counts."""
         active_vin = _active_vin()
-        garage_rows = db.fetch_all("SELECT * FROM garage ORDER BY updated_at DESC")
 
-        # Build per-VIN stats
-        vin_stats = []
-        for g in garage_rows:
-            v = g["vin"]
-            counts = {}
-            total = 0
-            for t in _VIN_TABLES:
-                if t == "garage":
-                    continue
-                if not _table_exists(t):
-                    continue
-                # composite-PK tables use vin column too
-                row = db.fetch_one(f"SELECT count(*) AS cnt FROM {t} WHERE vin = %s", (v,))
-                c = row["cnt"] if row else 0
-                if c > 0:
-                    counts[t] = c
-                    total += c
-            vin_stats.append({
-                "vin": v,
-                "nickname": g.get("nickname"),
-                "make": g.get("make"),
-                "model_name": g.get("model_name"),
-                "model_year": g.get("model_year"),
-                "is_active": (v == active_vin),
-                "counts": counts,
-                "total_rows": total,
-            })
+        garage_rows = db.fetch_all(
+            """
+            SELECT vin, nickname, make, model_name, model_year
+            FROM garage
+            ORDER BY vin
+            """
+        )
 
-        # Also check for oauth_credentials without a matching garage row
+        count_tables = [
+            "telemetry",
+            "vehicle_state",
+            "battery_state",
+            "charging_state",
+            "charging_history",
+            "location_state",
+            "tire_state",
+            "door_state",
+            "window_state",
+            "brake_state",
+            "security_state",
+            "environment_state",
+            "collector_status",
+            "polling_config",
+            "oauth_credentials",
+            "vehicle_configuration",
+            "departure_schedule",
+            "drives",
+            "drive_points",
+        ]
+
+        vin_stats: list[dict] = []
+        for row in garage_rows:
+            vin = row.get("vin")
+            counts: dict[str, int] = {}
+            total_rows = 0
+
+            for table_name in count_tables:
+                if not _table_exists(table_name):
+                    continue
+                if table_name == "drive_points":
+                    result = db.fetch_one(
+                        """
+                        SELECT COUNT(*) AS cnt
+                        FROM drive_points dp
+                        JOIN drives d ON d.id = dp.drive_id
+                        WHERE d.vin = %s
+                        """,
+                        (vin,),
+                    )
+                else:
+                    result = db.fetch_one(
+                        f"SELECT COUNT(*) AS cnt FROM {table_name} WHERE vin = %s",
+                        (vin,),
+                    )
+
+                cnt = int(result["cnt"]) if result and result.get("cnt") is not None else 0
+                if cnt > 0:
+                    counts[table_name] = cnt
+                    total_rows += cnt
+
+            vin_stats.append(
+                {
+                    "vin": vin,
+                    "nickname": row.get("nickname"),
+                    "make": row.get("make"),
+                    "model_name": row.get("model_name"),
+                    "model_year": row.get("model_year"),
+                    "counts": counts,
+                    "total_rows": total_rows,
+                    "is_active": (vin == active_vin),
+                }
+            )
+
         orphan_creds = db.fetch_all(
-            "SELECT id, provider, vin FROM oauth_credentials "
-            "WHERE vin NOT IN (SELECT vin FROM garage) OR vin IS NULL"
+            """
+            SELECT oc.id, oc.provider, oc.vin
+            FROM oauth_credentials oc
+            LEFT JOIN garage g ON g.vin = oc.vin
+            WHERE oc.vin IS NULL OR g.vin IS NULL
+            ORDER BY oc.id DESC
+            """
         )
 
         return render_template(
@@ -2504,6 +4667,786 @@ def create_app() -> Flask:
 
         return redirect(url_for("manage"))
 
+    @app.route("/chargers/public")
+    def public_chargers():
+        """Show summary analytics for imported public charger data."""
+        if not _table_exists("ev_stations"):
+            flash("Public charger table is missing. Run a charger import first.", "warning")
+            return redirect(url_for("settings"))
+
+        if _table_exists("ev_sync_runs"):
+            nlr_chargers.mark_stale_sync_runs(stale_after_minutes=5)
+
+        location_query = (request.args.get("location") or "").strip()
+        origin_query = (request.args.get("origin") or "").strip()
+        radius_miles_raw = (request.args.get("radius_miles") or "").strip()
+        network_filter = (request.args.get("network") or "").strip()
+        min_kw_raw = (request.args.get("min_kw") or "").strip()
+        result_limit = request.args.get("limit", 100, type=int)
+        result_limit = max(25, min(500, result_limit))
+
+        min_kw = None
+        if min_kw_raw:
+            try:
+                min_kw = float(min_kw_raw)
+            except (TypeError, ValueError):
+                min_kw = None
+
+        radius_miles = None
+        if radius_miles_raw:
+            try:
+                radius_miles = float(radius_miles_raw)
+            except (TypeError, ValueError):
+                radius_miles = None
+
+        def _geocode_location(query: str) -> dict[str, object] | None:
+            """Geocode free-form location text into lat/lon for distance filtering."""
+            q = (query or "").strip()
+            if not q:
+                return None
+            try:
+                resp = requests.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": q,
+                        "format": "json",
+                        "limit": 1,
+                        "countrycodes": "us",
+                    },
+                    headers={"User-Agent": "Ford-Lightning-EV/1.0"},
+                    timeout=8,
+                )
+                resp.raise_for_status()
+                rows = resp.json() or []
+                if not rows:
+                    return None
+                top = rows[0]
+                return {
+                    "lat": float(top.get("lat")),
+                    "lon": float(top.get("lon")),
+                    "label": str(top.get("display_name") or q),
+                }
+            except Exception as exc:
+                log.warning("Location geocode failed for '%s': %s", q, exc)
+                return None
+
+        origin_geo = _geocode_location(origin_query) if origin_query else None
+        if origin_query and not origin_geo:
+            flash("Could not resolve origin location for distance filter. Showing non-distance results.", "warning")
+
+        totals = {
+            "stations": 0,
+            "connectors": 0,
+            "states": 0,
+            "networks": 0,
+        }
+
+        row = db.fetch_one("SELECT COUNT(*) AS cnt FROM ev_stations")
+        totals["stations"] = row["cnt"] if row else 0
+
+        row = db.fetch_one("SELECT COUNT(DISTINCT state) AS cnt FROM ev_stations WHERE state IS NOT NULL AND state <> ''")
+        totals["states"] = row["cnt"] if row else 0
+
+        row = db.fetch_one("SELECT COUNT(DISTINCT network_name) AS cnt FROM ev_stations WHERE network_name IS NOT NULL AND network_name <> ''")
+        totals["networks"] = row["cnt"] if row else 0
+
+        if _table_exists("ev_charger_connectors"):
+            row = db.fetch_one("SELECT COUNT(*) AS cnt FROM ev_charger_connectors")
+            totals["connectors"] = row["cnt"] if row else 0
+
+        by_state = db.fetch_all(
+            """
+            SELECT
+                COALESCE(state, 'UNKNOWN') AS state,
+                COUNT(*) AS station_count
+            FROM ev_stations
+            GROUP BY COALESCE(state, 'UNKNOWN')
+            ORDER BY station_count DESC, state ASC
+            """
+        )
+
+        state_count_map = {str(row["state"]): int(row["station_count"]) for row in by_state}
+        all_states_counts = [
+            {"state": st, "station_count": state_count_map.get(st, 0)}
+            for st in sorted(nlr_chargers.US_STATES)
+        ]
+
+        connector_types = []
+        charging_levels = []
+        if _table_exists("ev_charger_connectors"):
+            connector_types = db.fetch_all(
+                """
+                SELECT
+                    COALESCE(NULLIF(connector_type, ''), 'UNKNOWN') AS connector_type,
+                    COUNT(*) AS connector_count,
+                    COUNT(DISTINCT station_id) AS station_count
+                FROM ev_charger_connectors
+                GROUP BY COALESCE(NULLIF(connector_type, ''), 'UNKNOWN')
+                ORDER BY connector_count DESC, connector_type ASC
+                """
+            )
+            charging_levels = db.fetch_all(
+                """
+                SELECT
+                    COALESCE(NULLIF(charging_level, ''), 'UNKNOWN') AS charging_level,
+                    COUNT(*) AS connector_count
+                FROM ev_charger_connectors
+                GROUP BY COALESCE(NULLIF(charging_level, ''), 'UNKNOWN')
+                ORDER BY connector_count DESC, charging_level ASC
+                """
+            )
+
+        network_breakdown = db.fetch_all(
+            """
+            SELECT
+                COALESCE(NULLIF(network_name, ''), 'UNKNOWN') AS network_name,
+                COUNT(*) AS station_count
+            FROM ev_stations
+            GROUP BY COALESCE(NULLIF(network_name, ''), 'UNKNOWN')
+            ORDER BY station_count DESC, network_name ASC
+            LIMIT 30
+            """
+        )
+
+        network_options = db.fetch_all(
+            """
+            SELECT DISTINCT COALESCE(NULLIF(network_name, ''), 'UNKNOWN') AS network_name
+            FROM ev_stations
+            ORDER BY network_name ASC
+            """
+        )
+
+        has_connectors = _table_exists("ev_charger_connectors")
+        connector_join = """
+            LEFT JOIN (
+                SELECT
+                    station_id,
+                    MAX(COALESCE(power_kw, 0)) AS max_power_kw,
+                    STRING_AGG(DISTINCT COALESCE(NULLIF(connector_type, ''), 'UNKNOWN'), ', ') AS connector_types,
+                    STRING_AGG(DISTINCT COALESCE(NULLIF(charging_level, ''), 'UNKNOWN'), ', ') AS charging_levels,
+                    SUM(CASE WHEN COALESCE(port_count, 0) > 0 THEN port_count ELSE 1 END) AS connector_count
+                FROM ev_charger_connectors
+                GROUP BY station_id
+            ) conn ON conn.station_id = s.id
+        """ if has_connectors else ""
+
+        where_clauses: list[str] = []
+        where_params: list[object] = []
+        distance_expr = """
+            (3958.7613 * 2 * ASIN(SQRT(
+                POWER(SIN(RADIANS(s.latitude - %s) / 2), 2)
+                + COS(RADIANS(%s)) * COS(RADIANS(s.latitude))
+                * POWER(SIN(RADIANS(s.longitude - %s) / 2), 2)
+            )))
+        """
+        distance_select_sql = "NULL::DOUBLE PRECISION AS distance_miles"
+        select_params: list[object] = []
+
+        if location_query:
+            tokens = [tok for tok in re.split(r"[\s,]+", location_query) if tok]
+            for token in tokens:
+                where_clauses.append(
+                    "concat_ws(' ', "
+                    "COALESCE(s.station_name, ''), "
+                    "COALESCE(s.street_address, ''), "
+                    "COALESCE(s.city, ''), "
+                    "COALESCE(s.state, ''), "
+                    "COALESCE(s.zip, '')"
+                    ") ILIKE %s"
+                )
+                where_params.append(f"%{token}%")
+
+        if network_filter:
+            where_clauses.append("COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') = %s")
+            where_params.append(network_filter)
+
+        if min_kw is not None:
+            if has_connectors:
+                where_clauses.append("COALESCE(conn.max_power_kw, 0) >= %s")
+                where_params.append(min_kw)
+            else:
+                where_clauses.append("1 = 0")
+
+        if origin_geo:
+            lat = float(origin_geo["lat"])
+            lon = float(origin_geo["lon"])
+            distance_select_sql = f"{distance_expr} AS distance_miles"
+            select_params.extend([lat, lat, lon])
+            if radius_miles is not None and radius_miles > 0:
+                where_clauses.append(f"{distance_expr} <= %s")
+                where_params.extend([lat, lat, lon, radius_miles])
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        station_ports_expr = (
+            "(COALESCE(NULLIF(s.raw_data->>'ev_level1_evse_num', '')::INT, 0) + "
+            "COALESCE(NULLIF(s.raw_data->>'ev_level2_evse_num', '')::INT, 0) + "
+            "COALESCE(NULLIF(s.raw_data->>'ev_dc_fast_num', '')::INT, 0))"
+        )
+        connector_select = (
+            "COALESCE(conn.max_power_kw, 0) AS max_power_kw, "
+            "COALESCE(conn.connector_types, '') AS connector_types, "
+            "COALESCE(conn.charging_levels, '') AS charging_levels, "
+            f"GREATEST(COALESCE(conn.connector_count, 0), {station_ports_expr}) AS connector_count"
+        ) if has_connectors else (
+            f"0::REAL AS max_power_kw, ''::TEXT AS connector_types, ''::TEXT AS charging_levels, {station_ports_expr}::BIGINT AS connector_count"
+        )
+
+        filtered_total_row = db.fetch_one(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM ev_stations s
+            {connector_join}
+            {where_sql}
+            """,
+            tuple(where_params),
+        )
+        filtered_total = filtered_total_row["cnt"] if filtered_total_row else 0
+    # Fetch stations from DB (NREL + persisted OCM), then render map/table from DB only.
+        filtered_stations = db.fetch_all(
+            f"""
+            SELECT
+                s.id,
+        s.source,
+                s.source_authority,
+                s.station_name,
+                s.street_address,
+                s.city,
+                s.state,
+                s.zip,
+                s.country,
+                s.latitude,
+                s.longitude,
+                s.status_code,
+                s.fuel_type_code,
+                s.access_code,
+                s.access_detail,
+                s.owner_type_code,
+                s.facility_type,
+                s.nlr_station_id,
+                s.updated_at,
+                COALESCE(NULLIF(s.network_name, ''), 'UNKNOWN') AS network_name,
+                {distance_select_sql},
+                {connector_select}
+            FROM ev_stations s
+            {connector_join}
+            {where_sql}
+            ORDER BY
+                distance_miles ASC NULLS LAST,
+                max_power_kw DESC,
+                s.state ASC,
+                s.city ASC,
+                s.station_name ASC
+            LIMIT %s
+            """,
+            tuple([*select_params, *where_params, result_limit]),
+        )
+
+        # Build map points directly from filtered DB rows.
+        map_points = []
+        for src in filtered_stations:
+            map_points.append({
+                "name": src.get("station_name"),
+                "city": src.get("city"),
+                "state": src.get("state"),
+                "zip": src.get("zip"),
+                "network": src.get("network_name"),
+                "max_kw": float(src.get("max_power_kw") or 0),
+                "distance_miles": src.get("distance_miles") if "distance_miles" in src else None,
+                "lat": float(src.get("latitude")) if src.get("latitude") is not None else None,
+                "lon": float(src.get("longitude")) if src.get("longitude") is not None else None,
+                "source": src.get("source"),
+                "source_authority": src.get("source_authority"),
+            })
+
+        sync_status = nlr_chargers.get_sync_status()
+        recent_runs = []
+        if _table_exists("ev_sync_runs"):
+            recent_runs = db.fetch_all(
+                """
+                SELECT id, sync_type, state_filter, status, started_at, last_heartbeat_at, completed_at,
+                       stations_imported, stations_updated, errors, last_error
+                FROM ev_sync_runs
+                ORDER BY started_at DESC
+                LIMIT 10
+                """
+            )
+
+        sync_status_failure_class = _charger_failure_class(sync_status)
+        recent_runs_view = []
+        for run in recent_runs:
+            run_view = dict(run)
+            run_view["failure_class"] = _charger_failure_class(run_view)
+            recent_runs_view.append(run_view)
+
+        return render_template(
+            "public_chargers.html",
+            totals=totals,
+            filters={
+                "location": location_query,
+                "origin": origin_query,
+                "radius_miles": radius_miles_raw,
+                "network": network_filter,
+                "min_kw": min_kw_raw,
+                "limit": result_limit,
+            },
+            origin_geo=origin_geo,
+            map_points=map_points,
+            network_options=network_options,
+            filtered_stations=filtered_stations,
+            filtered_total=filtered_total,
+            by_state=by_state,
+            all_states_counts=all_states_counts,
+            connector_types=connector_types,
+            charging_levels=charging_levels,
+            network_breakdown=network_breakdown,
+            sync_status=sync_status,
+            sync_status_failure_class=sync_status_failure_class,
+            recent_runs=recent_runs_view,
+        )
+
+    # ── Trip Planner (Phase 2: ML routing) ─────────────────────────
+
+    def _current_vehicle_location_coords() -> tuple[float, float] | None:
+        """Return latest known vehicle coordinates for active VIN, if available."""
+        vin = _active_vin()
+        if not vin:
+            return None
+
+        location_row = db.fetch_one(
+            """
+            SELECT latitude, longitude, last_update
+            FROM location_state
+            WHERE vin = %s
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL
+            """,
+            (vin,),
+        )
+
+        drive_row = db.fetch_one(
+            """
+            SELECT dp.latitude, dp.longitude, dp.recorded_at
+            FROM drive_points dp
+            JOIN drives d ON d.id = dp.drive_id
+            WHERE d.vin = %s
+              AND dp.latitude IS NOT NULL
+              AND dp.longitude IS NOT NULL
+            ORDER BY dp.recorded_at DESC
+            LIMIT 1
+            """,
+            (vin,),
+        )
+
+        candidates = []
+        if location_row:
+            candidates.append(
+                (
+                    location_row.get("last_update"),
+                    float(location_row["latitude"]),
+                    float(location_row["longitude"]),
+                )
+            )
+        if drive_row:
+            candidates.append(
+                (
+                    drive_row.get("recorded_at"),
+                    float(drive_row["latitude"]),
+                    float(drive_row["longitude"]),
+                )
+            )
+
+        if candidates:
+            candidates.sort(key=lambda item: item[0] or datetime.min, reverse=True)
+            _, lat, lon = candidates[0]
+            return (lat, lon)
+
+        return None
+
+    def _reverse_geocode_label(lat: float, lon: float) -> str:
+        """Resolve a user-friendly address label for coordinates."""
+        # Try ArcGIS first because Nominatim may be temporarily rate-limited.
+        try:
+            response = requests.get(
+                "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode",
+                params={
+                    "location": f"{lon},{lat}",
+                    "f": "json",
+                    "langCode": "EN",
+                },
+                headers={"User-Agent": "MLLighting-Trip-Planner/1.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            data = response.json() or {}
+            address = data.get("address") or {}
+            label = (address.get("Match_addr") or address.get("LongLabel") or "").strip()
+            if label:
+                return label
+        except Exception as exc:
+            log.warning("ArcGIS reverse geocode failed for %s,%s: %s", lat, lon, exc)
+
+        try:
+            response = requests.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={
+                    "lat": lat,
+                    "lon": lon,
+                    "format": "jsonv2",
+                    "zoom": 18,
+                    "addressdetails": 1,
+                },
+                headers={"User-Agent": "MLLighting-Trip-Planner/1.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            data = response.json() or {}
+            display_name = (data.get("display_name") or "").strip()
+            if display_name:
+                return display_name
+        except Exception as exc:
+            log.warning("Reverse geocode failed for %s,%s: %s", lat, lon, exc)
+        return f"{lat:.6f},{lon:.6f}"
+
+    def _parse_coord_string(value: str) -> tuple[float, float] | None:
+        value = (value or "").strip()
+        if not value or "," not in value:
+            return None
+        parts = [p.strip() for p in value.split(",")]
+        if len(parts) != 2:
+            return None
+        try:
+            lat = float(parts[0])
+            lon = float(parts[1])
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                return (lat, lon)
+        except (TypeError, ValueError):
+            return None
+        return None
+
+    @app.route("/trip-planner", methods=["GET", "POST"])
+    def trip_planner():
+        """Interactive trip planner for EV routing with charger recommendations."""
+        plan = None
+        preview = None
+        form_data = {
+            "source": "",
+            "destination": "",
+            "start_soc": 85,
+            "use_current_source": False,
+            "charger_type": "CCS1",
+            "min_charger_kw": 50,
+        }
+
+        saved_form = session.get("last_trip_form")
+        if isinstance(saved_form, dict):
+            form_data["source"] = str(saved_form.get("source") or "").strip()
+            form_data["destination"] = str(saved_form.get("destination") or "").strip()
+            form_data["use_current_source"] = bool(saved_form.get("use_current_source", False))
+
+            try:
+                form_data["start_soc"] = int(saved_form.get("start_soc", 85))
+            except (ValueError, TypeError):
+                form_data["start_soc"] = 85
+
+            form_data["charger_type"] = str(saved_form.get("charger_type") or "CCS1").strip().upper()
+            if form_data["charger_type"] not in {"CCS1", "NACS", "CHADEMO", "ANY"}:
+                form_data["charger_type"] = "CCS1"
+
+            try:
+                form_data["min_charger_kw"] = int(float(saved_form.get("min_charger_kw", 50)))
+            except (ValueError, TypeError):
+                form_data["min_charger_kw"] = 50
+            form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
+            form_data["min_charger_kw"] = max(0, min(500, form_data["min_charger_kw"]))
+
+        unit_system = _get_setting("units") if db.is_available() else "imperial"
+        timezone_name = _get_setting("timezone") if db.is_available() else "UTC"
+        try:
+            display_tz = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            timezone_name = "UTC"
+            display_tz = timezone.utc
+
+        if request.method == "POST":
+            form_data["source"] = request.form.get("source", "").strip()
+            form_data["destination"] = request.form.get("destination", "").strip()
+            form_data["use_current_source"] = request.form.get("use_current_source") == "on"
+            try:
+                form_data["start_soc"] = int(request.form.get("start_soc", 85))
+            except (ValueError, TypeError):
+                form_data["start_soc"] = 85
+
+            form_data["charger_type"] = (request.form.get("charger_type", "CCS1") or "CCS1").strip().upper()
+            if form_data["charger_type"] not in {"CCS1", "NACS", "CHADEMO", "ANY"}:
+                form_data["charger_type"] = "CCS1"
+
+            try:
+                form_data["min_charger_kw"] = int(float(request.form.get("min_charger_kw", 50)))
+            except (ValueError, TypeError):
+                form_data["min_charger_kw"] = 50
+            form_data["min_charger_kw"] = max(0, min(500, form_data["min_charger_kw"]))
+
+            form_data["start_soc"] = max(0, min(100, form_data["start_soc"]))
+
+            session["last_trip_form"] = {
+                "source": form_data["source"],
+                "destination": form_data["destination"],
+                "start_soc": form_data["start_soc"],
+                "use_current_source": form_data["use_current_source"],
+                "charger_type": form_data["charger_type"],
+                "min_charger_kw": form_data["min_charger_kw"],
+            }
+
+            action = (request.form.get("action") or "preview").strip().lower()
+
+            if action == "calculate":
+                source_coords_text = request.form.get("source_resolved_coords", "").strip()
+                destination_coords_text = request.form.get("destination_resolved_coords", "").strip()
+                source_label = request.form.get("source_resolved_label", "").strip() or source_coords_text
+                destination_label = request.form.get("destination_resolved_label", "").strip() or destination_coords_text
+
+                source_coords = _parse_coord_string(source_coords_text)
+                destination_coords = _parse_coord_string(destination_coords_text)
+
+                if not source_coords or not destination_coords:
+                    flash("Preview locations first, then calculate route.", "warning")
+                else:
+                    preview = {
+                        "ready": True,
+                        "source": {
+                            "label": source_label,
+                            "coords_text": source_coords_text,
+                        },
+                        "destination": {
+                            "label": destination_label,
+                            "coords_text": destination_coords_text,
+                        },
+                    }
+
+                    try:
+                        plan = tp_service.plan_trip(
+                            source=source_coords_text,
+                            destination=destination_coords_text,
+                            current_soc_percent=form_data["start_soc"],
+                            preferred_connector_type=form_data["charger_type"],
+                            min_charger_kw=float(form_data["min_charger_kw"]),
+                        )
+                        if plan:
+                            plan.source_name = source_label
+                            plan.destination_name = destination_label
+                            for wx in (plan.route_weather or []):
+                                eta_utc = str(wx.get("eta_utc") or "").strip()
+                                if not eta_utc:
+                                    continue
+                                try:
+                                    dt_utc = datetime.strptime(eta_utc, "%Y-%m-%d %H:%M UTC").replace(tzinfo=timezone.utc)
+                                    wx["eta_local"] = dt_utc.astimezone(display_tz).strftime("%Y-%m-%d %I:%M %p")
+                                except Exception:
+                                    wx["eta_local"] = eta_utc
+                            # Store plan in session for trip detail view
+                            from dataclasses import asdict
+                            plan_dict = asdict(plan)
+                            # Serialize charging stops properly
+                            plan_dict["charging_stops"] = [asdict(stop) for stop in plan.charging_stops]
+                            _store_trip_plan_for_session(plan_dict)
+                    except Exception as exc:
+                        log.exception(f"Trip planning failed: {exc}")
+                        flash(f"Trip planning failed: {exc}", "error")
+            else:
+                source_coords = None
+                destination_coords = None
+                source_label = ""
+                destination_label = ""
+
+                if not form_data["destination"]:
+                    flash("Please enter a destination.", "warning")
+                elif not form_data["use_current_source"] and not form_data["source"]:
+                    flash("Please enter a source or enable current vehicle location.", "warning")
+                else:
+                    if form_data["use_current_source"]:
+                        current_coords = _current_vehicle_location_coords()
+                        if not current_coords:
+                            flash(
+                                "Current vehicle location is unavailable. Poll the vehicle first or enter a source manually.",
+                                "warning",
+                            )
+                        else:
+                            source_coords = current_coords
+                            source_label = f"Current Vehicle Location: {_reverse_geocode_label(source_coords[0], source_coords[1])}"
+                    else:
+                        source_coords = tp_service.geocode_location(form_data["source"])
+                        if source_coords:
+                            source_label = _reverse_geocode_label(source_coords[0], source_coords[1])
+
+                    destination_coords = tp_service.geocode_location(form_data["destination"])
+                    if destination_coords:
+                        destination_label = _reverse_geocode_label(destination_coords[0], destination_coords[1])
+
+                    if not source_coords:
+                        flash("Could not resolve source location. Edit source and preview again.", "warning")
+                    if not destination_coords:
+                        flash("Could not resolve destination location. Edit destination and preview again.", "warning")
+
+                    if source_coords and destination_coords:
+                        preview = {
+                            "ready": True,
+                            "source": {
+                                "label": source_label,
+                                "coords_text": f"{source_coords[0]:.6f},{source_coords[1]:.6f}",
+                            },
+                            "destination": {
+                                "label": destination_label,
+                                "coords_text": f"{destination_coords[0]:.6f},{destination_coords[1]:.6f}",
+                            },
+                        }
+                        flash("Locations resolved. Review below, then calculate route.", "success")
+
+        baseline_kwh = None
+        ml_kwh = None
+        if plan:
+            baseline_kwh = getattr(plan, "baseline_energy_needed_kwh", None)
+            ml_kwh = getattr(plan, "ml_energy_needed_kwh", None)
+        return render_template(
+            "trip_planner.html",
+            form=form_data,
+            plan=plan,
+            preview=preview,
+            unit_system=unit_system,
+            timezone_name=timezone_name,
+            baseline_energy_kwh=baseline_kwh,
+            ml_energy_kwh=ml_kwh,
+        )
+
+    @app.route("/trip-detail", methods=["GET"])
+    def trip_detail():
+        """Detailed trip analysis view comparing baseline and ML estimates."""
+        plan = _get_trip_plan_for_session()
+        if not plan:
+            flash("No trip plan available. Please calculate a trip first.", "warning")
+            return redirect(url_for("trip_planner"))
+        
+        unit_system = _get_setting("units") if db.is_available() else "imperial"
+        
+        # Get ML training status for context
+        ml_baseline_drives = _ml_last_trained_drive_count()
+        ml_completed_drives = _count_completed_training_drives()
+        ml_new_drives = max(0, ml_completed_drives - ml_baseline_drives)
+        ml_schema = _read_model_schema()
+        ml_retrain_status = {
+            "status": _get_setting("ml_retrain_status") or "idle",
+            "last_started_at": _get_setting("ml_retrain_last_started_at") or "",
+            "last_completed_at": _get_setting("ml_retrain_last_completed_at") or "",
+            "last_trigger": _get_setting("ml_retrain_last_trigger") or "",
+            "last_error": _get_setting("ml_retrain_last_error") or "",
+            "last_duration_sec": _get_setting("ml_retrain_last_duration_sec") or "",
+            "last_exit_code": _get_setting("ml_retrain_last_exit_code") or "",
+            "baseline_drives": ml_baseline_drives,
+            "completed_drives": ml_completed_drives,
+            "new_drives_since_last_train": ml_new_drives,
+            "schema_training_date": str(ml_schema.get("training_date") or ""),
+            "schema_num_training_drives": ml_schema.get("num_training_drives"),
+            "scheduler_running": _ml_retrain_scheduler_is_running(),
+        }
+        
+        return render_template(
+            "trip_detail.html",
+            plan=plan,
+            unit_system=unit_system,
+            ml_retrain_status=ml_retrain_status,
+        )
+
+    @app.route("/api/predict/trip", methods=["POST"])
+    def api_predict_trip():
+        """API endpoint for trip planning (JSON).
+        
+        POST /api/predict/trip
+        {
+            "source": "40.7128,-74.0060",
+            "destination": "39.7392,-104.9903",
+            "current_soc_percent": 85,
+            "use_current_vehicle_location": false
+        }
+        
+        Returns: TripPlan as JSON
+        """
+        try:
+            data = request.get_json() or {}
+            
+            source = data.get("source", "").strip()
+            destination = data.get("destination", "").strip()
+            use_current = bool(data.get("use_current_vehicle_location", False))
+            current_soc = data.get("current_soc_percent", 85)
+
+            if not destination:
+                return jsonify({"error": "destination required"}), 400
+
+            if use_current:
+                current_coords = _current_vehicle_location_coords()
+                if not current_coords:
+                    return jsonify({"error": "current vehicle location unavailable"}), 400
+                source = f"{current_coords[0]:.6f},{current_coords[1]:.6f}"
+            elif not source:
+                return jsonify({"error": "source required unless use_current_vehicle_location=true"}), 400
+            
+            try:
+                current_soc = int(current_soc)
+            except (ValueError, TypeError):
+                current_soc = 85
+            
+            current_soc = max(0, min(100, current_soc))
+            
+            plan = tp_service.plan_trip(
+                source=source,
+                destination=destination,
+                current_soc_percent=current_soc,
+            )
+            if use_current:
+                plan.source_name = "Current Vehicle Location"
+            
+            # Convert dataclass to dict for JSON serialization
+            from dataclasses import asdict
+            plan_dict = asdict(plan)
+            
+            # Serialize charging stops
+            plan_dict["charging_stops"] = [
+                asdict(stop) for stop in plan.charging_stops
+            ]
+            
+            return jsonify(plan_dict), 200
+        
+        except Exception as exc:
+            log.exception(f"API trip planning failed: {exc}")
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/api/predict/energy", methods=["POST"])
+    def api_predict_energy():
+        """API endpoint for energy prediction (JSON).
+        
+        POST /api/predict/energy
+        {
+            "distance_km": 100,
+            "avg_speed_kmh": 80,
+            "avg_ambient_temp_c": 15
+        }
+        
+        Returns: Energy prediction with confidence
+        """
+        try:
+            data = request.get_json() or {}
+            
+            result = energy_model.predict_energy(
+                distance_km=data.get("distance_km", 50),
+                avg_speed_kmh=data.get("avg_speed_kmh", 80),
+                avg_ambient_temp_c=data.get("avg_ambient_temp_c", 20),
+                avg_outside_temp_c=data.get("avg_outside_temp_c", 20),
+            )
+            
+            return jsonify(result), 200
+        
+        except Exception as exc:
+            log.exception(f"API energy prediction failed: {exc}")
+            return jsonify({"error": str(exc)}), 500
+
     # ── Database viewer ────────────────────────────────────────────
 
     # Whitelist of tables the viewer can display
@@ -2514,18 +5457,140 @@ def create_app() -> Flask:
         "brake_state", "security_state", "environment_state",
         "vehicle_configuration", "departure_schedule",
         "polling_config", "collector_status", "app_config", "oauth_credentials",
+        "ev_stations", "ev_charger_connectors", "ev_sync_runs",
     ]
 
-    @app.route("/db")
-    def db_browser():
-        """Show all tables with row counts."""
+    def _db_console_table_info() -> list[dict]:
+        """Return table names and row counts for db browser sidebar."""
         table_info = []
         for t in _VIEWABLE_TABLES:
             if not _table_exists(t):
                 continue
             row = db.fetch_one(f"SELECT count(*) AS cnt FROM {t}")
             table_info.append({"name": t, "count": row["cnt"] if row else 0})
-        return render_template("db_browser.html", tables=table_info)
+        return table_info
+
+    def _db_console_run(command_raw: str) -> dict:
+        """Execute one SQL statement or a small set of emulated psql meta-commands."""
+        command = (command_raw or "").strip()
+        if not command:
+            return {"ok": False, "error": "Command is empty."}
+
+        if "\x00" in command:
+            return {"ok": False, "error": "Invalid command."}
+
+        # Emulate common read-only psql meta-commands often used in quick admin checks.
+        if command.startswith("\\"):
+            normalized = command.lower().strip()
+            if normalized == "\\dt":
+                rows = db.fetch_all(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                    ORDER BY table_name
+                    """
+                )
+                return {
+                    "ok": True,
+                    "columns": ["table_name"],
+                    "rows": rows,
+                    "message": f"{len(rows)} table(s)",
+                }
+            if normalized == "\\dn":
+                rows = db.fetch_all(
+                    """
+                    SELECT schema_name
+                    FROM information_schema.schemata
+                    ORDER BY schema_name
+                    """
+                )
+                return {
+                    "ok": True,
+                    "columns": ["schema_name"],
+                    "rows": rows,
+                    "message": f"{len(rows)} schema(s)",
+                }
+            if normalized == "\\di":
+                rows = db.fetch_all(
+                    """
+                    SELECT schemaname, tablename, indexname
+                    FROM pg_indexes
+                    WHERE schemaname = 'public'
+                    ORDER BY tablename, indexname
+                    """
+                )
+                return {
+                    "ok": True,
+                    "columns": ["schemaname", "tablename", "indexname"],
+                    "rows": rows,
+                    "message": f"{len(rows)} index(es)",
+                }
+            if normalized.startswith("\\d "):
+                table_name = command[3:].strip().strip('"')
+                if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", table_name or ""):
+                    return {"ok": False, "error": "Invalid table name for \\d command."}
+                rows = db.fetch_all(
+                    """
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s
+                    ORDER BY ordinal_position
+                    """,
+                    (table_name,),
+                )
+                return {
+                    "ok": True,
+                    "columns": ["column_name", "data_type", "is_nullable"],
+                    "rows": rows,
+                    "message": f"{len(rows)} column(s) in {table_name}",
+                }
+            return {
+                "ok": False,
+                "error": "Unsupported psql meta-command. Supported: \\dt, \\dn, \\di, \\d <table>",
+            }
+
+        sql = command[:-1].strip() if command.endswith(";") else command
+        if ";" in sql:
+            return {"ok": False, "error": "Only one SQL statement at a time is supported."}
+
+        first_token = (sql.split(None, 1)[0] if sql.split(None, 1) else "").lower()
+        returns_rows = first_token in {"select", "with", "show", "explain", "values"}
+
+        if returns_rows:
+            rows = db.fetch_all(sql)
+            columns = list(rows[0].keys()) if rows else []
+            return {
+                "ok": True,
+                "columns": columns,
+                "rows": rows,
+                "message": f"Query returned {len(rows)} row(s)",
+            }
+
+        db.execute(sql)
+        return {"ok": True, "columns": [], "rows": [], "message": "Command executed successfully."}
+
+    @app.route("/db", methods=["GET", "POST"])
+    def db_browser():
+        """Show all tables with row counts and an inline SQL/psql console."""
+        console_command = ""
+        console_result = None
+        table_info = _db_console_table_info()
+
+        if request.method == "POST":
+            console_command = (request.form.get("console_command") or "").strip()
+            try:
+                console_result = _db_console_run(console_command)
+            except Exception as exc:
+                log.exception("DB console command failed: %s", exc)
+                console_result = {"ok": False, "error": str(exc)}
+
+        return render_template(
+            "db_browser.html",
+            tables=table_info,
+            console_command=console_command,
+            console_result=console_result,
+        )
 
     @app.route("/db/<table_name>")
     def db_table(table_name):
@@ -2832,26 +5897,48 @@ def create_app() -> Flask:
 
 
     # ── Startup pause and UI suppression ──
-    import threading
     app.config["STARTUP_READY"] = False
+    app.config["STARTUP_DELAY_SECONDS"] = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
 
     def _delayed_startup():
+        import time
         developing_mode = "off"
-        try:
-            if db.is_available():
-                developing_mode = _get_setting("developing")
-        except Exception as exc:
-            log.warning("Failed reading developing mode at startup: %s", exc)
+        startup_delay_seconds = int(_SETTINGS_DEFAULTS["startup_delay_seconds"])
+        
+        # Try to read actual settings from DB, with retries for slow startup
+        db_retry_count = 0
+        db_max_retries = 5
+        while db_retry_count < db_max_retries:
+            try:
+                if db.is_available():
+                    developing_mode = _get_setting("developing") or "off"
+                    startup_delay_raw = (_get_setting("startup_delay_seconds") or _SETTINGS_DEFAULTS["startup_delay_seconds"]).strip()
+                    startup_delay_seconds = int(startup_delay_raw)
+                    startup_delay_seconds = max(0, min(300, startup_delay_seconds))
+                    log.info("Read startup settings from database (develop=%s, delay=%ds)", developing_mode, startup_delay_seconds)
+                    break  # Successfully read from DB
+            except Exception as exc:
+                db_retry_count += 1
+                if db_retry_count < db_max_retries:
+                    log.debug("DB settings read attempt %d/%d failed, retrying in 1s: %s", db_retry_count, db_max_retries, exc)
+                    time.sleep(1)
+                else:
+                    log.warning("Could not read DB settings after %d attempts, using defaults: %s", db_max_retries, exc)
+        
+        app.config["STARTUP_DELAY_SECONDS"] = startup_delay_seconds
 
         if developing_mode == "on":
             app.config["STARTUP_READY"] = True
             log.info("Developing mode enabled: skipping startup delay.")
         else:
-            log.info("Delaying poller/UI startup for 30 seconds to allow normalization...")
-            import time
-            time.sleep(30)
+            if startup_delay_seconds > 0:
+                log.info("Delaying poller/UI startup for %s seconds to allow normalization...", startup_delay_seconds)
+                time.sleep(startup_delay_seconds)
+            else:
+                log.info("Startup delay is 0 seconds; UI and poller will start immediately.")
             app.config["STARTUP_READY"] = True
             log.info("Startup pause complete. UI and poller now enabled.")
+        
         # Start poller if configured
         try:
             if db.is_available() and (_get_setting("autostart_poller") == "on"):
@@ -2861,6 +5948,24 @@ def create_app() -> Flask:
                     log.info("Autostart poller enabled, but poller already running")
         except Exception as exc:
             log.warning("Autostart poller check failed: %s", exc)
+
+        try:
+            if db.is_available():
+                _start_charger_auto_sync_scheduler()
+        except Exception as exc:
+            log.warning("Charger auto-sync scheduler startup failed: %s", exc)
+
+        try:
+            if db.is_available():
+                _start_ml_retrain_scheduler()
+        except Exception as exc:
+            log.warning("ML retraining scheduler startup failed: %s", exc)
+
+        try:
+            if db.is_available():
+                _start_backup_scheduler()
+        except Exception as exc:
+            log.warning("Backup scheduler startup failed: %s", exc)
 
     threading.Thread(target=_delayed_startup, daemon=True).start()
 
@@ -2872,7 +5977,10 @@ def create_app() -> Flask:
         safe = {"db_setup", "db_setup_test", "db_setup_create", "db_setup_restore", "db_setup_upload", "static"}
         if request.endpoint in safe or (request.endpoint and request.endpoint.startswith("static")):
             return
-        return render_template("startup_wait.html"), 503
+        return render_template(
+            "startup_wait.html",
+            startup_delay_seconds=app.config.get("STARTUP_DELAY_SECONDS", int(_SETTINGS_DEFAULTS["startup_delay_seconds"])),
+        ), 503
 
     return app
 
@@ -2882,6 +5990,24 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     app = create_app()
     _log = logging.getLogger(__name__)
+    debug_mode = (config.environment() == "development")
+    use_reloader = os.environ.get("LIGHTNING_USE_RELOADER", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+    if debug_mode and not use_reloader:
+        _log.info(
+            "Running in development mode with Flask reloader disabled. "
+            "Set LIGHTNING_USE_RELOADER=1 to re-enable code auto-reload."
+        )
+    elif debug_mode and use_reloader:
+        _log.warning(
+            "Flask reloader explicitly enabled (LIGHTNING_USE_RELOADER=1). "
+            "Background jobs can be interrupted during reloads."
+        )
 
     # SSL/TLS support – try user certs, fall back to self-signed recovery
     ssl_cfg = config.ssl_config()
@@ -2922,6 +6048,7 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=config.flask_port(),
-        debug=(config.environment() == "development"),
+        debug=debug_mode,
+        use_reloader=use_reloader,
         ssl_context=ssl_context,
     )

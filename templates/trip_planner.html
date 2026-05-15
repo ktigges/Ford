@@ -1,0 +1,821 @@
+{% extends "base.html" %}
+
+{% block title %}Trip Planner{% endblock %}
+
+{% block content %}
+<style>
+    /* ── Form Styling ────────────────────────────────────────── */
+    .form-label {
+        font-weight: 600;
+        font-size: 1.1rem;
+        margin-bottom: 0.75rem;
+        color: #2d3748;
+    }
+
+    .form-control, .form-select, .form-range {
+        font-size: 1.05rem;
+        padding: 0.75rem;
+        border-radius: 6px;
+        border: 2px solid #e2e8f0;
+        transition: border-color 0.2s;
+    }
+
+    .form-control:focus, .form-select:focus {
+        border-color: #4299e1;
+        box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.1);
+    }
+
+    .mb-3 {
+        margin-bottom: 1.5rem !important;
+    }
+
+    .btn-primary, .btn-success {
+        font-size: 1.1rem;
+        padding: 0.875rem 1.5rem;
+        font-weight: 600;
+        border-radius: 6px;
+        min-height: 48px;
+        transition: all 0.2s;
+    }
+
+    .btn-primary:hover, .btn-success:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .card {
+        border: none;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        border-radius: 8px;
+    }
+
+    .card-body {
+        padding: 2rem;
+    }
+
+    .card-header {
+        padding: 1.25rem;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    /* ── Weather Styling ─────────────────────────────────────── */
+    .weather-strip {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+    }
+
+    .weather-card {
+        border: 1px solid #dde3ea;
+        border-radius: 10px;
+        background: linear-gradient(180deg, #fbfcfd 0%, #f4f7fa 100%);
+        padding: 8px 9px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    }
+
+    .weather-icon {
+        font-size: 1.15rem;
+        line-height: 1;
+    }
+
+    .icon-clear { color: #f4b400; }
+    .icon-cloud { color: #7a8796; }
+    .icon-rain { color: #6b7280; }
+    .icon-snow {
+        color: #ffffff;
+        text-shadow: 0 0 2px #6f7f8f, 0 0 1px #6f7f8f;
+    }
+    .icon-storm { color: #556789; }
+    .icon-night { color: #8aa3c7; }
+
+    .wx-temp {
+        font-weight: 700;
+        font-size: 0.96rem;
+    }
+
+    .wx-meta {
+        color: #5a6a7a;
+        font-size: 0.78rem;
+    }
+
+    .metric-pill {
+        display: inline-block;
+        padding: 0;
+        font-size: 0.7rem;
+        font-weight: 600;
+        margin-left: 4px;
+        background: transparent;
+    }
+
+    .severity-low { color: #1c6b2f; }
+    .severity-medium { color: #8a6500; }
+    .severity-high { color: #a11a1a; }
+
+    .wind-badge {
+        display: inline-block;
+        padding: 0;
+        font-size: 0.72rem;
+        font-weight: 600;
+        background: transparent;
+    }
+
+    .wind-low { color: #1c6b2f; }
+
+    .wind-medium { color: #8a6500; }
+
+    .wind-high { color: #a11a1a; }
+
+    .impact-alert {
+        margin-top: 5px;
+        padding: 0;
+        color: #7c5600;
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1.2;
+    }
+
+    .impact-ok {
+        margin-top: 5px;
+        padding: 0;
+        color: #246b24;
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1.2;
+    }
+
+    .turn-weather {
+        color: #5a6a7a;
+        font-size: 0.76rem;
+        margin-top: 2px;
+    }
+
+    .precip-track {
+        height: 6px;
+        background: #d9e6f3;
+        border-radius: 999px;
+        overflow: hidden;
+    }
+
+    .precip-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #4ea8de 0%, #1b84c6 100%);
+        border-radius: 999px;
+    }
+</style>
+<div class="container mt-4">
+    <h1>EV Trip Baseline Estimator</h1>
+    <p class="text-muted">Plan a route, calculate mileage, estimate kWh required, and visualize it on the map</p>
+
+    <div class="row">
+        <!-- Input Form -->
+        <div class="col-md-5">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Plan Your Trip</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" id="tripForm">
+                        <div class="mb-3">
+                            <label for="source" class="form-label">Source</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="source" 
+                                   name="source" 
+                                   value="{{ form.source }}"
+                                placeholder="Address, City State ZIP, City State, State, or Lat,Lon"
+                                   {% if not form.use_current_source %}required{% endif %}>
+                            <small class="form-text text-muted">Examples: 123 Main St, Denver CO 80203, Denver CO, Colorado, 39.7392,-104.9903</small>
+                        </div>
+
+                        <div class="mb-3 form-check">
+                            <input type="checkbox"
+                                   class="form-check-input"
+                                   id="use_current_source"
+                                   name="use_current_source"
+                                   {% if form.use_current_source %}checked{% endif %}>
+                            <label class="form-check-label" for="use_current_source">
+                                Use current vehicle location as source
+                            </label>
+                            <small class="form-text text-muted d-block">
+                                Uses latest coordinates from vehicle telemetry and skips source geocoding.
+                            </small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="destination" class="form-label">Destination</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="destination" 
+                                   name="destination" 
+                                   value="{{ form.destination }}"
+                                placeholder="Address, City State ZIP, City State, State, or Lat,Lon"
+                                   required>
+                            <small class="form-text text-muted">Supports flexible geocoding formats</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="start_soc" class="form-label">Starting Battery %</label>
+                            <input type="range" 
+                                   class="form-range" 
+                                   id="start_soc" 
+                                   name="start_soc" 
+                                   value="{{ form.start_soc }}"
+                                   min="0" 
+                                   max="100" 
+                                   step="5">
+                            <small class="form-text text-muted">
+                                Current: <strong id="socValue">{{ form.start_soc }}%</strong>
+                            </small>
+                        </div>
+
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label for="charger_type" class="form-label">Connector Type</label>
+                                <select class="form-select" id="charger_type" name="charger_type">
+                                    <option value="CCS1" {% if form.charger_type == 'CCS1' %}selected{% endif %}>CCS1</option>
+                                    <option value="NACS" {% if form.charger_type == 'NACS' %}selected{% endif %}>NACS</option>
+                                    <option value="CHADEMO" {% if form.charger_type == 'CHADEMO' %}selected{% endif %}>CHAdeMO</option>
+                                    <option value="ANY" {% if form.charger_type == 'ANY' %}selected{% endif %}>Any</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="min_charger_kw" class="form-label">Minimum Charger kW</label>
+                                <input type="number" class="form-control" id="min_charger_kw" name="min_charger_kw"
+                                       value="{{ form.min_charger_kw }}" min="0" max="500" step="5">
+                            </div>
+                        </div>
+                        <small class="form-text text-muted d-block mt-1">Defaults: CCS1 and 50kW+</small>
+
+                        <button type="submit" name="action" value="preview" class="btn btn-primary w-100">
+                            <i class="bi bi-geo"></i> Preview Resolved Locations
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            {% if preview and preview.ready %}
+            <div class="card mt-3 border-success">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0">Resolved Locations</h6>
+                </div>
+                <div class="card-body small">
+                    <p class="mb-1"><strong>Start Address:</strong> {{ preview.source.label }}</p>
+                    <p class="mb-2"><strong>Start Coordinates:</strong> {{ preview.source.coords_text }}</p>
+                    <p class="mb-1"><strong>Destination Address:</strong> {{ preview.destination.label }}</p>
+                    <p class="mb-3"><strong>Destination Coordinates:</strong> {{ preview.destination.coords_text }}</p>
+
+                    <form method="POST">
+                        <input type="hidden" name="source" value="{{ form.source }}">
+                        <input type="hidden" name="destination" value="{{ form.destination }}">
+                        <input type="hidden" name="start_soc" value="{{ form.start_soc }}">
+                        <input type="hidden" name="charger_type" value="{{ form.charger_type }}">
+                        <input type="hidden" name="min_charger_kw" value="{{ form.min_charger_kw }}">
+                        {% if form.use_current_source %}
+                        <input type="hidden" name="use_current_source" value="on">
+                        {% endif %}
+                        <input type="hidden" name="source_resolved_coords" value="{{ preview.source.coords_text }}">
+                        <input type="hidden" name="destination_resolved_coords" value="{{ preview.destination.coords_text }}">
+                        <input type="hidden" name="source_resolved_label" value="{{ preview.source.label }}">
+                        <input type="hidden" name="destination_resolved_label" value="{{ preview.destination.label }}">
+                        <button type="submit" name="action" value="calculate" class="btn btn-success w-100">
+                            <i class="bi bi-map"></i> Calculate Route With These Locations
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Estimator Mode -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h6 class="mb-0">Estimator Mode</h6>
+                </div>
+                <div class="card-body small">
+                    <p class="mb-1">
+                        <strong>Status:</strong>
+                        <span class="badge bg-primary">Baseline</span>
+                    </p>
+                    <p class="mb-1">
+                        <strong>Inputs:</strong> Route distance + fixed efficiency
+                    </p>
+                    <p class="mb-1">
+                        <strong>Outputs:</strong> Mileage, duration, and kWh required
+                    </p>
+                    <p class="mb-0">
+                        <small class="text-muted">Weather and ML adjustments can be added after this baseline is verified</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Results Panel -->
+        <div class="col-md-7">
+            {% if plan %}
+            <div class="card">
+                <div class="card-header {% if plan.feasible %}bg-success{% else %}bg-danger{% endif %} text-white">
+                    <h5 class="mb-0">
+                        {% if plan.feasible %}
+                        ✓ Trip Feasible
+                        {% else %}
+                        ✗ Trip Not Feasible
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ plan.source_name }} → {{ plan.destination_name }}</h6>
+                    <p class="text-muted">{{ plan.feasibility_reason }}</p>
+
+                    <div class="row mt-3">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <small class="text-muted">Distance</small>
+                                {% if unit_system == 'imperial' %}
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km * 0.621371) }} mi</h5>
+                                {% else %}
+                                <h5 class="mb-0">{{ "%.1f"|format(plan.total_distance_km) }} km</h5>
+                                {% endif %}
+                            </div>
+                            <div class="mb-3">
+                                <small class="text-muted">Duration</small>
+                                <h5 class="mb-0">{{ format_minutes_to_hms(plan.estimated_duration_min) }}</h5>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <small class="text-muted">Energy Needed (Baseline)</small>
+                                <h5 class="mb-0">{{ "%.1f"|format(baseline_energy_kwh) }} kWh</h5>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <small class="text-muted">Energy Needed (ML)</small>
+                                <h5 class="mb-0">{{ "%.1f"|format(ml_energy_kwh) }} kWh</h5>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- SOC Projection -->
+                    <div class="mb-3">
+                        <small class="text-muted">Battery State of Charge</small>
+                        <div class="d-flex align-items-center">
+                            <div class="flex-grow-1">
+                                <div class="progress" style="height: 30px;">
+                                    <div class="progress-bar" 
+                                         role="progressbar" 
+                                         style="width: {{ plan.start_soc_percent }}%;"
+                                         aria-valuenow="{{ plan.start_soc_percent }}" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                        {{ plan.start_soc_percent|int }}%
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="margin: 0 20px;">
+                                <i class="bi bi-arrow-right"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="progress" style="height: 30px;">
+                                    <div class="progress-bar {% if plan.arrival_soc_percent >= 10 %}bg-success{% else %}bg-danger{% endif %}" 
+                                         role="progressbar" 
+                                         style="width: {{ plan.arrival_soc_percent }}%;"
+                                         aria-valuenow="{{ plan.arrival_soc_percent }}" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                        {{ plan.arrival_soc_percent|int }}%
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mt-2">
+                            Start: {{ plan.start_soc_percent|int }}% → Arrival: {{ plan.arrival_soc_percent|int }}%
+                        </small>
+                    </div>
+
+                    <!-- Charging Plan Summary (no specific station recommendations) -->
+                    <hr>
+                    <div class="alert alert-info small mb-3">
+                        <strong>Charging Strategy:</strong> charging points are estimated and marked directly in each step-by-step route view below.
+                        <br>
+                        <strong>Charger Filter:</strong> {{ form.charger_type }} and {{ form.min_charger_kw|int }}kW+.
+                        <br>
+                        <strong>ML Confidence:</strong> {{ (plan.estimate_confidence or 'n/a')|upper }}
+                        {% if plan.ml_training_drives is not none %}(training drives: {{ plan.ml_training_drives }}){% endif %}
+                        <br>
+                        {% if (plan.estimate_confidence or '')|lower == 'low' %}
+                        <strong>More training data is needed.</strong> The ML estimate will improve over time as additional completed drives are collected.
+                        <br>
+                        {% endif %}
+                        <strong>ML Status:</strong> {{ plan.ml_estimate_note|default('ML comparison only') }}
+                    </div>
+                    <div class="row g-3 mb-2">
+                        <div class="col-md-6">
+                            <div class="card border-primary h-100">
+                                <div class="card-header bg-primary text-white py-2">
+                                    <strong>📊 Baseline (Stats)</strong>
+                                </div>
+                                <div class="card-body py-2 small">
+                                    <div>Energy: <strong>{{ "%.1f"|format(baseline_energy_kwh) }} kWh</strong></div>
+                                    <div>Estimated charge points: <strong>{{ plan.baseline_charging_stops|length }}</strong></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card border-success h-100">
+                                <div class="card-header bg-success text-white py-2">
+                                    <strong>🤖 ML Model</strong>
+                                </div>
+                                <div class="card-body py-2 small">
+                                    <div>Energy: <strong>{{ "%.1f"|format(ml_energy_kwh if ml_energy_kwh else baseline_energy_kwh) }} kWh</strong></div>
+                                    <div>Estimated charge points: <strong>{{ plan.ml_charging_stops|length }}</strong></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {% if plan.route_weather %}
+                    <hr>
+                    <h6>Route Weather Timeline (every ~20 miles)</h6>
+                    <div class="weather-strip">
+                        {% for wx in plan.route_weather %}
+                        {% set w = (wx.weather or '')|lower %}
+                        {% set icon_name = '☀' %}
+                        {% set icon_class = 'icon-clear' %}
+                        {% if wx.is_day is sameas false %}
+                            {% set icon_name = '☾' %}
+                            {% set icon_class = 'icon-night' %}
+                        {% endif %}
+                        {% if 'thunder' in w %}
+                            {% set icon_name = '⛈' %}
+                            {% set icon_class = 'icon-storm' %}
+                        {% elif 'snow' in w %}
+                            {% set icon_name = '❄' %}
+                            {% set icon_class = 'icon-snow' %}
+                        {% elif 'rain' in w or 'drizzle' in w %}
+                            {% set icon_name = '☁' %}
+                            {% set icon_class = 'icon-rain' %}
+                        {% elif 'cloud' in w or 'overcast' in w or 'fog' in w %}
+                            {% set icon_name = '☁' %}
+                            {% set icon_class = 'icon-cloud' %}
+                        {% elif wx.is_day is sameas false %}
+                            {% set icon_name = '☾' %}
+                            {% set icon_class = 'icon-night' %}
+                        {% endif %}
+
+                        {% set weather_severity = 'severity-low' %}
+                        {% if 'thunder' in w or 'snow' in w %}
+                            {% set weather_severity = 'severity-high' %}
+                        {% elif 'rain' in w or 'drizzle' in w or 'fog' in w or (wx.precipitation_pct is not none and wx.precipitation_pct >= 35) %}
+                            {% set weather_severity = 'severity-medium' %}
+                        {% endif %}
+
+                        {% set temp_severity = 'severity-low' %}
+                        {% if wx.temp_c is not none %}
+                            {% if wx.temp_c <= 0 or wx.temp_c >= 35 %}
+                                {% set temp_severity = 'severity-high' %}
+                            {% elif wx.temp_c <= 7 or wx.temp_c >= 30 %}
+                                {% set temp_severity = 'severity-medium' %}
+                            {% endif %}
+                        {% endif %}
+
+                        <div class="weather-card">
+                            <div class="d-flex justify-content-between align-items-start mb-1">
+                                <div>
+                                    <div class="fw-semibold">{{ wx.label }}</div>
+                                    <div class="wx-meta">
+                                        {% if unit_system == 'imperial' %}
+                                        Mile {{ "%.1f"|format(wx.distance_miles) }}
+                                        {% else %}
+                                        {{ "%.1f"|format(wx.distance_miles * 1.60934) }} km
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <span class="weather-icon">
+                                    <span class="{{ icon_class }}">{{ icon_name }}</span>
+                                </span>
+                            </div>
+                            <div class="wx-temp mb-1">
+                                {% if wx.temp_c is not none %}
+                                    {% if unit_system == 'imperial' %}
+                                    {{ "%.1f"|format((wx.temp_c * 9/5) + 32) }}°F
+                                    {% else %}
+                                    {{ "%.1f"|format(wx.temp_c) }}°C
+                                    {% endif %}
+                                    <span class="metric-pill {{ temp_severity }}">temp</span>
+                                {% else %}
+                                    --
+                                {% endif %}
+                            </div>
+                            <div class="wx-meta mb-2">{{ wx.weather }} <span class="metric-pill {{ weather_severity }}">weather</span> • ETA {{ wx.eta_local or wx.eta_utc }}{% if timezone_name %} {{ timezone_name }}{% endif %}</div>
+                            <div class="wx-meta mb-1">Precip {{ wx.precipitation_pct if wx.precipitation_pct is not none else 0 }}%</div>
+                            <div class="precip-track mb-2">
+                                <div class="precip-fill" style="width: {{ wx.precipitation_pct if wx.precipitation_pct is not none else 0 }}%;"></div>
+                            </div>
+                            <div class="wx-meta">
+                                {% if wx.wind_kmh is not none %}
+                                    {% set wind_class = 'wind-low' %}
+                                    {% if wx.wind_impact == 'high' %}
+                                        {% set wind_class = 'wind-high' %}
+                                    {% elif wx.wind_impact == 'medium' %}
+                                        {% set wind_class = 'wind-medium' %}
+                                    {% endif %}
+                                    {% if unit_system == 'imperial' %}
+                                    Wind {{ "%.1f"|format(wx.wind_kmh * 0.621371) }} mph
+                                    {% else %}
+                                    Wind {{ "%.1f"|format(wx.wind_kmh) }} km/h
+                                    {% endif %}
+                                    <span class="wind-badge {{ wind_class }}">{{ (wx.wind_context or wx.wind_impact or 'low')|title }}</span>
+                                {% else %}
+                                    Wind --
+                                {% endif %}
+                            </div>
+                            {% if wx.wind_kmh is not none %}
+                            <div class="wx-meta mt-1">
+                                {% if unit_system == 'imperial' %}
+                                    {% if wx.wind_impact == 'high' %}
+                                    Wind impact: high (about 25+ mph)
+                                    {% elif wx.wind_impact == 'medium' %}
+                                        {% if wx.wind_context == 'headwind' %}
+                                        Wind impact: moderate (about 9-25 mph for headwinds)
+                                        {% else %}
+                                        Wind impact: moderate (about 12-25 mph)
+                                        {% endif %}
+                                    {% else %}
+                                    Wind impact: low (under about 12 mph)
+                                    {% endif %}
+                                {% else %}
+                                    {% if wx.wind_impact == 'high' %}
+                                    Wind impact: high (about 40+ km/h)
+                                    {% elif wx.wind_impact == 'medium' %}
+                                    Wind impact: moderate (about 20-40 km/h)
+                                    {% else %}
+                                    Wind impact: low (under about 20 km/h)
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            {% if wx.driving_alert %}
+                            {% set alert_text = wx.driving_alert %}
+                            {% if unit_system == 'imperial' %}
+                                {% set alert_text = alert_text
+                                    | replace('minor range impact from headwind', '__MINOR_HEADWIND__')
+                                    | replace('range impact from headwind', 'range impact from headwind (around 19+ mph)')
+                                    | replace('stability impact from crosswind', 'stability impact from crosswind (around 25+ mph)')
+                                    | replace('__MINOR_HEADWIND__', 'minor range impact from headwind (around 9+ mph)')
+                                %}
+                            {% endif %}
+                            <div class="impact-alert">Impact: {{ alert_text }}</div>
+                            {% else %}
+                            <div class="impact-ok">Impact: no major weather-related driving impact</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    {% if plan.baseline_route_steps or plan.ml_route_steps %}
+                    <hr>
+                    <h6>Side-by-Side Step-by-Step Routing</h6>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="card border-primary h-100">
+                                <div class="card-header bg-primary text-white py-2"><strong>📊 Baseline Route</strong></div>
+                                <div class="card-body p-0" style="max-height:420px; overflow-y:auto;">
+                                    <table class="table table-sm mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Instruction</th>
+                                                <th>SOC</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% set nsb = namespace(cum_km=0.0) %}
+                                            {% for step in plan.baseline_route_steps %}
+                                            {% set seg_km = step.distance_km|float %}
+                                            {% set start_km = nsb.cum_km %}
+                                            {% set end_km = start_km + seg_km %}
+                                            {% set nsb.cum_km = end_km %}
+                                            {% set soc = (step.step_soc_percent if step.step_soc_percent is not none else 0)|float %}
+                                            {% set ns_charge = namespace(hit=false, target=0) %}
+                                            {% for stop in plan.baseline_charging_stops %}
+                                                {% if stop.distance_km_from_start >= start_km and stop.distance_km_from_start <= end_km %}
+                                                    {% set ns_charge.hit = true %}
+                                                    {% set ns_charge.target = stop.charge_to_soc_percent|int %}
+                                                {% endif %}
+                                            {% endfor %}
+                                            <tr {% if ns_charge.hit %}class="table-warning"{% elif soc < 10 %}class="table-danger"{% elif soc < 20 %}class="table-warning"{% endif %}>
+                                                <td>{{ loop.index }}</td>
+                                                <td>
+                                                    <div>{{ step.instruction }}</div>
+                                                    <small class="text-muted">
+                                                        {% if unit_system == 'imperial' %}{{ "%.1f"|format(end_km * 0.621371) }} mi{% else %}{{ "%.1f"|format(end_km) }} km{% endif %}
+                                                    </small>
+                                                </td>
+                                                <td>{{ soc|round|int }}%</td>
+                                                <td>
+                                                    {% if ns_charge.hit %}
+                                                    <span class="badge bg-warning text-dark">⚡ Charge to {{ ns_charge.target }}%</span>
+                                                    {% elif soc < 10 %}
+                                                    <span class="badge bg-danger">Critical</span>
+                                                    {% elif soc < 20 %}
+                                                    <span class="badge bg-warning text-dark">Low</span>
+                                                    {% else %}
+                                                    <span class="badge bg-success">OK</span>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card border-success h-100">
+                                <div class="card-header bg-success text-white py-2"><strong>🤖 ML Route</strong></div>
+                                <div class="card-body p-0" style="max-height:420px; overflow-y:auto;">
+                                    <table class="table table-sm mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Instruction</th>
+                                                <th>SOC</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% set nsm = namespace(cum_km=0.0) %}
+                                            {% for step in plan.ml_route_steps %}
+                                            {% set seg_km = step.distance_km|float %}
+                                            {% set start_km = nsm.cum_km %}
+                                            {% set end_km = start_km + seg_km %}
+                                            {% set nsm.cum_km = end_km %}
+                                            {% set soc = (step.step_soc_percent if step.step_soc_percent is not none else 0)|float %}
+                                            {% set ns_charge = namespace(hit=false, target=0) %}
+                                            {% for stop in plan.ml_charging_stops %}
+                                                {% if stop.distance_km_from_start >= start_km and stop.distance_km_from_start <= end_km %}
+                                                    {% set ns_charge.hit = true %}
+                                                    {% set ns_charge.target = stop.charge_to_soc_percent|int %}
+                                                {% endif %}
+                                            {% endfor %}
+                                            <tr {% if ns_charge.hit %}class="table-info"{% elif soc < 10 %}class="table-danger"{% elif soc < 20 %}class="table-warning"{% endif %}>
+                                                <td>{{ loop.index }}</td>
+                                                <td>
+                                                    <div>{{ step.instruction }}</div>
+                                                    <small class="text-muted">
+                                                        {% if unit_system == 'imperial' %}{{ "%.1f"|format(end_km * 0.621371) }} mi{% else %}{{ "%.1f"|format(end_km) }} km{% endif %}
+                                                    </small>
+                                                </td>
+                                                <td>{{ soc|round|int }}%</td>
+                                                <td>
+                                                    {% if ns_charge.hit %}
+                                                    <span class="badge bg-info">⚡ Charge to {{ ns_charge.target }}%</span>
+                                                    {% elif soc < 10 %}
+                                                    <span class="badge bg-danger">Critical</span>
+                                                    {% elif soc < 20 %}
+                                                    <span class="badge bg-warning text-dark">Low</span>
+                                                    {% else %}
+                                                    <span class="badge bg-success">OK</span>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <hr>
+                    <div class="d-grid gap-2">
+                        <a href="{{ url_for('trip_detail') }}" class="btn btn-info">
+                            <i class="bi bi-bar-chart"></i> View Detailed Analysis (Baseline vs ML)
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">Trip Details</h5>
+                </div>
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-map" style="font-size: 3rem; color: #ccc;"></i>
+                    <p class="mt-4 text-muted">Preview resolved locations first, then calculate your trip plan</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Map Display (if trip planned) -->
+{% if plan and plan.polyline %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header">
+            <h5 class="mb-0">Route Map</h5>
+        </div>
+        <div id="tripMap" style="height: 400px;"></div>
+    </div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const mapContainer = document.getElementById('tripMap');
+    if (!mapContainer) return;
+
+    const map = L.map(mapContainer).setView([39.5, -104.9], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
+    }).addTo(map);
+
+    const polyline = {{ plan.polyline|tojson }};
+    if (polyline && polyline.length > 0) {
+        L.polyline(polyline, { color: 'blue', weight: 3, opacity: 0.7 }).addTo(map);
+        
+        // Add start and end markers
+        L.marker(polyline[0], { title: 'Start' })
+            .bindPopup('<b>Start</b>')
+            .addTo(map);
+        L.marker(polyline[polyline.length - 1], { title: 'End' })
+            .bindPopup('<b>End</b>')
+            .addTo(map);
+
+        // Add charging stop markers
+        const stops = {{ plan.charging_stops|tojson }};
+        if (stops && stops.length > 0) {
+            stops.forEach(function(stop, idx) {
+                L.circleMarker([stop.lat, stop.lon], {
+                    radius: 8,
+                    fillColor: '#ff7800',
+                    color: '#000',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).bindPopup(
+                    '<b>Stop ' + (idx + 1) + '</b><br>' +
+                    stop.charger_name + '<br>' +
+                    'Charge: ' + stop.charge_to_soc_percent + '%<br>' +
+                    stop.charge_time_min + ' min'
+                ).addTo(map);
+            });
+        }
+
+        // Fit bounds to route
+        const bounds = L.latLngBounds(polyline);
+        map.fitBounds(bounds, { padding: [50, 50] });
+    }
+});
+</script>
+{% endif %}
+
+<script>
+// Update SOC value display in real-time
+document.getElementById('start_soc').addEventListener('input', function() {
+    document.getElementById('socValue').textContent = this.value + '%';
+});
+
+// Optional source toggle: use latest vehicle location instead of geocoding source text.
+(function () {
+    const sourceInput = document.getElementById('source');
+    const toggle = document.getElementById('use_current_source');
+
+    if (!sourceInput || !toggle) {
+        return;
+    }
+
+    function syncSourceMode() {
+        if (toggle.checked) {
+            sourceInput.dataset.userValue = sourceInput.value;
+            sourceInput.value = '';
+            sourceInput.placeholder = 'Using current vehicle location';
+            sourceInput.disabled = true;
+            sourceInput.required = false;
+        } else {
+            sourceInput.disabled = false;
+            sourceInput.placeholder = 'Address, City State ZIP, City State, State, or Lat,Lon';
+            sourceInput.required = true;
+            if (sourceInput.dataset.userValue) {
+                sourceInput.value = sourceInput.dataset.userValue;
+            }
+        }
+    }
+
+    toggle.addEventListener('change', syncSourceMode);
+    syncSourceMode();
+})();
+</script>
+
+{% endblock %}

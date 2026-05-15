@@ -1,7 +1,7 @@
-# ⚡ Ford Lightning EV Tool — Prototype (Phase 1)
+# 🧠 MLLighting EV Tool — Prototype (Phase 1)
 
 **Author:** Kevin Tigges  
-**Version:** 0.5.2  
+**Version:** 0.8.6  
 **Date:** 2026-05-08
 
 ---
@@ -14,7 +14,43 @@ The ultimate goal of this project is to train an AI model for **user-specific dr
 
 ---
 
-## Architecture Overview
+## Legal & Disclaimer
+
+### Third-Party API Notice
+This application uses the **Ford Connected Vehicle API**, which is a third-party service operated by Ford Motor Company. This application is **not affiliated with, endorsed by, or supported by Ford**.
+
+### API Limitations & Changes
+The developer **is not responsible** for:
+- Ford API rate limits, throttling, or temporary/permanent access restrictions
+- Changes to Ford API endpoints, data structures, or functionality
+- Ford discontinuing or modifying the API
+- API downtime or service interruptions
+- Your vehicle's connectivity or data availability
+
+**The Ford API is subject to change at any time and may be restricted, modified, or discontinued without notice.** If Ford changes or restricts API access, this application will stop working.
+
+### No Warranty
+This software is provided **"as-is"** without any warranty, express or implied. The developer assumes no liability for:
+- Loss of data
+- Inaccurate vehicle state information
+- Failed trip planning or charging predictions
+- Any consequences of using this application
+
+### Your Responsibility
+You are solely responsible for:
+- Your Ford API credentials and account security
+- Complying with Ford's Terms of Service
+- Your own vehicle's safety and charging decisions
+- Verifying trip plans and vehicle state through official Ford apps
+- Understanding data usage and privacy implications
+
+### Recommendation
+**Do not rely solely on this application for critical vehicle functions.** Always verify vehicle state, charging status, and trip feasibility using the **official Ford Connected app** before making decisions that affect your vehicle's safety or range.
+
+### Trademarks
+Ford, F-150 Lightning, and all related Ford trademarks are property of Ford Motor Company. This is an independent project.
+
+---
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -239,6 +275,26 @@ If PostgreSQL is unreachable at startup, the app enters **setup mode** instead o
 
 The Settings page includes a **Console / App Log Level** dropdown (DEBUG, INFO, WARNING, ERROR). Changing the level takes effect immediately — the console handler and combined app-file handler are updated at runtime. Per-module debug files (`logs/debug_*.log`) always capture DEBUG regardless of this setting. The selected level is persisted in the `app_config` database table and restored on startup.
 
+#### Security / Local Auth Configuration
+
+The local-auth flow uses server-side sessions and MFA. Use the following environment variables to control security behavior:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LIGHTNING_SECRET_KEY` | _(required in production)_ | Flask/session signing secret. Must be unique and high entropy. |
+| `LIGHTNING_SESSION_TYPE` | `cachelib` | Server-side session backend. `cachelib` keeps sessions in-memory (recommended). `filesystem` writes to disk. |
+| `LIGHTNING_SESSION_COOKIE_SECURE` | `1` | Marks session cookie Secure; only sent over HTTPS when enabled. |
+| `LIGHTNING_REQUIRE_HTTPS_SENSITIVE` | `1` | Enforces HTTPS on auth/profile/settings routes. Insecure requests are redirected when SSL is active, otherwise blocked. |
+| `LIGHTNING_LOCAL_AUTH_STORE_CLIENT_META` | `0` | Stores client IP/User-Agent in auth sessions when enabled. Keep disabled to minimize retained client metadata. |
+| `LIGHTNING_LOCAL_AUTH_ABSOLUTE_TIMEOUT_HOURS` | `8` | Absolute local-auth session lifetime (hours). |
+| `LIGHTNING_LOCAL_AUTH_IDLE_TIMEOUT_MINUTES` | `30` | Idle timeout fallback used when DB settings are unavailable. |
+
+Additional hardening now enabled in the app:
+
+- CSRF tokens are required on local-auth and settings POST forms.
+- Auth/profile/settings pages send `no-store` and `no-cache` response headers.
+- Local sign-in attempts are rate-limited with temporary lockout after repeated failures.
+
 ---
 
 ### `crypto.py` — Credential Encryption
@@ -323,6 +379,61 @@ Backups are stored in the `backups/` directory at the project root.
 | `db_row_detail.html` | Single row detail with JSON expansion. |
 | `backup.html` | Backup & restore UI — create, upload, download, restore, delete. |
 | `db_setup.html` | Database setup — connection form, test, schema creation, backup restore. |
+
+---
+
+## Environment Setup
+
+The application requires environment variables for secrets and configuration. Follow these steps:
+
+### 1. Generate Environment Configuration
+
+Run the setup helper script:
+
+```bash
+./setup-env.sh
+```
+
+This will:
+- Create a `.env` file with a secure `LIGHTNING_SECRET_KEY` 
+- Copy the template from `.env.example`
+- Print next steps
+
+### 2. Configure Required and Optional Variables
+
+The `.env` file includes required credentials plus optional third-party API keys:
+
+| Variable | Purpose | Required? |
+|----------|---------|-----------|
+| `LIGHTNING_SECRET_KEY` | Flask session encryption key | **YES** — auto-generated by setup script |
+| `LIGHTNING_DB_USER` | PostgreSQL username | **YES** |
+| `LIGHTNING_DB_PASSWORD` | PostgreSQL password | **YES** |
+| `OPENWEATHER_API_KEY` | Weather API for trip planning | No — falls back to limited "demo" mode |
+| `GOOGLE_MAPS_API_KEY` | Google routing (if using) | No |
+| `OPENROUTESERVICE_API_KEY` | OpenRouteService routing (if using) | No |
+
+Edit `.env` to add required DB credentials and optional API keys.
+
+### 3. Production Deployment
+
+For Docker/systemd/cloud deployments, set environment variables directly:
+
+```bash
+# In Docker Compose
+environment:
+  - LIGHTNING_SECRET_KEY=your-generated-key
+  - LIGHTNING_DB_USER=your-db-user
+  - LIGHTNING_DB_PASSWORD=your-db-password
+  - OPENWEATHER_API_KEY=your-api-key
+
+# In systemd service file
+Environment="LIGHTNING_SECRET_KEY=your-generated-key"
+Environment="LIGHTNING_DB_USER=your-db-user"
+Environment="LIGHTNING_DB_PASSWORD=your-db-password"
+
+# In cloud (AWS/GCP/Azure)
+Set as environment variable in deployment config
+```
 
 ---
 
@@ -553,6 +664,38 @@ screen -r lightning                    # reattach to view output
 # Ctrl-A D to detach again
 ```
 
+### Log Rotation (Weekly, Keep 30 Days)
+
+Use the built-in script to compress current logs and prune old archives:
+
+```bash
+./scripts/rotate_logs.sh
+```
+
+What it does:
+
+- Compresses each file in `logs/*.log` to `logs/archive/<name>.<timestamp>.gz`
+- Truncates active `.log` files in place so running file handlers continue writing
+- Deletes compressed archives older than 30 days
+
+Set up automatic weekly rotation with cron:
+
+```bash
+crontab -e
+```
+
+Add this line (runs every Sunday at 03:15):
+
+```cron
+15 3 * * 0 /home/sysadmin/Ford-dev/scripts/rotate_logs.sh >> /home/sysadmin/Ford-dev/logs/log_rotate.log 2>&1
+```
+
+Optional: test immediately by running:
+
+```bash
+/home/sysadmin/Ford-dev/scripts/rotate_logs.sh
+```
+
 ### SSL/TLS (HTTPS)
 
 To enable HTTPS, use the **SSL / TLS** section on the Settings page to upload your certificate and private key files, then check "Enable SSL". Files are saved to the `certs/` directory. Alternatively, edit `config.json` directly:
@@ -619,55 +762,6 @@ DB_HOST=localhost DB_PORT=5432 DB_NAME=lightning DB_USER=lightning DB_PASSWORD=l
 ```
 
 Requires PostgreSQL client tools: `dropdb`, `createdb`, and `psql`.
-
----
-
-## Changelog
-
-### v0.4.0 — 2026-05-02
-- Added an in-app Analytics page with unit-aware charts for distance vs energy, battery/range drop, and efficiency trends.
-- Added a latest-drive route map preview directly in the app UI (OpenStreetMap/Leaflet).
-- Added configurable timezone display and local-time rendering for drive timestamps.
-- Refreshed the UI to a blue-grey eye-friendly theme while keeping the existing layout and controls.
-
-### v0.3.2 — 2026-05-02
-- Drive detection no longer leaves stale `In Progress` drives visible while the truck is parked and charging.
-- Added `charging_history` for sampled charging sessions, including charge rate, voltage/current, SOC, and temperatures.
-- Added a dedicated Charging page and made dashboard charging state much more prominent.
-- Drives list now shows only active drives while they are actually happening.
-
-### v0.3.1 — 2026-05-02
-- OAuth setup updated for manual authorization-code paste flow.
-- Added authorization-code exchange path to obtain and persist both access and refresh tokens.
-- Added `scripts/reset_db_from_schema.sh` to rebuild the database from `schema.sql`.
-
-### v0.2.1 — 2026-04-28
-- **Conservative polling mode** — when enabled, idle vehicles are still polled at normal intervals but telemetry records are only written to the DB when the vehicle state changes or once every 60 minutes. Active states (ignition on/run/start, gear in drive/reverse, speed > 0, charging) always write normally.
-- Broadened active-vehicle detection: added `gearLeverPosition` (drive/reverse) and `ignitionStatus` value `start` to both `_vehicle_is_active()` and `_get_poll_interval()`.
-- Fixed encrypted `client_secret` being sent to Ford during initial setup (VIN-less `db.fetch_one` path was missing decryption).
-
-### v0.2.0 — 2026-04-26
-- Database setup mode, SSL/TLS with recovery certs, client secret encryption, runtime log level switching, configurable Flask port, backup/restore with cross-host encryption portability.
-
----
-
-## Phase 1 Scope
-
-- [x] OAuth2 authentication with Ford's Azure AD B2C
-- [x] Garage and telemetry API polling
-- [x] Raw telemetry storage (JSONB) + parsed state tables
-- [x] Web dashboard with unit conversion (metric/imperial)
-- [x] Background poller with adaptive intervals
-- [x] Database viewer and vehicle management
-- [x] Backup and restore (SQL dump + portable JSON)
-- [x] Database setup mode (no-DB startup, web-based configuration)
-- [x] SSL/TLS support (cert + key PEM files via config.json)
-- [x] Client secret encryption (Fernet AES-128-CBC)
-- [x] Runtime log level switching (DEBUG/INFO/WARNING/ERROR)
-- [x] Conservative polling mode (idle writes once per hour)
-- [ ] GEO information integration (Phase 2)
-- [ ] Charger location data (Phase 2)
-- [ ] AI model training pipeline (Phase 3)
 
 ---
 

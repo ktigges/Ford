@@ -1,0 +1,45 @@
+{
+  "model_type": "XGBRegressor",
+  "target": "energy_used_kwh",
+  "features": [
+    "distance_km",
+    "duration_min",
+    "avg_speed_kmh",
+    "max_speed_kmh",
+    "speed_variance",
+    "acceleration_aggression",
+    "avg_ambient_temp_c",
+    "avg_outside_temp_c",
+    "weather_temp_c",
+    "weather_humidity_pct",
+    "weather_pressure_hpa",
+    "precipitation_mm",
+    "wind_speed_avg_kmh",
+    "headwind_component_kmh",
+    "tailwind_component_kmh",
+    "sidewind_component_kmh",
+    "avg_altitude_m",
+    "elevation_gain_m",
+    "elevation_loss_m",
+    "net_elevation_change_m",
+    "soc_drop_percent",
+    "regen_kwh",
+    "trip_efficiency_kmh"
+  ],
+  "feature_scales": {
+    "distance_km": {
+      "min": 13.0,
+      "max": 60.0
+    },
+    "avg_speed_kmh": {
+      "min": 8.87704658736842,
+      "max": 60.418332112250006
+    },
+    "energy_used_kwh": {
+      "min": 2.15,
+      "max": 21.25
+    }
+  },
+  "training_date": "2026-05-14T17:05:24.030303",
+  "num_training_drives": 16
+}

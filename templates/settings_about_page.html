@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}About & Disclaimers – MLLighting{% endblock %}
+{% block content %}
+<div class="container" style="max-width:900px; margin:2rem auto;">
+  <h1>About Lightning</h1>
+
+  <!-- App Info -->
+  <div class="card mb-4">
+    <div class="card-header bg-info text-white">
+      <h5 class="mb-0">Application Information</h5>
+    </div>
+    <div class="card-body">
+      <dl class="row">
+        <dt class="col-sm-3">Application Name</dt>
+        <dd class="col-sm-9"><strong>Lightning</strong></dd>
+        
+        <dt class="col-sm-3">Version</dt>
+        <dd class="col-sm-9"><strong>{{ app_version }}</strong></dd>
+        
+        <dt class="col-sm-3">Purpose</dt>
+        <dd class="col-sm-9">{{ app_purpose }}</dd>
+        
+        <dt class="col-sm-3">Status</dt>
+        <dd class="col-sm-9"><span class="badge bg-warning">Prototype / Development</span></dd>
+        
+        <dt class="col-sm-3">Classification</dt>
+        <dd class="col-sm-9">Unofficial third-party application</dd>
+      </dl>
+    </div>
+  </div>
+
+  <!-- Key Disclaimers -->
+  <div class="card mb-4">
+    <div class="card-header bg-danger text-white">
+      <h5 class="mb-0">⚠️ Important Disclaimers</h5>
+    </div>
+    <div class="card-body">
+      
+      <h6 class="mb-3">1. Third-Party API Usage</h6>
+      <p>
+        This application uses the <strong>Ford Connected Vehicle API</strong> to access vehicle data. 
+        This is an <strong>UNOFFICIAL application</strong> not endorsed by, affiliated with, or 
+        supported by Ford Motor Company.
+      </p>
+
+      <h6 class="mb-3">2. No Liability for API Restrictions</h6>
+      <p>The developer is <strong>NOT responsible</strong> for:</p>
+      <ul>
+        <li>Ford API rate limits, throttling, or access revocation</li>
+        <li>Changes to Ford API functionality or endpoints</li>
+        <li>Data availability, accuracy, or format changes</li>
+        <li>Service interruptions or downtime</li>
+        <li>Your vehicle's connection to Ford servers</li>
+      </ul>
+      <p class="alert alert-warning mb-0">
+        <strong>Use of this application is at your own risk.</strong> The Ford API is subject to 
+        Ford's Terms of Service and may change or be discontinued at any time.
+      </p>
+
+      <h6 class="mb-3 mt-4">3. No Warranty</h6>
+      <p>
+        This software is provided <strong>"as-is"</strong> without warranty of any kind, express 
+        or implied, including warranties of fitness for a particular purpose.
+      </p>
+
+      <h6 class="mb-3">4. Your Responsibility</h6>
+      <p>You are solely responsible for:</p>
+      <ul>
+        <li>Your Ford API credentials and account security</li>
+        <li>Complying with Ford's Terms of Service and API usage policies</li>
+        <li>Monitoring your own vehicle's telemetry and state</li>
+        <li>Your vehicle's charging schedule and route planning decisions</li>
+      </ul>
+
+      <h6 class="mb-3">5. No Affiliation with Ford</h6>
+      <p>
+        Ford, F-150 Lightning, and related trademarks are property of Ford Motor Company. 
+        This application is <strong>not an official Ford product</strong>.
+      </p>
+
+      <h6 class="mb-3">6. Data Privacy & Safety</h6>
+      <p>
+        <strong>Do not rely solely on this application for critical vehicle functions.</strong> Always 
+        verify vehicle state, charging status, and trip feasibility using the <strong>official Ford 
+        Connected app</strong> before making decisions that affect your vehicle's safety or range.
+      </p>
+      <p class="alert alert-warning mb-0">
+        This application stores vehicle telemetry data locally. Ensure you understand what data is 
+        being collected and stored on your system.
+      </p>
+
+    </div>
+  </div>
+
+  <!-- Terms Summary -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">Summary of Terms</h5>
+    </div>
+    <div class="card-body">
+      <table class="table table-sm">
+        <tr>
+          <td><strong>Support</strong></td>
+          <td>This is a community/hobby project. No official support guaranteed.</td>
+        </tr>
+        <tr>
+          <td><strong>Availability</strong></td>
+          <td>Dependent on Ford API availability. Not guaranteed to function at all times.</td>
+        </tr>
+        <tr>
+          <td><strong>Updates</strong></td>
+          <td>Updates may not be timely if Ford API changes.</td>
+        </tr>
+        <tr>
+          <td><strong>Data Loss</strong></td>
+          <td>The developer is not responsible for any data loss or corruption.</td>
+        </tr>
+        <tr>
+          <td><strong>Vehicle Safety</strong></td>
+          <td>Do not use this app for safety-critical decisions. Verify via official Ford app.</td>
+        </tr>
+        <tr>
+          <td><strong>Liability</strong></td>
+          <td>No liability for any damages, direct or indirect, resulting from use of this software.</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Recommendation -->
+  <div class="alert alert-info mb-4">
+    <h6>Recommendation</h6>
+    <p class="mb-0">
+      <strong>Always use the official Ford Connected app as your primary source for vehicle state, 
+      charging information, and route planning decisions.</strong> This app should be considered a 
+      secondary tool for exploration and analysis only.
+    </p>
+  </div>
+
+  <!-- Back Button -->
+  <div class="text-center mb-4">
+    <a href="{{ url_for('settings') }}" class="btn btn-secondary">← Back to Settings</a>
+  </div>
+
+</div>
+{% endblock %}

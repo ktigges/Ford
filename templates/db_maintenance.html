@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Database Maintenance – Lightning{% endblock %}
+{% block title %}Database Maintenance – MLLighting{% endblock %}
 {% block content %}
 <h1>Database Maintenance</h1>
 
@@ -97,7 +97,7 @@
 {% if index_stats %}
 <div class="card">
   <h2>Index Statistics</h2>
-  <p class="help-text">Showing index scan counts and usage. Indexes with zero scans may be candidates for removal.</p>
+  <p class="help-text">Showing index scan counts and usage since the last PostgreSQL stats reset/restart. Zero scans usually means not yet used by current workload.</p>
   <table>
     <thead>
       <tr>
@@ -110,7 +110,7 @@
     </thead>
     <tbody>
       {% for idx in index_stats %}
-      <tr class="{% if idx.scans == 0 %}unused-index{% endif %}">
+      <tr class="{% if idx.scans == 0 %}not-yet-used-index{% endif %}">
         <td>{{ idx.tablename }}</td>
         <td>{{ idx.indexname }}</td>
         <td>{{ idx.scans|default(0)|int }}</td>
@@ -121,7 +121,7 @@
     </tbody>
   </table>
   <p class="help-text" style="margin-top: 1rem; color: #666;">
-    <em>Rows highlighted in light red have never been scanned and may be unused indexes.</em>
+    <em>Rows highlighted in light amber have no scans recorded yet in the current stats window.</em>
   </p>
 </div>
 {% endif %}
@@ -196,8 +196,8 @@
   margin-left: 1rem;
 }
 
-.unused-index {
-  background-color: #ffe0e0;
+.not-yet-used-index {
+  background-color: #fff7e6;
 }
 </style>
 {% endblock %}

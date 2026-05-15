@@ -1,12 +1,9 @@
-"""Database helper – thin wrapper around psycopg2 connection pooling.
+"""Ford Lightning source file.
 
-Provides a thread-safe PostgreSQL connection pool with convenience methods
-for common query patterns (fetch_one, fetch_all, execute).
-
-Author:      Kevin Tigges
-Description: Ford Lightning EV Tool Prototype
-Version:     0.2.1
-Date:        2026-04-28
+Author: Kevin Tigges
+Copyright (c) 2026 Kevin Tigges
+License: Open source prototype software
+Notice: Use at your own risk.
 """
 
 import logging
@@ -35,8 +32,8 @@ def init_pool() -> None:
     global _pool, _available
     db = config.database()
     _pool = ThreadedConnectionPool(
-        minconn=1,
-        maxconn=5,
+        minconn=2,
+        maxconn=15,
         host=db["host"],
         port=db["port"],
         dbname=db["name"],
