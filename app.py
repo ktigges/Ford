@@ -1193,6 +1193,7 @@ def create_app():
                 CREATE TABLE ev_stations (
                     id BIGSERIAL PRIMARY KEY,
                     source TEXT NOT NULL DEFAULT 'NREL',
+                    source_authority TEXT NOT NULL DEFAULT 'NREL',
                     nlr_station_id BIGINT UNIQUE,
                     ocm_station_id BIGINT,
                     station_name TEXT NOT NULL,
@@ -1225,7 +1226,9 @@ def create_app():
                 CREATE TABLE ev_charger_connectors (
                     id BIGSERIAL PRIMARY KEY,
                     station_id BIGINT NOT NULL REFERENCES ev_stations(id) ON DELETE CASCADE,
-                    nlr_station_id BIGINT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'NREL',
+                    nlr_station_id BIGINT,
+                    ocm_station_id BIGINT,
                     connector_type TEXT NOT NULL,
                     network TEXT,
                     charging_level TEXT,
@@ -1265,11 +1268,25 @@ def create_app():
             if not _column_exists("ev_stations", "source"):
                 db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
                 applied.append("Added ev_stations.source")
+            if not _column_exists("ev_stations", "source_authority"):
+                db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS source_authority TEXT NOT NULL DEFAULT 'NREL'")
+                applied.append("Added ev_stations.source_authority")
             if not _column_exists("ev_stations", "ocm_station_id"):
                 db.execute("ALTER TABLE ev_stations ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
                 applied.append("Added ev_stations.ocm_station_id")
             db.execute("ALTER TABLE ev_stations ALTER COLUMN nlr_station_id DROP NOT NULL")
             db.execute("UPDATE ev_stations SET source = 'NREL' WHERE source IS NULL OR source = ''")
+            db.execute(
+                """
+                UPDATE ev_stations
+                SET source_authority = CASE
+                    WHEN nlr_station_id IS NOT NULL AND ocm_station_id IS NOT NULL THEN 'BOTH'
+                    WHEN ocm_station_id IS NOT NULL THEN 'OCM'
+                    ELSE 'NREL'
+                END
+                WHERE source_authority IS NULL OR source_authority = ''
+                """
+            )
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_state ON ev_stations (state) WHERE country = 'US'")
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_stations_nlr_id ON ev_stations (nlr_station_id)")
             db.execute(
@@ -1277,10 +1294,18 @@ def create_app():
             )
 
         if _table_exists("ev_charger_connectors"):
+            if not _column_exists("ev_charger_connectors", "source"):
+                db.execute("ALTER TABLE ev_charger_connectors ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'NREL'")
+                applied.append("Added ev_charger_connectors.source")
+            if not _column_exists("ev_charger_connectors", "ocm_station_id"):
+                db.execute("ALTER TABLE ev_charger_connectors ADD COLUMN IF NOT EXISTS ocm_station_id BIGINT")
+                applied.append("Added ev_charger_connectors.ocm_station_id")
+            db.execute("ALTER TABLE ev_charger_connectors ALTER COLUMN nlr_station_id DROP NOT NULL")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ev_connectors_station ON ev_charger_connectors (station_id)"
             )
             db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_network ON ev_charger_connectors (network)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ev_connectors_ocm_station_id ON ev_charger_connectors (ocm_station_id)")
 
         if _table_exists("ev_sync_runs"):
             if not _column_exists("ev_sync_runs", "last_heartbeat_at"):
@@ -1550,28 +1575,24 @@ def create_app():
         if idle_display and idle_comm:
             return False
 
+        # Strict: Require real electrical flow for session to be active, unless time-to-full is positive and at least one status is active.
         power_kw = _charging_power_kw_from_row(charging)
-        if power_kw is not None:
-            try:
-                if float(power_kw) > 0.5:
-                    # If communication is explicitly idle and only display appears active,
-                    # do not trust stale electrical values by themselves.
-                    if idle_comm and active_display and not active_comm:
-                        break_flow = True
-                        time_to_full = charging.get("time_to_full_min")
-                        try:
-                            break_flow = not (time_to_full is not None and float(time_to_full) > 0)
-                        except (TypeError, ValueError):
-                            break_flow = True
-                        if break_flow:
-                            return False
-                    return True
-            except (TypeError, ValueError):
-                pass
-
         charger_voltage = charging.get("charger_voltage")
         charger_current = charging.get("charger_current")
         evse_dc_current = charging.get("evse_dc_current")
+        time_to_full = charging.get("time_to_full_min")
+        ttf_positive = False
+        try:
+            ttf_positive = time_to_full is not None and float(time_to_full) > 0
+        except (TypeError, ValueError):
+            ttf_positive = False
+
+        # Require real power or voltage/current for active session
+        try:
+            if power_kw is not None and float(power_kw) > 0.5:
+                return True
+        except (TypeError, ValueError):
+            pass
         try:
             if (
                 charger_voltage is not None and float(charger_voltage) > 20 and
@@ -1590,21 +1611,12 @@ def create_app():
         except (TypeError, ValueError):
             pass
 
-        # If there is no measurable electrical flow, require corroborating
-        # active signals (status + time-to-full) to avoid stale "IN_PROGRESS"
-        # causing false positives.
-        if idle_comm and not active_display:
-            return False
+        # If no electrical flow, only allow session to be active if time-to-full is positive and at least one status is active
+        if ttf_positive and (active_display or active_comm):
+            return True
 
-        time_to_full = charging.get("time_to_full_min")
-        ttf_positive = False
-        try:
-            ttf_positive = time_to_full is not None and float(time_to_full) > 0
-        except (TypeError, ValueError):
-            ttf_positive = False
-
-        active_signal_count = sum([1 if active_display else 0, 1 if active_comm else 0, 1 if ttf_positive else 0])
-        return active_signal_count >= 2
+        # Otherwise, not active
+        return False
 
     def _charging_mode_from_data(charging: dict | None, voltage_series: list[int | None]) -> str:
         """Infer charging profile from power-type hints and observed voltage samples."""
@@ -4811,13 +4823,18 @@ def create_app():
                 where_params.extend([lat, lat, lon, radius_miles])
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        station_ports_expr = (
+            "(COALESCE(NULLIF(s.raw_data->>'ev_level1_evse_num', '')::INT, 0) + "
+            "COALESCE(NULLIF(s.raw_data->>'ev_level2_evse_num', '')::INT, 0) + "
+            "COALESCE(NULLIF(s.raw_data->>'ev_dc_fast_num', '')::INT, 0))"
+        )
         connector_select = (
             "COALESCE(conn.max_power_kw, 0) AS max_power_kw, "
             "COALESCE(conn.connector_types, '') AS connector_types, "
             "COALESCE(conn.charging_levels, '') AS charging_levels, "
-            "COALESCE(conn.connector_count, 0) AS connector_count"
+            f"GREATEST(COALESCE(conn.connector_count, 0), {station_ports_expr}) AS connector_count"
         ) if has_connectors else (
-            "0::REAL AS max_power_kw, ''::TEXT AS connector_types, ''::TEXT AS charging_levels, 0::BIGINT AS connector_count"
+            f"0::REAL AS max_power_kw, ''::TEXT AS connector_types, ''::TEXT AS charging_levels, {station_ports_expr}::BIGINT AS connector_count"
         )
 
         filtered_total_row = db.fetch_one(
@@ -4830,13 +4847,13 @@ def create_app():
             tuple(where_params),
         )
         filtered_total = filtered_total_row["cnt"] if filtered_total_row else 0
-
-
-        # Fetch NREL (db) stations as before
+    # Fetch stations from DB (NREL + persisted OCM), then render map/table from DB only.
         filtered_stations = db.fetch_all(
             f"""
             SELECT
                 s.id,
+        s.source,
+                s.source_authority,
                 s.station_name,
                 s.street_address,
                 s.city,
@@ -4870,70 +4887,9 @@ def create_app():
             tuple([*select_params, *where_params, result_limit]),
         )
 
-        # Fetch OCM chargers (API, live)
-        ocm_lat = None
-        ocm_lon = None
-        ocm_radius_km = None
-        ocm_state = None
-        if origin_geo:
-            ocm_lat = float(origin_geo["lat"])
-            ocm_lon = float(origin_geo["lon"])
-            if radius_miles is not None:
-                ocm_radius_km = float(radius_miles) * 1.60934
-        elif location_query:
-            geo = _geocode_location(location_query)
-            if geo:
-                ocm_lat = float(geo["lat"])
-                ocm_lon = float(geo["lon"])
-        if not ocm_state and len(where_params) == 1 and where_clauses and "state" in where_clauses[0]:
-            ocm_state = where_params[0]
-
-        ocm_raw = []
-        try:
-            ocm_raw = ocm_chargers.fetch_ocm_chargers(
-                latitude=ocm_lat,
-                longitude=ocm_lon,
-                distance_km=ocm_radius_km,
-                state=ocm_state,
-                maxresults=result_limit,
-            )
-        except Exception as exc:
-            log.warning("OCM fetch failed: %s", exc)
-            ocm_raw = []
-        ocm_norm = ocm_chargers.normalize_ocm_stations(ocm_raw)
-
-        # Normalize NREL stations to match OCM merge format
-        def nrel_norm(row):
-            return {
-                "source": "NREL",
-                "nrel_id": row.get("nlr_station_id"),
-                "station_name": row.get("station_name"),
-                "street_address": row.get("street_address"),
-                "city": row.get("city"),
-                "state": row.get("state"),
-                "zip": row.get("zip"),
-                "country": row.get("country"),
-                "latitude": row.get("latitude"),
-                "longitude": row.get("longitude"),
-                "status_code": row.get("status_code"),
-                "network_name": row.get("network_name"),
-                "updated_at": row.get("updated_at"),
-                "max_power_kw": row.get("max_power_kw"),
-                "connector_types": row.get("connector_types"),
-                "charging_levels": row.get("charging_levels"),
-                "connector_count": row.get("connector_count"),
-                "raw_data": row,
-            }
-
-        nrel_normed = [nrel_norm(row) for row in filtered_stations]
-        merged = nlr_chargers.merge_charger_results(nrel_normed, ocm_norm)
-
-        # For map_points, flatten merged for display
+        # Build map points directly from filtered DB rows.
         map_points = []
-        for entry in merged:
-            src = entry.get("nrel") or entry.get("ocm")
-            if not src:
-                continue
+        for src in filtered_stations:
             map_points.append({
                 "name": src.get("station_name"),
                 "city": src.get("city"),
@@ -4945,39 +4901,8 @@ def create_app():
                 "lat": float(src.get("latitude")) if src.get("latitude") is not None else None,
                 "lon": float(src.get("longitude")) if src.get("longitude") is not None else None,
                 "source": src.get("source"),
+                "source_authority": src.get("source_authority"),
             })
-
-        # For filtered_stations, flatten merged source rows to a template-safe shape.
-        # OCM-only rows do not always include every NREL-style key.
-        def _flatten_merged_station(entry: dict[str, object]) -> dict[str, object]:
-            nrel_row = entry.get("nrel") if isinstance(entry.get("nrel"), dict) else {}
-            ocm_row = entry.get("ocm") if isinstance(entry.get("ocm"), dict) else {}
-            src = nrel_row or ocm_row or {}
-            return {
-                "station_name": src.get("station_name"),
-                "street_address": src.get("street_address"),
-                "city": src.get("city"),
-                "state": src.get("state"),
-                "zip": src.get("zip"),
-                "network_name": src.get("network_name"),
-                "distance_miles": src.get("distance_miles"),
-                "max_power_kw": src.get("max_power_kw", 0),
-                "connector_types": src.get("connector_types", ""),
-                "charging_levels": src.get("charging_levels", ""),
-                "connector_count": src.get("connector_count", 0),
-                "nlr_station_id": src.get("nrel_id") or src.get("nlr_station_id"),
-                "status_code": src.get("status_code"),
-                "fuel_type_code": src.get("fuel_type_code"),
-                "access_code": src.get("access_code"),
-                "access_detail": src.get("access_detail"),
-                "owner_type_code": src.get("owner_type_code"),
-                "facility_type": src.get("facility_type"),
-                "latitude": src.get("latitude"),
-                "longitude": src.get("longitude"),
-                "updated_at": src.get("updated_at"),
-            }
-
-        filtered_stations = [_flatten_merged_station(entry) for entry in merged]
 
         sync_status = nlr_chargers.get_sync_status()
         recent_runs = []
